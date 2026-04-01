@@ -1,0 +1,14 @@
+services:
+  rsync-backup-service:
+    build:
+      context: .
+    environment:
+      RBS_PORT: ${RBS_PORT:-8080}
+      RBS_DATA_DIR: /var/lib/rsync-backup-service/data
+      RBS_JWT_SECRET: ${RBS_JWT_SECRET:-change-me}
+      RBS_ADMIN_USER: ${RBS_ADMIN_USER:-admin}
+      RBS_ADMIN_PASSWORD: ${RBS_ADMIN_PASSWORD:-change-me}
+    ports:
+      - "${RBS_PORT:-8080}:${RBS_PORT:-8080}"
+    volumes:
+      - ./data:/var/lib/rsync-backup-service/data

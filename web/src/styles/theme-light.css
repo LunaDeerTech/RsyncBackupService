@@ -1,0 +1,19 @@
+:root,
+:root[data-theme="light"] {
+	--color-bg-canvas: #f4f8fc;
+	--color-bg-subtle: #edf3f8;
+	--color-surface-1: rgba(255, 255, 255, 0.88);
+	--color-surface-2: #f6fafd;
+	--color-surface-3: #eaf2f8;
+	--color-border-default: #d6e3ec;
+	--color-text-strong: #102033;
+	--color-text-muted: #62758a;
+	--color-focus-ring: rgba(47, 199, 240, 0.35);
+	--color-shadow: rgba(16, 32, 51, 0.12);
+	--shadow-soft: 0 24px 60px rgba(16, 32, 51, 0.12);
+	--selection-color: rgba(99, 217, 255, 0.25);
+}
+
+::selection {
+	background: var(--selection-color);
+}

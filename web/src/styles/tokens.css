@@ -1,0 +1,99 @@
+:root {
+	color-scheme: light dark;
+	font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+	--radius-control: 14px;
+	--radius-card: 16px;
+	--border-width: 1px;
+	--shadow-soft: 0 24px 60px rgba(16, 32, 51, 0.12);
+	--duration-fast: 140ms;
+	--duration-base: 220ms;
+	--spacing-2: 0.5rem;
+	--spacing-3: 0.75rem;
+	--spacing-4: 1rem;
+	--spacing-6: 1.5rem;
+	--spacing-8: 2rem;
+	--spacing-12: 3rem;
+	--primary-300: #9beaff;
+	--primary-500: #63d9ff;
+	--primary-600: #2fc7f0;
+	--accent-mint-400: #7ef2d4;
+	--success-500: #5dcc96;
+	--warning-500: #f5be58;
+	--error-500: #e77483;
+	--info-500: #70b7ff;
+	background-color: var(--color-bg-canvas);
+	color: var(--color-text-strong);
+	accent-color: var(--primary-500);
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-moz-osx-font-smoothing: grayscale;
+	-webkit-font-smoothing: antialiased;
+}
+
+body {
+	background:
+		radial-gradient(circle at top, color-mix(in srgb, var(--primary-300) 20%, transparent), transparent 42%),
+		linear-gradient(180deg, var(--color-bg-canvas), var(--color-bg-subtle));
+	color: var(--color-text-strong);
+	transition:
+		background-color var(--duration-base) ease,
+		color var(--duration-fast) ease;
+}
+
+#app,
+[data-testid="app-root"] {
+	min-height: 100vh;
+}
+
+.shell-home {
+	display: grid;
+	min-height: 100vh;
+	place-items: center;
+	padding: var(--spacing-12) var(--spacing-6);
+}
+
+.shell-home__panel {
+	max-width: 40rem;
+	padding: var(--spacing-8);
+	border: var(--border-width) solid var(--color-border-default);
+	border-radius: var(--radius-card);
+	background: var(--color-surface-1);
+	box-shadow: var(--shadow-soft);
+	backdrop-filter: blur(12px);
+	text-align: left;
+	animation: shell-enter 360ms ease-out;
+}
+
+.shell-home__eyebrow {
+	margin-bottom: var(--spacing-3);
+	color: var(--primary-600);
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.shell-home__title {
+	margin-bottom: var(--spacing-4);
+	font-size: clamp(2rem, 4vw, 3.25rem);
+	line-height: 1.05;
+	letter-spacing: -0.04em;
+}
+
+.shell-home__body {
+	max-width: 32rem;
+	color: var(--color-text-muted);
+	font-size: 1rem;
+}
+
+@keyframes shell-enter {
+	from {
+		opacity: 0;
+		transform: translateY(18px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
