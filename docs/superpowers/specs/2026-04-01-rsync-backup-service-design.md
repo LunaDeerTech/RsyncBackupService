@@ -664,13 +664,9 @@ RBS_DATA_DIR=/var/lib/rsync-backup
 RBS_JWT_SECRET=<random-secret>
 RBS_ADMIN_USER=admin
 RBS_ADMIN_PASSWORD=<initial-password>
-RBS_SMTP_HOST=
-RBS_SMTP_PORT=587
-RBS_SMTP_USER=
-RBS_SMTP_PASSWORD=
-RBS_SMTP_FROM=
-RBS_SMTP_TLS=true
 ```
+
+> SMTP 等通知渠道的配置通过前端管理，存储在 `notification_channels` 表中，不在 .env 中配置。
 
 ### 10.3 Docker
 
