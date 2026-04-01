@@ -4,14 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
+	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
+	"gorm.io/gorm"
 )
 
 type App struct {
 	Config config.Config
+	DB     *gorm.DB
 	server *http.Server
 }
 
@@ -23,8 +25,17 @@ func New(cfg config.Config) *App {
 }
 
 func (a *App) Run() error {
-	if err := os.MkdirAll(a.Config.DataDir, 0o755); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+	if a.DB == nil {
+		db, err := repository.OpenSQLite(a.Config.DataDir)
+		if err != nil {
+			return fmt.Errorf("open sqlite database: %w", err)
+		}
+
+		if err := repository.MigrateAndSeed(db, a.Config); err != nil {
+			return fmt.Errorf("migrate and seed database: %w", err)
+		}
+
+		a.DB = db
 	}
 
 	if a.server == nil {
