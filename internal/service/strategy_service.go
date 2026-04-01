@@ -21,6 +21,16 @@ const (
 
 var coldVolumeSizePattern = regexp.MustCompile(`^[1-9][0-9]*[KMGTP]$`)
 
+var strategyCronParser = cron.NewParser(
+	cron.SecondOptional |
+		cron.Minute |
+		cron.Hour |
+		cron.Dom |
+		cron.Month |
+		cron.Dow |
+		cron.Descriptor,
+)
+
 type CreateStrategyRequest struct {
 	Name                string  `json:"name"`
 	BackupType          string  `json:"backup_type"`
@@ -42,15 +52,22 @@ type StrategyService struct {
 	strategyRepo      repository.StrategyRepository
 	storageTargetRepo repository.StorageTargetRepository
 	permissionService *PermissionService
+	schedulerService  StrategyScheduleRefresher
 }
 
-func NewStrategyService(db *gorm.DB) *StrategyService {
+func NewStrategyService(db *gorm.DB, schedulerServices ...StrategyScheduleRefresher) *StrategyService {
+	var schedulerService StrategyScheduleRefresher
+	if len(schedulerServices) > 0 {
+		schedulerService = schedulerServices[0]
+	}
+
 	return &StrategyService{
 		db:                db,
 		instanceRepo:      repository.NewInstanceRepository(db),
 		strategyRepo:      repository.NewStrategyRepository(db),
 		storageTargetRepo: repository.NewStorageTargetRepository(db),
 		permissionService: NewPermissionService(db),
+		schedulerService:  schedulerService,
 	}
 }
 
@@ -76,7 +93,7 @@ func (s *StrategyService) ValidateCreate(req CreateStrategyRequest) error {
 		return fmt.Errorf("%w: interval_seconds must be >= 0", ErrInvalidSchedule)
 	}
 	if trimmedCronExpr != nil {
-		if _, err := cron.ParseStandard(*trimmedCronExpr); err != nil {
+		if _, err := strategyCronParser.Parse(*trimmedCronExpr); err != nil {
 			return fmt.Errorf("%w: cron_expr is invalid", ErrInvalidSchedule)
 		}
 	}
@@ -153,7 +170,15 @@ func (s *StrategyService) Create(ctx context.Context, actor AuthIdentity, instan
 		return model.Strategy{}, err
 	}
 
-	return s.findStrategy(ctx, strategy.ID)
+	createdStrategy, err := s.findStrategy(ctx, strategy.ID)
+	if err != nil {
+		return model.Strategy{}, err
+	}
+	if err := s.refreshStrategySchedule(createdStrategy); err != nil {
+		return createdStrategy, err
+	}
+
+	return createdStrategy, nil
 }
 
 func (s *StrategyService) Update(ctx context.Context, actor AuthIdentity, id uint, req UpdateStrategyRequest) (model.Strategy, error) {
@@ -195,7 +220,15 @@ func (s *StrategyService) Update(ctx context.Context, actor AuthIdentity, id uin
 		return model.Strategy{}, err
 	}
 
-	return s.findStrategy(ctx, strategy.ID)
+	refreshedStrategy, err := s.findStrategy(ctx, strategy.ID)
+	if err != nil {
+		return model.Strategy{}, err
+	}
+	if err := s.refreshStrategySchedule(refreshedStrategy); err != nil {
+		return refreshedStrategy, err
+	}
+
+	return refreshedStrategy, nil
 }
 
 func (s *StrategyService) Delete(ctx context.Context, actor AuthIdentity, id uint) error {
@@ -225,6 +258,33 @@ func (s *StrategyService) Delete(ctx context.Context, actor AuthIdentity, id uin
 		return nil
 	}); err != nil {
 		return err
+	}
+	if err := s.removeStrategySchedule(id); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *StrategyService) refreshStrategySchedule(strategy model.Strategy) error {
+	if s.schedulerService == nil {
+		return nil
+	}
+
+	if err := s.schedulerService.RefreshStrategy(strategy); err != nil {
+		return fmt.Errorf("refresh strategy schedule: %w", err)
+	}
+
+	return nil
+}
+
+func (s *StrategyService) removeStrategySchedule(strategyID uint) error {
+	if s.schedulerService == nil {
+		return nil
+	}
+
+	if err := s.schedulerService.RemoveStrategy(strategyID); err != nil {
+		return fmt.Errorf("remove strategy schedule: %w", err)
 	}
 
 	return nil
