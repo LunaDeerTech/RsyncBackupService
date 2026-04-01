@@ -41,12 +41,20 @@ func (a *App) Run() error {
 
 	if a.server == nil {
 		authService := service.NewAuthService(a.DB, a.Config.JWTSecret)
+		instanceService := service.NewInstanceService(a.DB)
+		sshKeyService := service.NewSSHKeyService(a.DB)
+		storageTargetService := service.NewStorageTargetService(a.DB)
+		strategyService := service.NewStrategyService(a.DB)
 		userService := service.NewUserService(a.DB, authService)
 		permissionService := service.NewPermissionService(a.DB)
 		auditRepo := repository.NewAuditLogRepository(a.DB)
 
 		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
 			AuthService:       authService,
+			InstanceService:   instanceService,
+			SSHKeyService:     sshKeyService,
+			StorageTargetService: storageTargetService,
+			StrategyService:   strategyService,
 			UserService:       userService,
 			PermissionService: permissionService,
 			AuditLogRepo:      auditRepo,

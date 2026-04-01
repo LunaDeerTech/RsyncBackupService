@@ -148,7 +148,8 @@ func TestAdminPasswordResetRequiresVerifyToken(t *testing.T) {
 }
 
 type authAPITestFixture struct {
-	db *gorm.DB
+	db    *gorm.DB
+	admin model.User
 }
 
 func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
@@ -165,18 +166,31 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 	}
 
 	authService := service.NewAuthService(db, "test-jwt-secret")
+	instanceService := service.NewInstanceService(db)
+	sshKeyService := service.NewSSHKeyService(db)
+	storageTargetService := service.NewStorageTargetService(db)
+	strategyService := service.NewStrategyService(db)
 	userService := service.NewUserService(db, authService)
 	permissionService := service.NewPermissionService(db)
 	auditRepo := repository.NewAuditLogRepository(db)
 
+	var admin model.User
+	if err := db.Where("username = ?", cfg.AdminUser).First(&admin).Error; err != nil {
+		t.Fatalf("load admin: %v", err)
+	}
+
 	router := NewRouter(Dependencies{
 		AuthService:       authService,
+		InstanceService:   instanceService,
+		SSHKeyService:     sshKeyService,
+		StorageTargetService: storageTargetService,
+		StrategyService:   strategyService,
 		UserService:       userService,
 		PermissionService: permissionService,
 		AuditLogRepo:      auditRepo,
 	})
 
-	return router, authAPITestFixture{db: db}
+	return router, authAPITestFixture{db: db, admin: admin}
 }
 
 func loginForAccessToken(t *testing.T, router http.Handler, username, password string) string {
