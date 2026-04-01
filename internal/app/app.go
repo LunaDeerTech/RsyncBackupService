@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/LunaDeerTech/RsyncBackupService/internal/api"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
+	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
 	"gorm.io/gorm"
 )
 
@@ -20,7 +22,6 @@ type App struct {
 func New(cfg config.Config) *App {
 	return &App{
 		Config: cfg,
-		server: newHTTPServer(cfg),
 	}
 }
 
@@ -39,7 +40,17 @@ func (a *App) Run() error {
 	}
 
 	if a.server == nil {
-		a.server = newHTTPServer(a.Config)
+		authService := service.NewAuthService(a.DB, a.Config.JWTSecret)
+		userService := service.NewUserService(a.DB, authService)
+		permissionService := service.NewPermissionService(a.DB)
+		auditRepo := repository.NewAuditLogRepository(a.DB)
+
+		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
+			AuthService:       authService,
+			UserService:       userService,
+			PermissionService: permissionService,
+			AuditLogRepo:      auditRepo,
+		}))
 	}
 
 	if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -49,21 +60,10 @@ func (a *App) Run() error {
 	return nil
 }
 
-func newHTTPServer(cfg config.Config) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-
+func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 }
