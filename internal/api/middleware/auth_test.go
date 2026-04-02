@@ -33,6 +33,27 @@ func TestRequireJWTRejectsMissingToken(t *testing.T) {
 	}
 }
 
+func TestRequireWebSocketJWTAllowsQueryAccessToken(t *testing.T) {
+	fixture := newMiddlewareTestFixture(t)
+	accessToken := loginMiddlewareTestUser(t, fixture.authService, fixture.cfg.AdminUser, fixture.cfg.AdminPassword)
+
+	router := gin.New()
+	router.Use(InjectServices(fixture.authService, fixture.permissionService))
+	router.GET("/ws", RequireWebSocketJWT(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ws?access_token="+accessToken, nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.Code)
+	}
+}
+
 func TestRequireVerifyTokenRejectsMissingToken(t *testing.T) {
 	fixture := newMiddlewareTestFixture(t)
 	accessToken := loginMiddlewareTestUser(t, fixture.authService, fixture.cfg.AdminUser, fixture.cfg.AdminPassword)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api"
+	wspkg "github.com/LunaDeerTech/RsyncBackupService/internal/api/ws"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
 	executorpkg "github.com/LunaDeerTech/RsyncBackupService/internal/executor"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
@@ -20,6 +21,7 @@ type App struct {
 	Config config.Config
 	DB     *gorm.DB
 	server *http.Server
+	stopProgressBridge func()
 }
 
 func New(cfg config.Config) *App {
@@ -48,7 +50,11 @@ func (a *App) Run() error {
 		notificationService := service.NewNotificationService(a.DB)
 		sshKeyService := service.NewSSHKeyService(a.DB)
 		strategyScheduler := schedulerpkg.NewScheduler()
-		executorService := service.NewExecutorService(a.DB, a.Config, nil, executorpkg.NewTaskManager(), notificationService)
+		taskManager := executorpkg.NewTaskManager()
+		executorService := service.NewExecutorService(a.DB, a.Config, nil, taskManager, notificationService)
+		dashboardService := service.NewDashboardService(a.DB, a.Config, executorService)
+		progressHub := wspkg.NewHub()
+		a.stopProgressBridge = wspkg.BridgeProgress(executorService, progressHub)
 		restoreService := service.NewRestoreService(a.DB, a.Config, nil, authService, notificationService)
 		schedulerService := service.NewSchedulerService(strategyScheduler, executorService.RunStrategy)
 		storageTargetService := service.NewStorageTargetService(a.DB, schedulerService)
@@ -64,9 +70,11 @@ func (a *App) Run() error {
 		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
 			AuthService:          authService,
 			AuditService:         auditService,
+			DashboardService:     dashboardService,
 			ExecutorService:      executorService,
 			InstanceService:      instanceService,
 			NotificationService:  notificationService,
+			ProgressHub:          progressHub,
 			RestoreService:       restoreService,
 			SSHKeyService:        sshKeyService,
 			StorageTargetService: storageTargetService,
@@ -76,6 +84,12 @@ func (a *App) Run() error {
 			AuditLogRepo:         auditRepo,
 		}))
 	}
+	defer func() {
+		if a.stopProgressBridge != nil {
+			a.stopProgressBridge()
+			a.stopProgressBridge = nil
+		}
+	}()
 
 	if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("run app server: %w", err)

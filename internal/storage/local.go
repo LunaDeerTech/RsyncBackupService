@@ -135,17 +135,27 @@ func (s *LocalStorage) SpaceAvailable(ctx context.Context, path string) (uint64,
 		return 0, err
 	}
 
-	resolvedPath, err := s.resolvePath(path)
+	probePath, err := s.resolvePath(path)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := os.MkdirAll(resolvedPath, 0o755); err != nil {
-		return 0, fmt.Errorf("create local storage path for statfs: %w", err)
+	for {
+		if _, err := os.Stat(probePath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return 0, fmt.Errorf("stat local storage path: %w", err)
+		}
+
+		nextPath := filepath.Dir(probePath)
+		if nextPath == probePath {
+			break
+		}
+		probePath = nextPath
 	}
 
 	var statfs syscall.Statfs_t
-	if err := syscall.Statfs(resolvedPath, &statfs); err != nil {
+	if err := syscall.Statfs(probePath, &statfs); err != nil {
 		return 0, fmt.Errorf("stat local storage path: %w", err)
 	}
 

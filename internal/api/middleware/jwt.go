@@ -30,31 +30,18 @@ func InjectServices(authService *service.AuthService, permissionService *service
 
 func RequireJWT() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authService, ok := authServiceFromContext(c)
-		if !ok {
-			abortJSON(c, http.StatusInternalServerError, "auth service unavailable")
-			return
-		}
+		token, _ := extractBearerToken(c.GetHeader("Authorization"))
+		authenticateJWT(c, token, "missing bearer token")
+	}
+}
 
+func RequireWebSocketJWT() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		token, ok := extractBearerToken(c.GetHeader("Authorization"))
 		if !ok {
-			abortJSON(c, http.StatusUnauthorized, "missing bearer token")
-			return
+			token, ok = extractWebSocketQueryToken(c)
 		}
-
-		identity, err := authService.AuthenticateAccessToken(c.Request.Context(), token)
-		if err != nil {
-			switch {
-			case errors.Is(err, service.ErrTokenExpired):
-				abortJSON(c, http.StatusUnauthorized, "token expired")
-			default:
-				abortJSON(c, http.StatusUnauthorized, "invalid token")
-			}
-			return
-		}
-
-		c.Set(currentUserKey, identity)
-		c.Next()
+		authenticateJWT(c, token, "missing websocket token")
 	}
 }
 
@@ -154,6 +141,56 @@ func extractBearerToken(headerValue string) (string, bool) {
 	}
 
 	return parts[1], true
+}
+
+func extractWebSocketQueryToken(c *gin.Context) (string, bool) {
+	if !isWebSocketUpgradeRequest(c.Request) {
+		return "", false
+	}
+
+	queryToken := strings.TrimSpace(c.Query("access_token"))
+	if queryToken == "" {
+		return "", false
+	}
+
+	return queryToken, true
+}
+
+func isWebSocketUpgradeRequest(request *http.Request) bool {
+	if request == nil {
+		return false
+	}
+
+	connectionHeader := strings.ToLower(request.Header.Get("Connection"))
+	upgradeHeader := strings.ToLower(strings.TrimSpace(request.Header.Get("Upgrade")))
+
+	return strings.Contains(connectionHeader, "upgrade") && upgradeHeader == "websocket"
+}
+
+func authenticateJWT(c *gin.Context, token string, missingTokenMessage string) {
+	authService, ok := authServiceFromContext(c)
+	if !ok {
+		abortJSON(c, http.StatusInternalServerError, "auth service unavailable")
+		return
+	}
+	if strings.TrimSpace(token) == "" {
+		abortJSON(c, http.StatusUnauthorized, missingTokenMessage)
+		return
+	}
+
+	identity, err := authService.AuthenticateAccessToken(c.Request.Context(), token)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrTokenExpired):
+			abortJSON(c, http.StatusUnauthorized, "token expired")
+		default:
+			abortJSON(c, http.StatusUnauthorized, "invalid token")
+		}
+		return
+	}
+
+	c.Set(currentUserKey, identity)
+	c.Next()
 }
 
 func parseUintParam(value string) (uint, error) {

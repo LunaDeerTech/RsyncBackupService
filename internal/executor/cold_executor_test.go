@@ -127,6 +127,62 @@ func TestColdExecutorPreservesActualSplitSuffixesWhenUploading(t *testing.T) {
 	}
 }
 
+func TestColdExecutorReportsMonotonicProgress(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "db.dump"), []byte("backup"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	var percentages []int
+	err := NewColdExecutor(coldExecutorRunnerFunc(func(_ context.Context, spec CommandSpec, _ func(string)) error {
+		switch spec.Name {
+		case "tar":
+			if len(spec.Args) >= 2 && spec.Args[0] == "czf" {
+				if err := os.MkdirAll(filepath.Dir(spec.Args[1]), 0o755); err != nil {
+					return err
+				}
+				return os.WriteFile(spec.Args[1], []byte("archive"), 0o644)
+			}
+		}
+		return nil
+	})).Run(context.Background(), ColdBackupRequest{
+		Instance: model.BackupInstance{
+			SourceType: "local",
+			SourcePath: sourceDir,
+		},
+		Target: model.StorageTarget{
+			Type:     "cold_local",
+			BasePath: filepath.Join(t.TempDir(), "target"),
+		},
+		Backend:             &coldExecutorStorageSpy{},
+		ArchivePath:         filepath.Join(t.TempDir(), "target", "archive.tar.gz"),
+		ArchiveRelativePath: filepath.Join("instance-1", "archive.tar.gz"),
+		Progress: func(snapshot ColdProgressSnapshot) {
+			percentages = append(percentages, snapshot.Percentage)
+		},
+	})
+	if err != nil {
+		t.Fatalf("run cold executor: %v", err)
+	}
+	if len(percentages) < 4 {
+		t.Fatalf("expected multiple progress updates, got %v", percentages)
+	}
+	for index := 1; index < len(percentages); index++ {
+		if percentages[index] < percentages[index-1] {
+			t.Fatalf("expected monotonic progress, got %v", percentages)
+		}
+	}
+	if percentages[0] <= 0 {
+		t.Fatalf("expected initial progress above zero, got %v", percentages)
+	}
+	if percentages[len(percentages)-1] < 90 {
+		t.Fatalf("expected late-stage progress near completion, got %v", percentages)
+	}
+}
+
 type coldExecutorRunnerFunc func(context.Context, CommandSpec, func(string)) error
 
 func (f coldExecutorRunnerFunc) Run(ctx context.Context, spec CommandSpec, onStdout func(string)) error {

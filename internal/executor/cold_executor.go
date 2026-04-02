@@ -25,14 +25,19 @@ type ColdBackupRequest struct {
 	TempRoot            string
 	ExcludePatterns     []string
 	Result              *ColdBackupResult
+	Progress            func(ColdProgressSnapshot)
+}
+
+type ColdProgressSnapshot struct {
+	Percentage int
 }
 
 type ColdBackupResult struct {
-	ArchivePath       string
-	VolumeCount       int
-	BytesTransferred  int64
-	FilesTransferred  int64
-	TotalSize         int64
+	ArchivePath      string
+	VolumeCount      int
+	BytesTransferred int64
+	FilesTransferred int64
+	TotalSize        int64
 }
 
 type ColdExecutor struct {
@@ -60,6 +65,7 @@ func (e *ColdExecutor) Run(ctx context.Context, req ColdBackupRequest) error {
 	if strings.TrimSpace(req.ArchiveRelativePath) == "" {
 		return fmt.Errorf("archive relative path is required")
 	}
+	emitColdProgress(req.Progress, 10)
 
 	tempRoot := strings.TrimSpace(req.TempRoot)
 	if isColdLocalTarget(req.Target) {
@@ -87,16 +93,19 @@ func (e *ColdExecutor) Run(ctx context.Context, req ColdBackupRequest) error {
 			return err
 		}
 	}
+	emitColdProgress(req.Progress, 35)
 
 	totalSize, fileCount, err := directoryStats(sourceDir)
 	if err != nil {
 		return err
 	}
+	emitColdProgress(req.Progress, 50)
 
 	archiveBase := filepath.Join(workDir, "archive")
 	if err := e.runner.Run(ctx, BuildArchiveCommand(sourceDir, archiveBase, req.VolumeSize), nil); err != nil {
 		return err
 	}
+	emitColdProgress(req.Progress, 75)
 
 	archiveFiles, err := resolveArchiveFiles(archiveBase, req.VolumeSize)
 	if err != nil {
@@ -105,7 +114,7 @@ func (e *ColdExecutor) Run(ctx context.Context, req ColdBackupRequest) error {
 
 	var uploadedBytes int64
 	uploadedPaths := make([]string, 0, len(archiveFiles))
-	for _, archiveFile := range archiveFiles {
+	for index, archiveFile := range archiveFiles {
 		archiveInfo, err := os.Stat(archiveFile)
 		if err != nil {
 			return fmt.Errorf("stat archive %q: %w", archiveFile, err)
@@ -135,6 +144,7 @@ func (e *ColdExecutor) Run(ctx context.Context, req ColdBackupRequest) error {
 		}
 		uploadedPaths = append(uploadedPaths, remotePath)
 		uploadedBytes += archiveInfo.Size()
+		emitColdProgress(req.Progress, 75+int(float64(index+1)*20/float64(len(archiveFiles))))
 	}
 
 	if req.Result != nil {
@@ -146,6 +156,20 @@ func (e *ColdExecutor) Run(ctx context.Context, req ColdBackupRequest) error {
 	}
 
 	return nil
+}
+
+func emitColdProgress(callback func(ColdProgressSnapshot), percentage int) {
+	if callback == nil {
+		return
+	}
+	if percentage < 0 {
+		percentage = 0
+	}
+	if percentage > 99 {
+		percentage = 99
+	}
+
+	callback(ColdProgressSnapshot{Percentage: percentage})
 }
 
 func resolveArchiveRemotePath(archiveFile, archiveBase, archiveRelativePath string) (string, error) {

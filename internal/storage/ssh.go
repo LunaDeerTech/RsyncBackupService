@@ -174,7 +174,8 @@ func (s *SSHStorage) SpaceAvailable(ctx context.Context, remotePath string) (uin
 		return 0, err
 	}
 
-	output, err := s.runCommand(ctx, fmt.Sprintf("mkdir -p %s && df -Pk %s | tail -n 1 | awk '{print $4}'", shellQuote(resolvedPath), shellQuote(resolvedPath)))
+	command := fmt.Sprintf("probe=%s; while [ ! -e \"$probe\" ] && [ \"$probe\" != \"/\" ]; do probe=$(dirname \"$probe\"); done; df -Pk \"$probe\" | tail -n 1 | awk '{print $4}'", shellQuote(resolvedPath))
+	output, err := s.runCommand(ctx, command)
 	if err != nil {
 		return 0, err
 	}

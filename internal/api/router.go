@@ -5,24 +5,27 @@ import (
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api/handler"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api/middleware"
+	wspkg "github.com/LunaDeerTech/RsyncBackupService/internal/api/ws"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type Dependencies struct {
-	AuthService       *service.AuthService
-	AuditService      *service.AuditService
-	ExecutorService   *service.ExecutorService
-	InstanceService   *service.InstanceService
-	NotificationService *service.NotificationService
-	RestoreService    *service.RestoreService
-	SSHKeyService     *service.SSHKeyService
+	AuthService          *service.AuthService
+	AuditService         *service.AuditService
+	DashboardService     *service.DashboardService
+	ExecutorService      *service.ExecutorService
+	InstanceService      *service.InstanceService
+	NotificationService  *service.NotificationService
+	ProgressHub          *wspkg.Hub
+	RestoreService       *service.RestoreService
+	SSHKeyService        *service.SSHKeyService
 	StorageTargetService *service.StorageTargetService
-	StrategyService   *service.StrategyService
-	UserService       *service.UserService
-	PermissionService *service.PermissionService
-	AuditLogRepo      repository.AuditLogRepository
+	StrategyService      *service.StrategyService
+	UserService          *service.UserService
+	PermissionService    *service.PermissionService
+	AuditLogRepo         repository.AuditLogRepository
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -39,6 +42,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	backupHandler := handler.NewBackupHandler(deps.ExecutorService)
 	instanceHandler := handler.NewInstanceHandler(deps.InstanceService)
 	notificationHandler := handler.NewNotificationHandler(deps.NotificationService)
+	systemHandler := handler.NewSystemHandler(deps.DashboardService)
+	taskHandler := handler.NewTaskHandler(deps.ExecutorService)
 	restoreHandler := handler.NewRestoreHandler(deps.RestoreService)
 	sshKeyHandler := handler.NewSSHKeyHandler(deps.SSHKeyService)
 	storageTargetHandler := handler.NewStorageTargetHandler(deps.StorageTargetService)
@@ -97,6 +102,17 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	permissionGroup.PUT("/:userID", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "instance_permissions.upsert", ResourceType: "instance_permissions"}), middleware.RequireAdmin(), permissionHandler.Upsert)
 	instanceGroup.GET("/:id/subscriptions", middleware.RequireInstanceRole(service.RoleViewer), notificationHandler.ListSubscriptions)
 	instanceGroup.POST("/:id/subscriptions", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_subscriptions.upsert", ResourceType: "notification_subscriptions"}), middleware.RequireInstanceRole(service.RoleViewer), notificationHandler.UpsertSubscription)
+
+	taskGroup := apiGroup.Group("/tasks", middleware.RequireJWT(), middleware.RequireAdmin())
+	taskGroup.GET("/running", taskHandler.ListRunning)
+	taskGroup.POST("/:id/cancel", taskHandler.Cancel)
+
+	systemGroup := apiGroup.Group("/system", middleware.RequireJWT(), middleware.RequireAdmin())
+	systemGroup.GET("/status", systemHandler.Status)
+	systemGroup.GET("/dashboard", systemHandler.Dashboard)
+
+	wsGroup := apiGroup.Group("/ws", middleware.RequireWebSocketJWT(), middleware.RequireAdmin())
+	wsGroup.GET("/progress", wspkg.ServeProgress(deps.ProgressHub))
 
 	restoreRecordGroup := apiGroup.Group("/restore-records", middleware.RequireJWT())
 	restoreRecordGroup.GET("", restoreHandler.List)

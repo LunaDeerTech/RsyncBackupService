@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -9,10 +10,12 @@ import (
 )
 
 type RunningTask struct {
-	ID        string
-	LockKey   string
-	StartedAt time.Time
-	Cancel    context.CancelFunc
+	ID              string
+	LockKey         string
+	InstanceID      uint
+	StorageTargetID uint
+	StartedAt       time.Time
+	Cancel          context.CancelFunc
 }
 
 type TaskManager struct {
@@ -42,11 +45,18 @@ func (m *TaskManager) TryStart(lockKey string, cancel context.CancelFunc) (Runni
 	}
 
 	taskID := strconv.FormatUint(atomic.AddUint64(&m.nextID, 1), 10)
+	instanceID, storageTargetID, err := ParseTaskLockKey(lockKey)
+	if err != nil {
+		instanceID = 0
+		storageTargetID = 0
+	}
 	task := RunningTask{
-		ID:        taskID,
-		LockKey:   lockKey,
-		StartedAt: time.Now().UTC(),
-		Cancel:    cancel,
+		ID:              taskID,
+		LockKey:         lockKey,
+		InstanceID:      instanceID,
+		StorageTargetID: storageTargetID,
+		StartedAt:       time.Now().UTC(),
+		Cancel:          cancel,
 	}
 	m.tasksByID[task.ID] = task
 	m.lockKeyToID[lockKey] = task.ID
@@ -77,4 +87,23 @@ func (m *TaskManager) Cancel(taskID string) error {
 
 	task.Cancel()
 	return nil
+}
+
+func (m *TaskManager) List() []RunningTask {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tasks := make([]RunningTask, 0, len(m.tasksByID))
+	for _, task := range m.tasksByID {
+		tasks = append(tasks, task)
+	}
+
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].StartedAt.Equal(tasks[j].StartedAt) {
+			return tasks[i].ID < tasks[j].ID
+		}
+		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
+	})
+
+	return tasks
 }
