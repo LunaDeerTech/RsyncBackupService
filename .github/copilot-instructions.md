@@ -2,34 +2,34 @@
 
 ## Current State
 
-- This repository is still in the documentation-first bootstrap stage. Treat the files under `docs/superpowers/` as the source of truth until implementation catches up.
-- Work in the 14-task sequence described in [docs/superpowers/prompts/README.md](../docs/superpowers/prompts/README.md). Do not skip prerequisites unless the user explicitly changes the order.
-- Execute one task at a time. Keep changes scoped to the active prompt and its acceptance criteria.
-- If the docs, prompts, and current code disagree, surface the conflict and ask instead of guessing.
+- Treat `docs/superpowers/` as the source of truth whenever implementation, prompts, and specs diverge.
+- Follow the 14-task sequence in [docs/superpowers/prompts/README.md](../docs/superpowers/prompts/README.md) and execute one task at a time unless the user explicitly changes the order.
+- Keep changes scoped to the active task prompt and its acceptance criteria; surface scope or prerequisite conflicts instead of guessing.
 
 ## Architecture
 
 - Preserve the planned Linux-only single-binary architecture: Go backend plus Vue 3 frontend embedded into the server binary via `embed.FS`.
-- Keep backend structure aligned with the design doc: `config -> repository -> service -> executor/scheduler -> api`.
-- Keep project structure aligned with the planned layout in [docs/superpowers/specs/2026-04-01-rsync-backup-service-design.md](../docs/superpowers/specs/2026-04-01-rsync-backup-service-design.md).
+- Keep backend responsibilities aligned with the design doc layer order: `config -> repository -> service -> executor/scheduler -> api`.
 - Reuse the domain terms defined in the design doc: `backup instance`, `strategy`, `storage target`, `backup record`, `restore record`, `instance permission`, and `audit log`.
 - Stay within v1 scope unless the user asks otherwise. Planned v1 storage/notifier implementations are `LocalStorage`, `SSHStorage`, and `SMTPNotifier`.
 
 ## Workflow
 
 - Before implementing a task, read the matching prompt in [docs/superpowers/prompts/](../docs/superpowers/prompts/) and follow its boundaries, test requirements, and acceptance criteria.
+- If the user asks you to work from the implementation plan directly, use the `subagent-driven-development` skill or `executing-plans` skill as required by the plan header.
 - Prefer test-first execution when the prompt or plan calls for it.
-- If you need the user's help to debug, need the user to confirm a decision, or are uncertain and need the user to choose or suggest a direction, use the `askQuestion` tool to ask instead of guessing.
+- If you hit blockers, missing context, need confirmation, see docs/code conflicts, or a choice would change scope, stop and ask instead of guessing.
 - After completing a major task or milestone, use the existing `code-reviewer` agent in [.github/agents/code-reviewer.md](agents/code-reviewer.md) to review the result against the relevant prompt or plan step.
 - Before claiming work is complete, run the relevant verification commands and report the actual results.
 - Match the language and style of the surrounding file when updating documentation. The planning and design docs in this repo are primarily written in Chinese.
 
 ## Build And Test
 
-- Only rely on commands that exist in the workspace. The plan documents expected Go, Makefile, Docker, and `web/` commands, but those commands are not available until Task 1 scaffolds them.
-- Once Task 1 creates the toolchain, prefer the repo-local commands from the active task prompt, `Makefile`, and package scripts over ad hoc alternatives.
-- When changing backend code, run the relevant Go tests for the touched package first, then broader verification as needed.
-- When changing frontend code, use the repo-local `web/` scripts once they exist and keep tests/builds scoped to the affected area before broader verification.
+- `go.mod` requires Go `1.22`.
+- Prefer repo-local commands: `make build`, `make test`, `make run`, `make build-backend`, `make build-frontend`, `make test-backend`, and `make test-frontend`.
+- For focused backend changes, run the narrowest relevant package tests first, then broaden to `go test ./...` before claiming completion.
+- For focused frontend changes, use `npm --prefix web run test -- <spec>` or `npm --prefix web run test`, and build with `npm --prefix web run build` when UI assets are affected.
+- Use `docker build -t <tag> .` or `docker compose up` only for packaging and integration checks. The current Dockerfile builds the Go service but does not yet build or embed frontend assets, so packaging work should follow Task 14.
 
 ## Frontend Conventions
 
