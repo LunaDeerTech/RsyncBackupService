@@ -51,6 +51,15 @@ const previewRoutes: RouteRecordRaw[] = import.meta.env.DEV
 					description: "输入、操作与危险交互组件预览页。",
 				},
 			},
+			{
+				path: "/ui-data-preview",
+				name: "ui-data-preview",
+				component: () => import("../views/UiDataDisplayPreviewView.vue"),
+				meta: {
+					title: "Task 12 组件预览",
+					description: "表格、状态与反馈组件预览页。",
+				},
+			},
 		]
 	: []
 
