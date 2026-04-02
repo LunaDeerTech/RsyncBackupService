@@ -40,7 +40,22 @@ const protectedRoutes: RouteRecordRaw[] = primaryNavigation.map((item) => ({
 	},
 }))
 
+const previewRoutes: RouteRecordRaw[] = import.meta.env.DEV
+	? [
+			{
+				path: "/ui-preview",
+				name: "ui-preview",
+				component: () => import("../views/UiActionsPreviewView.vue"),
+				meta: {
+					title: "Task 11 组件预览",
+					description: "输入、操作与危险交互组件预览页。",
+				},
+			},
+		]
+	: []
+
 const routes: RouteRecordRaw[] = [
+	...previewRoutes,
 	{
 		path: "/login",
 		name: "login",
