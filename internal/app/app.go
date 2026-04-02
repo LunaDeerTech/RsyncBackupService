@@ -48,6 +48,7 @@ func (a *App) Run() error {
 		sshKeyService := service.NewSSHKeyService(a.DB)
 		strategyScheduler := schedulerpkg.NewScheduler()
 		executorService := service.NewExecutorService(a.DB, a.Config, nil, executorpkg.NewTaskManager())
+		restoreService := service.NewRestoreService(a.DB, a.Config, nil, authService)
 		schedulerService := service.NewSchedulerService(strategyScheduler, executorService.RunStrategy)
 		storageTargetService := service.NewStorageTargetService(a.DB, schedulerService)
 		strategyService := service.NewStrategyService(a.DB, schedulerService)
@@ -60,7 +61,9 @@ func (a *App) Run() error {
 
 		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
 			AuthService:          authService,
+			ExecutorService:      executorService,
 			InstanceService:      instanceService,
+			RestoreService:       restoreService,
 			SSHKeyService:        sshKeyService,
 			StorageTargetService: storageTargetService,
 			StrategyService:      strategyService,

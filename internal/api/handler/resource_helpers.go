@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api/middleware"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
@@ -31,4 +32,13 @@ func decodeExcludePatterns(encodedPatterns string) []string {
 	}
 
 	return excludePatterns
+}
+
+func formatOptionalHTTPTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+
+	formattedValue := value.UTC().Format(http.TimeFormat)
+	return &formattedValue
 }

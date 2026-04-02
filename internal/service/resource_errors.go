@@ -7,11 +7,14 @@ import (
 )
 
 var (
+	ErrBackupRecordNotFound     = errors.New("backup record not found")
+	ErrBackupRecordNotRestorable = errors.New("backup record is not restorable")
 	ErrBasePathRequired          = errors.New("base path is required")
 	ErrHostRequired             = errors.New("host is required")
 	ErrInvalidBackupType        = errors.New("invalid backup type")
 	ErrInvalidColdVolumeSize    = errors.New("invalid cold volume size")
 	ErrInvalidPort              = errors.New("invalid port")
+	ErrInvalidRestoreTargetPath = errors.New("invalid restore target path")
 	ErrInvalidRetention         = errors.New("invalid retention configuration")
 	ErrInvalidSchedule          = errors.New("invalid schedule configuration")
 	ErrInvalidSourceType        = errors.New("invalid source type")
@@ -23,6 +26,8 @@ var (
 	ErrRollingTargetConflict    = errors.New("rolling storage target conflict")
 	ErrNameRequired             = errors.New("name is required")
 	ErrPrivateKeyPathRequired   = errors.New("private key path is required")
+	ErrRestoreTargetExists      = errors.New("restore target path already exists")
+	ErrRestoreTargetPathRequired = errors.New("restore target path is required")
 	ErrResourceInUse            = errors.New("resource is still in use")
 	ErrScheduleRequired         = errors.New("either cron_expr or interval_seconds is required")
 	ErrSSHKeyNotFound           = errors.New("ssh key not found")
@@ -43,6 +48,7 @@ func IsValidationError(err error) bool {
 		errors.Is(err, ErrInvalidColdVolumeSize),
 		errors.Is(err, ErrInvalidMaxExecution),
 		errors.Is(err, ErrInvalidPort),
+		errors.Is(err, ErrInvalidRestoreTargetPath),
 		errors.Is(err, ErrInvalidRetention),
 		errors.Is(err, ErrInvalidSchedule),
 		errors.Is(err, ErrInvalidSourceType),
@@ -53,6 +59,7 @@ func IsValidationError(err error) bool {
 		errors.Is(err, ErrRollingTargetConflict),
 		errors.Is(err, ErrNameRequired),
 		errors.Is(err, ErrPrivateKeyPathRequired),
+		errors.Is(err, ErrRestoreTargetPathRequired),
 		errors.Is(err, ErrScheduleRequired),
 		errors.Is(err, ErrSSHKeyRequired),
 		errors.Is(err, ErrSourcePathRequired),

@@ -33,6 +33,8 @@ func RequireVerifyToken() gin.HandlerFunc {
 			return
 		}
 
+		c.Request = c.Request.WithContext(service.MarkVerifyTokenValidated(c.Request.Context(), user.UserID, c.GetHeader("X-Verify-Token")))
+
 		c.Next()
 	}
 }

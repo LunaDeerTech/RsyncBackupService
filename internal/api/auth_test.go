@@ -166,7 +166,9 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 	}
 
 	authService := service.NewAuthService(db, "test-jwt-secret")
+	executorService := service.NewExecutorService(db, cfg, nil, nil)
 	instanceService := service.NewInstanceService(db)
+	restoreService := service.NewRestoreService(db, cfg, nil, authService)
 	sshKeyService := service.NewSSHKeyService(db)
 	storageTargetService := service.NewStorageTargetService(db)
 	strategyService := service.NewStrategyService(db)
@@ -181,7 +183,9 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 
 	router := NewRouter(Dependencies{
 		AuthService:       authService,
+		ExecutorService:   executorService,
 		InstanceService:   instanceService,
+		RestoreService:    restoreService,
 		SSHKeyService:     sshKeyService,
 		StorageTargetService: storageTargetService,
 		StrategyService:   strategyService,

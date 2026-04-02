@@ -26,6 +26,7 @@ type ExecutorService struct {
 	config           config.Config
 	instanceRepo     repository.InstanceRepository
 	strategyRepo     repository.StrategyRepository
+	storageTargetRepo repository.StorageTargetRepository
 	sshKeyRepo       repository.SSHKeyRepository
 	retentionService retentionCleaner
 	taskManager      *executorpkg.TaskManager
@@ -35,6 +36,14 @@ type ExecutorService struct {
 
 type retentionCleaner interface {
 	Cleanup(ctx context.Context, strategy model.Strategy, target model.StorageTarget) error
+}
+
+type ListBackupRecordsRequest struct {
+	InstanceID     uint
+	StrategyID     *uint
+	BackupType     string
+	Status         string
+	RestorableOnly bool
 }
 
 const relayCacheSuccessMarkerName = ".relay-complete"
@@ -52,6 +61,7 @@ func NewExecutorService(db *gorm.DB, cfg config.Config, runner executorpkg.Runne
 		config:           cfg,
 		instanceRepo:     repository.NewInstanceRepository(db),
 		strategyRepo:     repository.NewStrategyRepository(db),
+		storageTargetRepo: repository.NewStorageTargetRepository(db),
 		sshKeyRepo:       repository.NewSSHKeyRepository(db),
 		retentionService: NewRetentionService(db),
 		taskManager:      taskManager,
@@ -66,7 +76,9 @@ func (s *ExecutorService) RunStrategy(ctx context.Context, strategy model.Strate
 	if s == nil {
 		return nil
 	}
-	if strings.TrimSpace(strategy.BackupType) != BackupTypeRolling {
+	switch strings.TrimSpace(strategy.BackupType) {
+	case BackupTypeRolling, BackupTypeCold:
+	default:
 		return fmt.Errorf("backup type %q is not implemented", strategy.BackupType)
 	}
 
@@ -91,12 +103,88 @@ func (s *ExecutorService) RunStrategy(ctx context.Context, strategy model.Strate
 
 	var runErrors []error
 	for _, target := range strategy.StorageTargets {
-		if err := s.runRollingTarget(ctx, strategy, instance, target); err != nil {
+		var err error
+		switch strings.TrimSpace(strategy.BackupType) {
+		case BackupTypeRolling:
+			err = s.runRollingTarget(ctx, strategy, instance, target)
+		case BackupTypeCold:
+			err = s.runColdTarget(ctx, strategy, instance, target)
+		}
+		if err != nil {
 			runErrors = append(runErrors, fmt.Errorf("target %d: %w", target.ID, err))
 		}
 	}
 
 	return errors.Join(runErrors...)
+}
+
+func (s *ExecutorService) ListBackupRecords(ctx context.Context, req ListBackupRecordsRequest) ([]model.BackupRecord, error) {
+	query := s.db.WithContext(ctx).
+		Model(&model.BackupRecord{}).
+		Where("instance_id = ?", req.InstanceID).
+		Order("started_at DESC").
+		Order("id DESC")
+
+	if req.StrategyID != nil {
+		query = query.Where("strategy_id = ?", *req.StrategyID)
+	}
+	if strings.TrimSpace(req.BackupType) != "" {
+		query = query.Where("backup_type = ?", strings.TrimSpace(req.BackupType))
+	}
+	if strings.TrimSpace(req.Status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(req.Status))
+	}
+	if req.RestorableOnly {
+		query = query.Where("status = ? AND snapshot_path <> ''", model.BackupStatusSuccess)
+	}
+
+	var records []model.BackupRecord
+	if err := query.Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("list backup records: %w", err)
+	}
+
+	return records, nil
+}
+
+func (s *ExecutorService) ListRestorableBackups(ctx context.Context, req ListBackupRecordsRequest) ([]model.BackupRecord, error) {
+	req.RestorableOnly = true
+	records, err := s.ListBackupRecords(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	filteredRecords := make([]model.BackupRecord, 0, len(records))
+	targets := make(map[uint]model.StorageTarget)
+	backends := make(map[uint]storage.StorageBackend)
+	for _, record := range records {
+		target, ok := targets[record.StorageTargetID]
+		if !ok {
+			target, err = s.storageTargetRepo.GetByID(ctx, record.StorageTargetID)
+			if err != nil {
+				return nil, err
+			}
+			targets[record.StorageTargetID] = target
+		}
+
+		backend, ok := backends[record.StorageTargetID]
+		if !ok {
+			backend, err = buildStorageBackend(ctx, s.sshKeyRepo, target)
+			if err != nil {
+				return nil, err
+			}
+			backends[record.StorageTargetID] = backend
+		}
+
+		exists, err := backupRecordArtifactsExist(ctx, backend, record, target)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			filteredRecords = append(filteredRecords, record)
+		}
+	}
+
+	return filteredRecords, nil
 }
 
 func (s *ExecutorService) CheckTargetSpace(ctx context.Context, backend storage.StorageBackend, path string, estimatedSize uint64) error {
@@ -229,6 +317,96 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 	return nil
 }
 
+func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Strategy, instance model.BackupInstance, target model.StorageTarget) error {
+	lockKey := executorpkg.BuildTaskLockKey(instance.ID, target.ID)
+	executionCtx, cancel := executorpkg.WithExecutionTimeout(ctx, strategy.MaxExecutionSeconds)
+	task, ok := s.taskManager.TryStart(lockKey, cancel)
+	if !ok {
+		cancel()
+		return executorpkg.NewTaskConflictError(lockKey)
+	}
+	defer func() {
+		cancel()
+		s.taskManager.Finish(task.ID)
+	}()
+
+	archivePath, archiveRelativePath := s.buildColdArchivePaths(instance, target)
+	record, err := s.createColdBackupRecord(strategy, instance, target, archivePath)
+	if err != nil {
+		return err
+	}
+
+	backend, err := buildStorageBackend(executionCtx, s.sshKeyRepo, target)
+	if err != nil {
+		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
+			return errors.Join(err, completeErr)
+		}
+		return err
+	}
+
+	excludePatterns, err := parseExcludePatterns(instance.ExcludePatterns)
+	if err != nil {
+		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
+			return errors.Join(err, completeErr)
+		}
+		return err
+	}
+
+	var sourceSSHKeyPath string
+	if instanceUsesRemoteSource(instance) {
+		sourceSSHKeyPath, err = s.lookupSourceSSHKeyPath(executionCtx, instance)
+		if err != nil {
+			if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
+				return errors.Join(err, completeErr)
+			}
+			return err
+		}
+	}
+
+	var result executorpkg.ColdBackupResult
+	coldExecutor := executorpkg.NewColdExecutor(s.runner)
+	executeErr := coldExecutor.Run(executionCtx, executorpkg.ColdBackupRequest{
+		Instance:            instance,
+		Target:              target,
+		Backend:             backend,
+		SourceSSHKeyPath:    sourceSSHKeyPath,
+		VolumeSize:          strategy.ColdVolumeSize,
+		ArchivePath:         archivePath,
+		ArchiveRelativePath: archiveRelativePath,
+		TempRoot:            s.resolveTempRoot(),
+		ExcludePatterns:     excludePatterns,
+		Result:              &result,
+	})
+	if executeErr != nil {
+		status := model.BackupStatusFailed
+		if errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded) {
+			status = model.BackupStatusCancelled
+		}
+		if completeErr := s.completeColdBackupRecord(record.ID, status, archivePath, executeErr.Error(), result); completeErr != nil {
+			return errors.Join(executeErr, completeErr)
+		}
+		return executeErr
+	}
+
+	if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusSuccess, archivePath, "", result); completeErr != nil {
+		return completeErr
+	}
+
+	if err := s.retentionService.Cleanup(executionCtx, strategy, target); err != nil {
+		cleanupErr := fmt.Errorf("cleanup retention: %w", err)
+		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, cleanupErr.Error(), result); completeErr != nil {
+			return errors.Join(cleanupErr, completeErr)
+		}
+		return cleanupErr
+	}
+
+	return nil
+}
+
+func instanceUsesRemoteSource(instance model.BackupInstance) bool {
+	return strings.EqualFold(strings.TrimSpace(instance.SourceType), SourceTypeRemote)
+}
+
 func (s *ExecutorService) ensureLocalExecutionPaths(target model.StorageTarget, plan executorpkg.RollingPlan) error {
 	if !isSSHStorageTargetType(target.Type) && strings.TrimSpace(plan.SnapshotPath) != "" {
 		if err := os.MkdirAll(filepath.Dir(plan.SnapshotPath), 0o755); err != nil {
@@ -312,6 +490,35 @@ func (s *ExecutorService) createBackupRecord(strategy model.Strategy, instance m
 	return record, nil
 }
 
+func (s *ExecutorService) createColdBackupRecord(strategy model.Strategy, instance model.BackupInstance, target model.StorageTarget, archivePath string) (model.BackupRecord, error) {
+	strategyID := strategy.ID
+	record := model.BackupRecord{
+		InstanceID:        instance.ID,
+		StorageTargetID:   target.ID,
+		StrategyID:        &strategyID,
+		BackupType:        BackupTypeCold,
+		Status:            model.BackupStatusRunning,
+		TargetLocationKey: storageTargetLocationKey(target),
+		SnapshotPath:      archivePath,
+		VolumeCount:       1,
+		StartedAt:         s.clock(),
+	}
+
+	if err := s.db.Create(&record).Error; err != nil {
+		return model.BackupRecord{}, fmt.Errorf("create backup record: %w", err)
+	}
+
+	return record, nil
+}
+
+func (s *ExecutorService) buildColdArchivePaths(instance model.BackupInstance, target model.StorageTarget) (string, string) {
+	timestamp := s.clock().UTC().Format("20060102T150405.000000000Z")
+	archiveFileName := fmt.Sprintf("%s_%s.tar.gz", executorpkg.SnapshotRootName(instance.Name), timestamp)
+	archiveRelativePath := filepath.Join(executorpkg.SnapshotRootDir(instance), archiveFileName)
+
+	return filepath.Clean(filepath.Join(target.BasePath, archiveRelativePath)), filepath.Clean(archiveRelativePath)
+}
+
 func (s *ExecutorService) updateBackupRecordProgress(recordID uint, snapshot executorpkg.ProgressSnapshot) error {
 	bytesTransferred := progressRecordBytes(snapshot)
 	updates := map[string]any{
@@ -346,6 +553,30 @@ func (s *ExecutorService) completeBackupRecord(recordID uint, status, snapshotPa
 
 	if err := s.db.Model(&model.BackupRecord{}).Where("id = ?", recordID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("complete backup record: %w", err)
+	}
+
+	return nil
+}
+
+func (s *ExecutorService) completeColdBackupRecord(recordID uint, status, archivePath, errorMessage string, result executorpkg.ColdBackupResult) error {
+	finishedAt := s.clock()
+	volumeCount := result.VolumeCount
+	if volumeCount <= 0 {
+		volumeCount = 1
+	}
+	updates := map[string]any{
+		"status":            status,
+		"snapshot_path":     archivePath,
+		"bytes_transferred": result.BytesTransferred,
+		"files_transferred": result.FilesTransferred,
+		"total_size":        result.TotalSize,
+		"volume_count":      volumeCount,
+		"finished_at":       &finishedAt,
+		"error_message":     errorMessage,
+	}
+
+	if err := s.db.Model(&model.BackupRecord{}).Where("id = ?", recordID).Updates(updates).Error; err != nil {
+		return fmt.Errorf("complete cold backup record: %w", err)
 	}
 
 	return nil
@@ -468,6 +699,14 @@ func (s *ExecutorService) resolveRelayCachePath(relayCacheDir string) string {
 	}
 
 	return filepath.Join(s.config.DataDir, trimmedRelayCacheDir)
+}
+
+func (s *ExecutorService) resolveTempRoot() string {
+	if strings.TrimSpace(s.config.DataDir) == "" {
+		return ""
+	}
+
+	return filepath.Join(s.config.DataDir, "tmp")
 }
 
 func (s *ExecutorService) findLatestRelayCache(currentRelayCacheDir string) (string, error) {

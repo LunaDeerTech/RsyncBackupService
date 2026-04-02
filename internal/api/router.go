@@ -12,7 +12,9 @@ import (
 
 type Dependencies struct {
 	AuthService       *service.AuthService
+	ExecutorService   *service.ExecutorService
 	InstanceService   *service.InstanceService
+	RestoreService    *service.RestoreService
 	SSHKeyService     *service.SSHKeyService
 	StorageTargetService *service.StorageTargetService
 	StrategyService   *service.StrategyService
@@ -31,7 +33,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	authHandler := handler.NewAuthHandler(deps.AuthService)
+	backupHandler := handler.NewBackupHandler(deps.ExecutorService)
 	instanceHandler := handler.NewInstanceHandler(deps.InstanceService)
+	restoreHandler := handler.NewRestoreHandler(deps.RestoreService)
 	sshKeyHandler := handler.NewSSHKeyHandler(deps.SSHKeyService)
 	storageTargetHandler := handler.NewStorageTargetHandler(deps.StorageTargetService)
 	strategyHandler := handler.NewStrategyHandler(deps.StrategyService)
@@ -56,7 +60,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	instanceGroup := apiGroup.Group("/instances", middleware.RequireJWT())
 	instanceGroup.GET("", instanceHandler.List)
 	instanceGroup.POST("", instanceHandler.Create)
+	instanceGroup.GET("/:id/backups", middleware.RequireInstanceRole(service.RoleViewer), backupHandler.List)
+	instanceGroup.GET("/:id/snapshots", middleware.RequireInstanceRole(service.RoleViewer), backupHandler.ListSnapshots)
 	instanceGroup.GET("/:id", middleware.RequireInstanceRole(service.RoleViewer), instanceHandler.Get)
+	instanceGroup.POST("/:id/restore", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "instances.restore", ResourceType: "restore_records"}), middleware.RequireInstanceRole(service.RoleAdmin), middleware.RequireVerifyToken(), restoreHandler.Create)
 	instanceGroup.PUT("/:id", middleware.RequireInstanceRole(service.RoleAdmin), instanceHandler.Update)
 	instanceGroup.DELETE("/:id", middleware.RequireInstanceRole(service.RoleAdmin), middleware.RequireVerifyToken(), instanceHandler.Delete)
 
@@ -84,6 +91,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	permissionGroup := apiGroup.Group("/instances/:id/permissions", middleware.RequireJWT())
 	permissionGroup.GET("", middleware.RequireAdmin(), permissionHandler.List)
 	permissionGroup.PUT("/:userID", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "instance_permissions.upsert", ResourceType: "instance_permissions"}), middleware.RequireAdmin(), permissionHandler.Upsert)
+
+	restoreRecordGroup := apiGroup.Group("/restore-records", middleware.RequireJWT())
+	restoreRecordGroup.GET("", restoreHandler.List)
 
 	return router
 }

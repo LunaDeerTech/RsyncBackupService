@@ -24,8 +24,9 @@ type RetentionService struct {
 }
 
 type retentionCandidate struct {
-	path       string
-	modifiedAt time.Time
+	sortPath    string
+	deletePaths []string
+	modifiedAt  time.Time
 }
 
 func NewRetentionService(db *gorm.DB) *RetentionService {
@@ -49,7 +50,7 @@ func (s *RetentionService) Cleanup(ctx context.Context, strategy model.Strategy,
 		return err
 	}
 
-	candidates, err := s.listRetentionCandidates(ctx, strategy, target)
+	candidates, err := s.listRetentionCandidates(ctx, strategy, target, backend)
 	if err != nil {
 		return err
 	}
@@ -67,16 +68,20 @@ func (s *RetentionService) Cleanup(ctx context.Context, strategy model.Strategy,
 	return nil
 }
 
-func (s *RetentionService) listRetentionCandidates(ctx context.Context, strategy model.Strategy, target model.StorageTarget) ([]retentionCandidate, error) {
+func (s *RetentionService) listRetentionCandidates(ctx context.Context, strategy model.Strategy, target model.StorageTarget, backend storage.StorageBackend) ([]retentionCandidate, error) {
 	instance, err := s.loadInstance(ctx, strategy)
 	if err != nil {
 		return nil, err
 	}
 
 	var records []model.BackupRecord
+	backupType := strings.TrimSpace(strategy.BackupType)
+	if backupType == "" {
+		backupType = BackupTypeRolling
+	}
 	query := s.db.WithContext(ctx).
 		Model(&model.BackupRecord{}).
-		Where("instance_id = ? AND backup_type = ? AND status = ? AND snapshot_path <> ''", strategy.InstanceID, BackupTypeRolling, model.BackupStatusSuccess).
+		Where("instance_id = ? AND backup_type = ? AND status = ? AND snapshot_path <> ''", strategy.InstanceID, backupType, model.BackupStatusSuccess).
 		Order("finished_at DESC").
 		Order("id DESC")
 	if strategy.ID != 0 {
@@ -99,11 +104,21 @@ func (s *RetentionService) listRetentionCandidates(ctx context.Context, strategy
 		if !ok {
 			continue
 		}
+		deletePaths := []string{relativePath}
+		if strings.EqualFold(strings.TrimSpace(record.BackupType), BackupTypeCold) {
+			deletePaths, err = resolveColdArchiveObjectPaths(ctx, backend, relativePath, record.VolumeCount)
+			if err != nil {
+				if errors.Is(err, ErrBackupRecordNotRestorable) {
+					continue
+				}
+				return nil, err
+			}
+		}
 		modifiedAt := record.StartedAt.UTC()
 		if record.FinishedAt != nil {
 			modifiedAt = record.FinishedAt.UTC()
 		}
-		candidates = append(candidates, retentionCandidate{path: relativePath, modifiedAt: modifiedAt})
+		candidates = append(candidates, retentionCandidate{sortPath: relativePath, deletePaths: deletePaths, modifiedAt: modifiedAt})
 	}
 
 	return candidates, nil
@@ -164,14 +179,16 @@ func (s *RetentionService) selectDeletionPaths(candidates []retentionCandidate, 
 	sortedCandidates := append([]retentionCandidate(nil), candidates...)
 	sort.Slice(sortedCandidates, func(left, right int) bool {
 		if sortedCandidates[left].modifiedAt.Equal(sortedCandidates[right].modifiedAt) {
-			return sortedCandidates[left].path > sortedCandidates[right].path
+			return sortedCandidates[left].sortPath > sortedCandidates[right].sortPath
 		}
 		return sortedCandidates[left].modifiedAt.After(sortedCandidates[right].modifiedAt)
 	})
 
 	if strategy.RetentionCount > 0 && len(sortedCandidates) > strategy.RetentionCount {
 		for _, candidate := range sortedCandidates[strategy.RetentionCount:] {
-			markedPaths[candidate.path] = struct{}{}
+			for _, deletePath := range candidate.deletePaths {
+				markedPaths[deletePath] = struct{}{}
+			}
 		}
 	}
 
@@ -179,7 +196,9 @@ func (s *RetentionService) selectDeletionPaths(candidates []retentionCandidate, 
 		threshold := s.clock().Add(-time.Duration(strategy.RetentionDays) * 24 * time.Hour)
 		for _, candidate := range sortedCandidates {
 			if candidate.modifiedAt.Before(threshold) {
-				markedPaths[candidate.path] = struct{}{}
+				for _, deletePath := range candidate.deletePaths {
+					markedPaths[deletePath] = struct{}{}
+				}
 			}
 		}
 	}
