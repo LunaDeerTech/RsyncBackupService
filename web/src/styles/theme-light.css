@@ -1,19 +1,21 @@
 :root,
 :root[data-theme="light"] {
-	--color-bg-canvas: #f4f8fc;
-	--color-bg-subtle: #edf3f8;
-	--color-surface-1: rgba(255, 255, 255, 0.88);
-	--color-surface-2: #f6fafd;
-	--color-surface-3: #eaf2f8;
-	--color-border-default: #d6e3ec;
-	--color-text-strong: #102033;
-	--color-text-muted: #62758a;
-	--color-focus-ring: rgba(47, 199, 240, 0.35);
-	--color-shadow: rgba(16, 32, 51, 0.12);
-	--shadow-soft: 0 24px 60px rgba(16, 32, 51, 0.12);
-	--selection-color: rgba(99, 217, 255, 0.25);
-}
-
-::selection {
-	background: var(--selection-color);
+	/* Semantic tokens */
+	--surface-canvas: var(--light-bg-canvas);
+	--surface-subtle: var(--light-bg-subtle);
+	--surface-panel: rgba(255, 255, 255, 0.88);
+	--surface-panel-solid: var(--light-surface-1);
+	--surface-elevated: var(--light-surface-2);
+	--surface-accent-soft: var(--light-surface-3);
+	--border-default: var(--light-border-default);
+	--text-strong: var(--light-text-strong);
+	--text-muted: var(--light-text-muted);
+	--shadow-ambient: var(--shadow-ambient-light);
+	--focus-ring-color: color-mix(in srgb, var(--primary-500) 34%, transparent);
+	--error-surface: color-mix(in srgb, var(--error-500) 14%, var(--light-surface-1));
+	--error-text: #8e2b3a;
+	--success-surface: color-mix(in srgb, var(--success-500) 18%, var(--light-surface-1));
+	--warning-surface: color-mix(in srgb, var(--warning-500) 22%, var(--light-surface-1));
+	--info-surface: color-mix(in srgb, var(--info-500) 18%, var(--light-surface-1));
+	color-scheme: light;
 }

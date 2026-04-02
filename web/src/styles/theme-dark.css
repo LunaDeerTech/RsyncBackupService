@@ -1,33 +1,41 @@
 :root[data-theme="dark"] {
-	--color-bg-canvas: #0e1726;
-	--color-bg-subtle: #111d2d;
-	--color-surface-1: rgba(20, 33, 51, 0.9);
-	--color-surface-2: #18283d;
-	--color-surface-3: #1e3147;
-	--color-border-default: #294059;
-	--color-text-strong: #eaf5ff;
-	--color-text-muted: #96abc1;
-	--color-focus-ring: rgba(99, 217, 255, 0.4);
-	--color-shadow: rgba(0, 0, 0, 0.35);
-	--shadow-soft: 0 24px 60px rgba(0, 0, 0, 0.35);
-	--selection-color: rgba(99, 217, 255, 0.2);
+	--surface-canvas: var(--dark-bg-canvas);
+	--surface-subtle: var(--dark-bg-subtle);
+	--surface-panel: rgba(20, 33, 51, 0.9);
+	--surface-panel-solid: var(--dark-surface-1);
+	--surface-elevated: var(--dark-surface-2);
+	--surface-accent-soft: var(--dark-surface-3);
+	--border-default: var(--dark-border-default);
+	--text-strong: var(--dark-text-strong);
+	--text-muted: var(--dark-text-muted);
+	--shadow-ambient: var(--shadow-ambient-dark);
+	--focus-ring-color: color-mix(in srgb, var(--primary-500) 40%, transparent);
+	--error-surface: color-mix(in srgb, var(--error-500) 18%, var(--dark-surface-1));
+	--error-text: #f6b0bc;
+	--success-surface: color-mix(in srgb, var(--success-500) 18%, var(--dark-surface-1));
+	--warning-surface: color-mix(in srgb, var(--warning-500) 18%, var(--dark-surface-1));
+	--info-surface: color-mix(in srgb, var(--info-500) 18%, var(--dark-surface-1));
 	color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme="light"]) {
-		--color-bg-canvas: #0e1726;
-		--color-bg-subtle: #111d2d;
-		--color-surface-1: rgba(20, 33, 51, 0.9);
-		--color-surface-2: #18283d;
-		--color-surface-3: #1e3147;
-		--color-border-default: #294059;
-		--color-text-strong: #eaf5ff;
-		--color-text-muted: #96abc1;
-		--color-focus-ring: rgba(99, 217, 255, 0.4);
-		--color-shadow: rgba(0, 0, 0, 0.35);
-		--shadow-soft: 0 24px 60px rgba(0, 0, 0, 0.35);
-		--selection-color: rgba(99, 217, 255, 0.2);
+		--surface-canvas: var(--dark-bg-canvas);
+		--surface-subtle: var(--dark-bg-subtle);
+		--surface-panel: rgba(20, 33, 51, 0.9);
+		--surface-panel-solid: var(--dark-surface-1);
+		--surface-elevated: var(--dark-surface-2);
+		--surface-accent-soft: var(--dark-surface-3);
+		--border-default: var(--dark-border-default);
+		--text-strong: var(--dark-text-strong);
+		--text-muted: var(--dark-text-muted);
+		--shadow-ambient: var(--shadow-ambient-dark);
+		--focus-ring-color: color-mix(in srgb, var(--primary-500) 40%, transparent);
+		--error-surface: color-mix(in srgb, var(--error-500) 18%, var(--dark-surface-1));
+		--error-text: #f6b0bc;
+		--success-surface: color-mix(in srgb, var(--success-500) 18%, var(--dark-surface-1));
+		--warning-surface: color-mix(in srgb, var(--warning-500) 18%, var(--dark-surface-1));
+		--info-surface: color-mix(in srgb, var(--info-500) 18%, var(--dark-surface-1));
 		color-scheme: dark;
 	}
 }
