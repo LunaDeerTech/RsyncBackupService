@@ -1,13 +1,15 @@
 import { reactive } from "vue"
 
-import type { SessionTokens } from "../api/types"
+import type { AuthUser, SessionTokens } from "../api/types"
 
 export const AUTH_STORAGE_KEY = "rbs.auth.session"
 
 type AuthStore = {
 	accessToken: string | null
 	refreshToken: string | null
+	currentUser: AuthUser | null
 	setSession(tokens: SessionTokens): void
+	setCurrentUser(user: AuthUser | null): void
 	clearSession(): void
 }
 
@@ -68,6 +70,7 @@ function applySession(tokens: SessionTokens): void {
 function clearSessionState(): void {
 	authStore.accessToken = null
 	authStore.refreshToken = null
+	authStore.currentUser = null
 	persistSession(null)
 }
 
@@ -76,8 +79,12 @@ const initialSession = readStoredSession()
 const authStore = reactive<AuthStore>({
 	accessToken: initialSession?.accessToken ?? null,
 	refreshToken: initialSession?.refreshToken ?? null,
+	currentUser: null,
 	setSession(tokens) {
 		applySession(tokens)
+	},
+	setCurrentUser(user) {
+		authStore.currentUser = user
 	},
 	clearSession() {
 		clearSessionState()

@@ -17,7 +17,7 @@ const title = computed(() =>
 const subtitle = computed(() =>
 	typeof route.meta.description === "string"
 		? route.meta.description
-		: "当前任务只交付前端基础设施，后续业务内容将在这里承载。",
+		: "通过顶部导航查看当前页面的业务状态与操作入口。",
 )
 
 const themeActionLabel = computed(() =>
@@ -37,13 +37,13 @@ async function handleLogout(): Promise<void> {
 <template>
 	<header class="top-bar">
 		<div class="top-bar__heading">
-			<p class="top-bar__eyebrow">Task 10 Infrastructure</p>
+			<p class="top-bar__eyebrow">Operations Console</p>
 			<p class="top-bar__title">{{ title }}</p>
 			<p class="top-bar__subtitle">{{ subtitle }}</p>
 		</div>
 
 		<div class="top-bar__actions">
-			<span class="top-bar__badge">本地会话已加载</span>
+			<span class="top-bar__badge">会话已验证</span>
 			<button type="button" class="top-bar__button" :aria-label="themeActionLabel" @click="toggleTheme">
 				{{ ui.theme === "light" ? "深色主题" : "浅色主题" }}
 			</button>

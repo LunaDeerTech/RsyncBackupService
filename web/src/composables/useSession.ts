@@ -1,7 +1,7 @@
 import { computed } from "vue"
 
-import { apiFetch } from "../api/client"
-import { normalizeTokenPair, type ApiTokenPair, type LoginCredentials, type SessionTokens } from "../api/types"
+import { getCurrentUser, login as loginRequest } from "../api/auth"
+import { normalizeTokenPair, type LoginCredentials, type SessionTokens } from "../api/types"
 import { useAuthStore } from "../stores/auth"
 
 type SessionComposable = {
@@ -19,15 +19,16 @@ export function useSession(): SessionComposable {
 	const isAuthenticated = computed(() => auth.accessToken !== null)
 
 	async function login(credentials: LoginCredentials): Promise<void> {
-		const tokens = await apiFetch<ApiTokenPair>("/api/auth/login", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(credentials),
-		})
+		const tokens = await loginRequest(credentials)
 
 		auth.setSession(normalizeTokenPair(tokens))
+
+		try {
+			auth.setCurrentUser(await getCurrentUser())
+		} catch (error) {
+			auth.clearSession()
+			throw error
+		}
 	}
 
 	function logout(): void {

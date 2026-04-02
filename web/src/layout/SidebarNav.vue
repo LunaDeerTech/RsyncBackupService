@@ -1,5 +1,47 @@
 <script setup lang="ts">
+import { computed, onMounted, watch } from "vue"
+
+import { getCurrentUser } from "../api/auth"
+import { ApiError } from "../api/client"
 import { primaryNavigation } from "../router/navigation"
+import { useAuthStore } from "../stores/auth"
+
+const auth = useAuthStore()
+
+const navigationItems = computed(() =>
+	primaryNavigation.filter((item) => item.requiresAdmin !== true || auth.currentUser?.is_admin === true),
+)
+
+async function hydrateCurrentUser(): Promise<void> {
+	if (auth.accessToken === null || auth.currentUser !== null) {
+		return
+	}
+
+	try {
+		auth.setCurrentUser(await getCurrentUser())
+	} catch (error) {
+		if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+			auth.clearSession()
+		}
+	}
+}
+
+watch(
+	() => auth.accessToken,
+	(accessToken) => {
+		if (accessToken === null) {
+			auth.setCurrentUser(null)
+			return
+		}
+
+		void hydrateCurrentUser()
+	},
+	{ immediate: true },
+)
+
+onMounted(() => {
+	void hydrateCurrentUser()
+})
 </script>
 
 <template>
@@ -7,11 +49,11 @@ import { primaryNavigation } from "../router/navigation"
 		<div class="sidebar-nav__brand">
 			<p class="sidebar-nav__eyebrow">Balanced Flux</p>
 			<p class="sidebar-nav__title">Rsync Backup Service</p>
-			<p class="sidebar-nav__caption">前端基础设施、主题与受保护布局已经就绪。</p>
+			<p class="sidebar-nav__caption">登录、实例、恢复、通知与设置工作流入口。</p>
 		</div>
 
 		<nav class="sidebar-nav__links" aria-label="主导航">
-			<RouterLink v-for="item in primaryNavigation" :key="item.name" :to="item.to" custom>
+			<RouterLink v-for="item in navigationItems" :key="item.name" :to="item.to" custom>
 				<template #default="{ href, navigate, isActive }">
 					<a
 						:href="href"

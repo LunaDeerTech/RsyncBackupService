@@ -22,7 +22,7 @@ describe("App", () => {
 		})
 
 		expect(screen.getByTestId("app-root")).toBeInTheDocument()
-		expect(screen.getByTestId("login-shell")).toBeInTheDocument()
+		expect(screen.getByTestId("login-view")).toBeInTheDocument()
 	})
 
 	it("redirects anonymous visitors to the login shell", async () => {

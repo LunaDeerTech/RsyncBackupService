@@ -1,0 +1,176 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from "vue"
+import { useRoute, useRouter } from "vue-router"
+
+import { ApiError } from "../api/client"
+import { getInstanceDetail } from "../api/instances"
+import { listStorageTargets } from "../api/storageTargets"
+import { listStrategies } from "../api/strategies"
+import type { InstanceDetail, StorageTargetSummary, StrategySummary } from "../api/types"
+import AppButton from "../components/ui/AppButton.vue"
+import AppNotification from "../components/ui/AppNotification.vue"
+import AppTabs from "../components/ui/AppTabs.vue"
+import AppTag from "../components/ui/AppTag.vue"
+import { formatSource } from "../utils/formatters"
+import BackupsTab from "./instance/BackupsTab.vue"
+import OverviewTab from "./instance/OverviewTab.vue"
+import RestoreTab from "./instance/RestoreTab.vue"
+import StrategiesTab from "./instance/StrategiesTab.vue"
+import SubscriptionsTab from "./instance/SubscriptionsTab.vue"
+
+const route = useRoute()
+const router = useRouter()
+
+const instance = ref<InstanceDetail | null>(null)
+const strategies = ref<StrategySummary[]>([])
+const storageTargets = ref<StorageTargetSummary[]>([])
+const storageTargetsRestricted = ref(false)
+const errorMessage = ref("")
+const isLoading = ref(true)
+const activeTab = ref("overview")
+
+const instanceId = computed(() => Number.parseInt(String(route.params.id ?? "0"), 10) || 0)
+const tabs = [
+	{ value: "overview", label: "概览" },
+	{ value: "strategies", label: "策略" },
+	{ value: "backups", label: "备份历史" },
+	{ value: "restore", label: "恢复" },
+	{ value: "subscriptions", label: "通知订阅" },
+]
+
+const relayMode = computed(() => {
+	if (instance.value?.source_type !== "remote") {
+		return false
+	}
+
+	const targetMap = new Map(storageTargets.value.map((item) => [item.id, item]))
+	return strategies.value.some((strategy) =>
+		strategy.storage_target_ids.some((storageTargetId) => {
+			const target = targetMap.get(storageTargetId)
+			return target?.type === "rolling_ssh" || target?.type === "cold_ssh"
+		}),
+	)
+})
+
+const relayModePossible = computed(() => {
+	if (instance.value?.source_type !== "remote" || !storageTargetsRestricted.value) {
+		return false
+	}
+
+	return strategies.value.some((strategy) => strategy.storage_target_ids.length > 0)
+})
+
+const relayModeVisible = computed(() => relayMode.value || relayModePossible.value)
+
+const relayModeTitle = computed(() => (relayMode.value ? "中继模式" : "可能经过中继缓存"))
+
+const relayModeHint = computed(() => {
+	if (!relayModeVisible.value) {
+		return ""
+	}
+
+	if (relayModePossible.value) {
+		return "当前账户无法读取目标类型。该实例源端位于远程主机；若策略绑定了 SSH 目标，恢复与滚动同步会经过本机缓存目录，请预留磁盘空间。"
+	}
+
+	return "该实例的源端与部分目标端都位于远程主机。恢复与滚动同步会经过本机缓存目录，请确认磁盘空间与网络带宽。"
+})
+
+async function loadDetail(): Promise<void> {
+	errorMessage.value = ""
+	isLoading.value = true
+
+	try {
+		storageTargetsRestricted.value = false
+		const [instanceItem, strategyItems, storageTargetItems] = await Promise.all([
+			getInstanceDetail(instanceId.value),
+			listStrategies(instanceId.value),
+			listStorageTargets().catch((error: unknown) => {
+				if (error instanceof ApiError && error.status === 403) {
+					storageTargetsRestricted.value = true
+					return []
+				}
+
+				throw error
+			}),
+		])
+
+		instance.value = instanceItem
+		strategies.value = strategyItems
+		storageTargets.value = storageTargetItems
+	} catch (error) {
+		errorMessage.value = error instanceof ApiError ? error.message : "加载实例详情失败。"
+	} finally {
+		isLoading.value = false
+	}
+}
+
+function goBack(): void {
+	void router.push("/instances")
+}
+
+onMounted(() => {
+	void loadDetail()
+})
+
+watch(instanceId, () => {
+	void loadDetail()
+})
+</script>
+
+<template>
+	<section v-if="instance" class="page-view">
+		<header class="page-header">
+			<div>
+				<h1 class="page-header__title">{{ instance.name }}</h1>
+				<p class="page-header__subtitle">{{ formatSource(instance.source_type, instance.source_path, instance.source_host) }}</p>
+			</div>
+			<div class="page-action-row--wrap">
+				<AppTag :tone="instance.enabled ? 'success' : 'warning'">{{ instance.enabled ? "已启用" : "已停用" }}</AppTag>
+				<AppButton variant="secondary" @click="loadDetail">刷新</AppButton>
+				<AppButton variant="ghost" @click="goBack">返回实例列表</AppButton>
+			</div>
+		</header>
+
+		<AppNotification
+			v-if="relayModeVisible"
+			:title="relayModeTitle"
+			tone="warning"
+			:description="relayModeHint"
+		/>
+
+		<AppTabs v-model="activeTab" :tabs="tabs" aria-label="实例详情标签" />
+
+		<OverviewTab
+			v-if="activeTab === 'overview'"
+			:instance="instance"
+			:strategies="strategies"
+			:relay-mode="relayModeVisible"
+			:relay-mode-hint="relayModeHint"
+			:relay-mode-title="relayModeTitle"
+		/>
+		<StrategiesTab v-else-if="activeTab === 'strategies'" :instance-id="instance.id" />
+		<BackupsTab v-else-if="activeTab === 'backups'" :instance-id="instance.id" />
+		<RestoreTab
+			v-else-if="activeTab === 'restore'"
+			:instance-id="instance.id"
+			:instance="instance"
+			:relay-mode="relayModeVisible"
+			:relay-mode-hint="relayModeHint"
+			:relay-mode-title="relayModeTitle"
+		/>
+		<SubscriptionsTab v-else :instance-id="instance.id" />
+	</section>
+
+	<section v-else class="page-view">
+		<header class="page-header">
+			<div>
+				<h1 class="page-header__title">实例详情</h1>
+				<p class="page-header__subtitle">载入实例、策略与恢复上下文。</p>
+			</div>
+		</header>
+
+		<AppNotification v-if="errorMessage" title="实例详情加载失败" tone="danger" :description="errorMessage" />
+		<p v-else-if="isLoading" class="page-muted">正在加载实例详情…</p>
+	</section>
+</template>

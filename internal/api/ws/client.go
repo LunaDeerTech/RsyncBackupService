@@ -8,22 +8,12 @@ import (
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
+	xwebsocket "golang.org/x/net/websocket"
 )
 
 const (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
+	writeWait = 10 * time.Second
 )
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(*http.Request) bool {
-		return true
-	},
-}
 
 var bridgeNow = func() time.Time {
 	return time.Now().UTC()
@@ -31,7 +21,7 @@ var bridgeNow = func() time.Time {
 
 type Client struct {
 	hub       *Hub
-	conn      *websocket.Conn
+	conn      *xwebsocket.Conn
 	send      chan service.ProgressEvent
 	closeOnce sync.Once
 }
@@ -39,24 +29,28 @@ type Client struct {
 func ServeProgress(hub *Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if hub == nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "progress hub unavailable"})
+			c.AbortWithStatusJSON(500, gin.H{"error": "progress hub unavailable"})
 			return
 		}
 
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			return
+		server := xwebsocket.Server{
+			Handshake: func(*xwebsocket.Config, *http.Request) error {
+				return nil
+			},
+			Handler: xwebsocket.Handler(func(conn *xwebsocket.Conn) {
+				client := &Client{
+					hub:  hub,
+					conn: conn,
+					send: make(chan service.ProgressEvent, 16),
+				}
+				hub.Register(client)
+
+				go client.writePump()
+				client.readPump()
+			}),
 		}
 
-		client := &Client{
-			hub:  hub,
-			conn: conn,
-			send: make(chan service.ProgressEvent, 16),
-		}
-		hub.Register(client)
-
-		go client.writePump()
-		go client.readPump()
+		server.ServeHTTP(c.Writer, c.Request)
 	}
 }
 
@@ -113,14 +107,9 @@ func (c *Client) readPump() {
 		_ = c.conn.Close()
 	}()
 
-	c.conn.SetReadLimit(512)
-	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error {
-		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	})
-
 	for {
-		if _, _, err := c.conn.ReadMessage(); err != nil {
+		var discard []byte
+		if err := xwebsocket.Message.Receive(c.conn, &discard); err != nil {
 			return
 		}
 	}
@@ -130,28 +119,18 @@ func (c *Client) writePump() {
 	if c == nil || c.conn == nil {
 		return
 	}
-	ticker := time.NewTicker(pingPeriod)
 	defer func() {
-		ticker.Stop()
 		_ = c.conn.Close()
 	}()
 
 	for {
-		select {
-		case event, ok := <-c.send:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				_ = c.conn.WriteMessage(websocket.CloseMessage, nil)
-				return
-			}
-			if err := c.conn.WriteJSON(event); err != nil {
-				return
-			}
-		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
+		event, ok := <-c.send
+		_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+		if !ok {
+			return
+		}
+		if err := xwebsocket.JSON.Send(c.conn, event); err != nil {
+			return
 		}
 	}
 }
