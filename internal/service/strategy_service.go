@@ -144,6 +144,9 @@ func (s *StrategyService) Create(ctx context.Context, actor AuthIdentity, instan
 	if err != nil {
 		return model.Strategy{}, err
 	}
+	if err := s.ensureRollingTargetIsolation(ctx, instanceID, 0, req.BackupType, storageTargets); err != nil {
+		return model.Strategy{}, err
+	}
 
 	strategy := model.Strategy{
 		InstanceID:          instanceID,
@@ -195,6 +198,9 @@ func (s *StrategyService) Update(ctx context.Context, actor AuthIdentity, id uin
 
 	storageTargets, err := s.loadAndValidateStorageTargets(ctx, req.StorageTargetIDs, req.BackupType)
 	if err != nil {
+		return model.Strategy{}, err
+	}
+	if err := s.ensureRollingTargetIsolation(ctx, strategy.InstanceID, strategy.ID, req.BackupType, storageTargets); err != nil {
 		return model.Strategy{}, err
 	}
 
@@ -331,6 +337,45 @@ func (s *StrategyService) loadAndValidateStorageTargets(ctx context.Context, ids
 	}
 
 	return storageTargets, nil
+}
+
+func (s *StrategyService) ensureRollingTargetIsolation(ctx context.Context, instanceID, currentStrategyID uint, backupType string, storageTargets []model.StorageTarget) error {
+	if strings.TrimSpace(backupType) != BackupTypeRolling {
+		return nil
+	}
+
+	if len(storageTargets) == 0 {
+		return nil
+	}
+	desiredLocations := make(map[string]struct{}, len(storageTargets))
+	for _, storageTarget := range storageTargets {
+		locationKey := storageTargetLocationKey(storageTarget)
+		if _, exists := desiredLocations[locationKey]; exists {
+			return fmt.Errorf("%w: storage targets cannot be shared by multiple rolling strategies on the same instance", ErrRollingTargetConflict)
+		}
+		desiredLocations[locationKey] = struct{}{}
+	}
+
+	query := s.db.WithContext(ctx).
+		Preload("StorageTargets").
+		Where("instance_id = ? AND backup_type = ?", instanceID, BackupTypeRolling)
+	if currentStrategyID != 0 {
+		query = query.Where("id <> ?", currentStrategyID)
+	}
+
+	var strategies []model.Strategy
+	if err := query.Find(&strategies).Error; err != nil {
+		return fmt.Errorf("list conflicting rolling strategies: %w", err)
+	}
+	for _, strategy := range strategies {
+		for _, storageTarget := range strategy.StorageTargets {
+			if _, exists := desiredLocations[storageTargetLocationKey(storageTarget)]; exists {
+				return fmt.Errorf("%w: storage targets cannot be shared by multiple rolling strategies on the same instance", ErrRollingTargetConflict)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *StrategyService) requireInstanceRole(ctx context.Context, actor AuthIdentity, instanceID uint, role string) error {

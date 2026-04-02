@@ -114,6 +114,10 @@ func (s *SSHStorage) List(ctx context.Context, prefix string) ([]StorageObject, 
 	command := fmt.Sprintf("find %s -mindepth 1 -maxdepth 1 -printf '%%P\t%%s\t%%T@\t%%y\\n'", shellQuote(resolvedPath))
 	output, err := s.runCommand(ctx, command)
 	if err != nil {
+		lowerErr := strings.ToLower(err.Error())
+		if strings.Contains(lowerErr, "no such file or directory") || strings.Contains(lowerErr, "cannot access") {
+			return []StorageObject{}, nil
+		}
 		return nil, err
 	}
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
+	executorpkg "github.com/LunaDeerTech/RsyncBackupService/internal/executor"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
 	schedulerpkg "github.com/LunaDeerTech/RsyncBackupService/internal/scheduler"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
@@ -44,13 +46,17 @@ func (a *App) Run() error {
 		authService := service.NewAuthService(a.DB, a.Config.JWTSecret)
 		instanceService := service.NewInstanceService(a.DB)
 		sshKeyService := service.NewSSHKeyService(a.DB)
-		storageTargetService := service.NewStorageTargetService(a.DB)
 		strategyScheduler := schedulerpkg.NewScheduler()
-		schedulerService := service.NewSchedulerService(strategyScheduler, nil)
+		executorService := service.NewExecutorService(a.DB, a.Config, nil, executorpkg.NewTaskManager())
+		schedulerService := service.NewSchedulerService(strategyScheduler, executorService.RunStrategy)
+		storageTargetService := service.NewStorageTargetService(a.DB, schedulerService)
 		strategyService := service.NewStrategyService(a.DB, schedulerService)
 		userService := service.NewUserService(a.DB, authService)
 		permissionService := service.NewPermissionService(a.DB)
 		auditRepo := repository.NewAuditLogRepository(a.DB)
+		if err := service.BootstrapSchedules(context.Background(), a.DB, schedulerService); err != nil {
+			return fmt.Errorf("bootstrap persisted strategy schedules: %w", err)
+		}
 
 		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
 			AuthService:          authService,

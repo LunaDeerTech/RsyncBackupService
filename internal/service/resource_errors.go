@@ -19,6 +19,8 @@ var (
 	ErrInvalidSSHKeyPermissions = errors.New("ssh private key permissions must be 0600")
 	ErrInvalidStorageTargetType = errors.New("invalid storage target type")
 	ErrInvalidMaxExecution      = errors.New("invalid max execution seconds")
+	ErrDuplicateStorageTargetLocation = errors.New("storage target location already exists")
+	ErrRollingTargetConflict    = errors.New("rolling storage target conflict")
 	ErrNameRequired             = errors.New("name is required")
 	ErrPrivateKeyPathRequired   = errors.New("private key path is required")
 	ErrResourceInUse            = errors.New("resource is still in use")
@@ -47,6 +49,8 @@ func IsValidationError(err error) bool {
 		errors.Is(err, ErrInvalidSSHKey),
 		errors.Is(err, ErrInvalidSSHKeyPermissions),
 		errors.Is(err, ErrInvalidStorageTargetType),
+		errors.Is(err, ErrDuplicateStorageTargetLocation),
+		errors.Is(err, ErrRollingTargetConflict),
 		errors.Is(err, ErrNameRequired),
 		errors.Is(err, ErrPrivateKeyPathRequired),
 		errors.Is(err, ErrScheduleRequired),

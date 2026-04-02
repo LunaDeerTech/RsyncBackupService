@@ -273,7 +273,6 @@ func (s *InstanceService) findInstance(ctx context.Context, id uint) (model.Back
 
 	return instance, nil
 }
-
 func (s *InstanceService) requireInstanceRole(ctx context.Context, actor AuthIdentity, instanceID uint, role string) error {
 	if actor.IsAdmin {
 		return nil

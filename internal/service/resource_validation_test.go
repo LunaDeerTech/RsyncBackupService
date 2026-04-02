@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,6 +136,200 @@ func TestCreateStrategyRejectsIncompatibleStorageTargetType(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "incompatible") {
 		t.Fatalf("expected incompatible storage target error, got %v", err)
+	}
+}
+
+func TestCreateStrategyRejectsRollingStorageTargetConflictWithinInstance(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	strategyService := NewStrategyService(fixture.db)
+	target := createResourceValidationStorageTarget(t, fixture.db, "rolling-target", "rolling_local")
+
+	_, err := strategyService.Create(context.Background(), authIdentityFromUser(fixture.admin), fixture.instance.ID, CreateStrategyRequest{
+		Name:             "rolling-primary",
+		BackupType:       "rolling",
+		IntervalSeconds:  3600,
+		RetentionDays:    7,
+		RetentionCount:   1,
+		StorageTargetIDs: []uint{target.ID},
+		Enabled:          true,
+	})
+	if err != nil {
+		t.Fatalf("seed first rolling strategy: %v", err)
+	}
+
+	_, err = strategyService.Create(context.Background(), authIdentityFromUser(fixture.admin), fixture.instance.ID, CreateStrategyRequest{
+		Name:             "rolling-secondary",
+		BackupType:       "rolling",
+		IntervalSeconds:  7200,
+		RetentionDays:    14,
+		RetentionCount:   2,
+		StorageTargetIDs: []uint{target.ID},
+		Enabled:          true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "storage targets cannot be shared") {
+		t.Fatalf("expected rolling storage target conflict error, got %v", err)
+	}
+}
+
+func TestCreateStrategyRejectsLegacyDuplicateRollingLocationWithinInstance(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	strategyService := NewStrategyService(fixture.db)
+	sharedBasePath := filepath.Join(t.TempDir(), "shared-legacy-root")
+	firstTarget := model.StorageTarget{Name: "legacy-a", Type: "rolling_local", BasePath: sharedBasePath}
+	secondTarget := model.StorageTarget{Name: "legacy-b", Type: "rolling_local", BasePath: sharedBasePath}
+	if err := fixture.db.Create(&firstTarget).Error; err != nil {
+		t.Fatalf("create first legacy target: %v", err)
+	}
+	if err := fixture.db.Create(&secondTarget).Error; err != nil {
+		t.Fatalf("create second legacy target: %v", err)
+	}
+
+	actor := authIdentityFromUser(fixture.admin)
+	_, err := strategyService.Create(context.Background(), actor, fixture.instance.ID, CreateStrategyRequest{
+		Name:             "rolling-a",
+		BackupType:       "rolling",
+		IntervalSeconds:  3600,
+		RetentionDays:    7,
+		RetentionCount:   3,
+		StorageTargetIDs: []uint{firstTarget.ID},
+		Enabled:          true,
+	})
+	if err != nil {
+		t.Fatalf("seed first strategy: %v", err)
+	}
+
+	_, err = strategyService.Create(context.Background(), actor, fixture.instance.ID, CreateStrategyRequest{
+		Name:             "rolling-b",
+		BackupType:       "rolling",
+		IntervalSeconds:  7200,
+		RetentionDays:    7,
+		RetentionCount:   3,
+		StorageTargetIDs: []uint{secondTarget.ID},
+		Enabled:          true,
+	})
+	if !errors.Is(err, ErrRollingTargetConflict) {
+		t.Fatalf("expected legacy duplicate target location conflict, got %v", err)
+	}
+}
+
+func TestCreateStrategyRejectsDuplicateLocationsWithinSingleRollingStrategy(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	strategyService := NewStrategyService(fixture.db)
+	sharedBasePath := filepath.Join(t.TempDir(), "single-strategy-shared-root")
+	firstTarget := model.StorageTarget{Name: "legacy-a", Type: "rolling_local", BasePath: sharedBasePath}
+	secondTarget := model.StorageTarget{Name: "legacy-b", Type: "rolling_local", BasePath: sharedBasePath}
+	if err := fixture.db.Create(&firstTarget).Error; err != nil {
+		t.Fatalf("create first legacy target: %v", err)
+	}
+	if err := fixture.db.Create(&secondTarget).Error; err != nil {
+		t.Fatalf("create second legacy target: %v", err)
+	}
+
+	_, err := strategyService.Create(context.Background(), authIdentityFromUser(fixture.admin), fixture.instance.ID, CreateStrategyRequest{
+		Name:             "rolling-duplicate-targets",
+		BackupType:       "rolling",
+		IntervalSeconds:  3600,
+		RetentionDays:    7,
+		RetentionCount:   3,
+		StorageTargetIDs: []uint{firstTarget.ID, secondTarget.ID},
+		Enabled:          true,
+	})
+	if !errors.Is(err, ErrRollingTargetConflict) {
+		t.Fatalf("expected duplicate locations within one rolling strategy to be rejected, got %v", err)
+	}
+}
+
+func TestCreateStorageTargetRejectsDuplicateRollingLocation(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	storageTargetService := NewStorageTargetService(fixture.db)
+	basePath := filepath.Join(t.TempDir(), "shared-rolling-target")
+
+	_, err := storageTargetService.Create(context.Background(), CreateStorageTargetRequest{
+		Name:     "primary",
+		Type:     StorageTargetTypeRollingLocal,
+		BasePath: basePath,
+	})
+	if err != nil {
+		t.Fatalf("create first storage target: %v", err)
+	}
+
+	_, err = storageTargetService.Create(context.Background(), CreateStorageTargetRequest{
+		Name:     "secondary",
+		Type:     StorageTargetTypeRollingLocal,
+		BasePath: basePath + string(filepath.Separator),
+	})
+	if !errors.Is(err, ErrDuplicateStorageTargetLocation) {
+		t.Fatalf("expected duplicate storage target location error, got %v", err)
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("expected duplicate storage target location to be treated as validation error, got %v", err)
+	}
+}
+
+func TestCreateStorageTargetRejectsLegacyNormalizedRollingLocation(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	storageTargetService := NewStorageTargetService(fixture.db)
+	basePath := filepath.Join(t.TempDir(), "legacy-shared-rolling-target")
+	legacyTarget := model.StorageTarget{Name: "legacy", Type: StorageTargetTypeRollingLocal, BasePath: basePath + string(filepath.Separator)}
+	if err := fixture.db.Create(&legacyTarget).Error; err != nil {
+		t.Fatalf("create legacy storage target: %v", err)
+	}
+
+	_, err := storageTargetService.Create(context.Background(), CreateStorageTargetRequest{
+		Name:     "normalized",
+		Type:     StorageTargetTypeRollingLocal,
+		BasePath: basePath,
+	})
+	if !errors.Is(err, ErrDuplicateStorageTargetLocation) {
+		t.Fatalf("expected normalized duplicate rolling location error, got %v", err)
+	}
+}
+
+func TestCreateStorageTargetRejectsLegacyNormalizedSSHLocation(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	storageTargetService := NewStorageTargetService(fixture.db)
+	sshKey := model.SSHKey{Name: "legacy-key", PrivateKeyPath: "/tmp/legacy-key", Fingerprint: "legacy"}
+	if err := fixture.db.Create(&sshKey).Error; err != nil {
+		t.Fatalf("create ssh key: %v", err)
+	}
+	legacyTarget := model.StorageTarget{
+		Name:     "legacy-ssh",
+		Type:     StorageTargetTypeRollingSSH,
+		Host:     "BACKUP.EXAMPLE.COM",
+		Port:     0,
+		User:     "backup",
+		SSHKeyID: &sshKey.ID,
+		BasePath: "/srv/backups/",
+	}
+	if err := fixture.db.Create(&legacyTarget).Error; err != nil {
+		t.Fatalf("create legacy ssh target: %v", err)
+	}
+
+	_, err := storageTargetService.Create(context.Background(), CreateStorageTargetRequest{
+		Name:     "normalized-ssh",
+		Type:     StorageTargetTypeRollingSSH,
+		Host:     "backup.example.com",
+		Port:     22,
+		User:     "backup",
+		SSHKeyID: &sshKey.ID,
+		BasePath: "/srv/backups",
+	})
+	if !errors.Is(err, ErrDuplicateStorageTargetLocation) {
+		t.Fatalf("expected normalized duplicate ssh location error, got %v", err)
+	}
+}
+
+func TestCreateStorageTargetRejectsBlankBasePath(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	storageTargetService := NewStorageTargetService(fixture.db)
+
+	_, err := storageTargetService.Create(context.Background(), CreateStorageTargetRequest{
+		Name:     "blank-base-path",
+		Type:     StorageTargetTypeRollingLocal,
+		BasePath: "   ",
+	})
+	if !errors.Is(err, ErrBasePathRequired) {
+		t.Fatalf("expected base path required error, got %v", err)
 	}
 }
 

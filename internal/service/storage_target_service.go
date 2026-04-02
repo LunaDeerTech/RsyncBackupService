@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
@@ -35,13 +36,21 @@ type StorageTargetService struct {
 	db                *gorm.DB
 	storageTargetRepo repository.StorageTargetRepository
 	sshKeyRepo        repository.SSHKeyRepository
+	schedulerService  StrategyScheduleRefresher
 }
 
-func NewStorageTargetService(db *gorm.DB) *StorageTargetService {
+
+func NewStorageTargetService(db *gorm.DB, schedulerServices ...StrategyScheduleRefresher) *StorageTargetService {
+	var schedulerService StrategyScheduleRefresher
+	if len(schedulerServices) > 0 {
+		schedulerService = schedulerServices[0]
+	}
+
 	return &StorageTargetService{
 		db:                db,
 		storageTargetRepo: repository.NewStorageTargetRepository(db),
 		sshKeyRepo:        repository.NewSSHKeyRepository(db),
+		schedulerService:  schedulerService,
 	}
 }
 
@@ -52,6 +61,9 @@ func (s *StorageTargetService) List(ctx context.Context) ([]model.StorageTarget,
 func (s *StorageTargetService) Create(ctx context.Context, req CreateStorageTargetRequest) (model.StorageTarget, error) {
 	storageTarget, err := s.buildStorageTargetModel(ctx, req)
 	if err != nil {
+		return model.StorageTarget{}, err
+	}
+	if err := s.ensureUniqueTargetLocation(ctx, 0, storageTarget); err != nil {
 		return model.StorageTarget{}, err
 	}
 
@@ -72,6 +84,9 @@ func (s *StorageTargetService) Update(ctx context.Context, id uint, req UpdateSt
 	if err != nil {
 		return model.StorageTarget{}, err
 	}
+	if err := s.ensureUniqueTargetLocation(ctx, id, updatedStorageTarget); err != nil {
+		return model.StorageTarget{}, err
+	}
 	if err := s.ensureBoundStrategiesCompatible(ctx, id, updatedStorageTarget.Type); err != nil {
 		return model.StorageTarget{}, err
 	}
@@ -85,6 +100,9 @@ func (s *StorageTargetService) Update(ctx context.Context, id uint, req UpdateSt
 	storageTarget.BasePath = updatedStorageTarget.BasePath
 
 	if err := s.storageTargetRepo.Update(ctx, &storageTarget); err != nil {
+		return model.StorageTarget{}, err
+	}
+	if err := s.refreshBoundStrategySchedules(ctx, storageTarget.ID); err != nil {
 		return model.StorageTarget{}, err
 	}
 
@@ -144,6 +162,7 @@ func (s *StorageTargetService) buildStorageTargetModel(ctx context.Context, req 
 	if trimmedBasePath == "" {
 		return model.StorageTarget{}, ErrBasePathRequired
 	}
+	trimmedBasePath = filepath.Clean(trimmedBasePath)
 
 	storageTarget := model.StorageTarget{
 		Name:     trimmedName,
@@ -157,7 +176,7 @@ func (s *StorageTargetService) buildStorageTargetModel(ctx context.Context, req 
 			return model.StorageTarget{}, ErrUnexpectedSSHFields
 		}
 	case StorageTargetTypeRollingSSH, StorageTargetTypeColdSSH:
-		trimmedHost := strings.TrimSpace(req.Host)
+		trimmedHost := strings.ToLower(strings.TrimSpace(req.Host))
 		trimmedUser := strings.TrimSpace(req.User)
 		if trimmedHost == "" {
 			return model.StorageTarget{}, ErrHostRequired
@@ -211,6 +230,19 @@ func (s *StorageTargetService) ensureBoundStrategiesCompatible(ctx context.Conte
 	return nil
 }
 
+func storageTargetLocationKey(storageTarget model.StorageTarget) string {
+	basePath := filepath.Clean(strings.TrimSpace(storageTarget.BasePath))
+	if isSSHStorageTargetType(storageTarget.Type) {
+		port := storageTarget.Port
+		if port == 0 {
+			port = 22
+		}
+		return fmt.Sprintf("%s|%s|%d|%s|%s", strings.TrimSpace(storageTarget.Type), strings.ToLower(strings.TrimSpace(storageTarget.Host)), port, strings.TrimSpace(storageTarget.User), basePath)
+	}
+
+	return fmt.Sprintf("%s|%s", strings.TrimSpace(storageTarget.Type), basePath)
+}
+
 func (s *StorageTargetService) findStorageTarget(ctx context.Context, id uint) (model.StorageTarget, error) {
 	storageTarget, err := s.storageTargetRepo.GetByID(ctx, id)
 	if err != nil {
@@ -221,6 +253,50 @@ func (s *StorageTargetService) findStorageTarget(ctx context.Context, id uint) (
 	}
 
 	return storageTarget, nil
+}
+
+func (s *StorageTargetService) refreshBoundStrategySchedules(ctx context.Context, storageTargetID uint) error {
+	if s.schedulerService == nil {
+		return nil
+	}
+
+	var strategies []model.Strategy
+	if err := s.db.WithContext(ctx).
+		Model(&model.Strategy{}).
+		Preload("StorageTargets").
+		Joins("JOIN strategy_storage_bindings ON strategy_storage_bindings.strategy_id = strategies.id").
+		Where("strategy_storage_bindings.storage_target_id = ?", storageTargetID).
+		Find(&strategies).Error; err != nil {
+		return fmt.Errorf("list bound strategies by storage target: %w", err)
+	}
+
+	for _, strategy := range strategies {
+		if err := s.schedulerService.RefreshStrategy(strategy); err != nil {
+			return fmt.Errorf("refresh strategy schedule: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *StorageTargetService) ensureUniqueTargetLocation(ctx context.Context, currentStorageTargetID uint, storageTarget model.StorageTarget) error {
+	query := s.db.WithContext(ctx).Model(&model.StorageTarget{}).Where("type = ?", storageTarget.Type)
+	if currentStorageTargetID != 0 {
+		query = query.Where("id <> ?", currentStorageTargetID)
+	}
+
+	var existingTargets []model.StorageTarget
+	if err := query.Find(&existingTargets).Error; err != nil {
+		return fmt.Errorf("list storage targets by location: %w", err)
+	}
+	desiredLocationKey := storageTargetLocationKey(storageTarget)
+	for _, existingTarget := range existingTargets {
+		if storageTargetLocationKey(existingTarget) == desiredLocationKey {
+			return ErrDuplicateStorageTargetLocation
+		}
+	}
+
+	return nil
 }
 
 func (s *StorageTargetService) buildBackend(ctx context.Context, storageTarget model.StorageTarget) (storage.StorageBackend, error) {
