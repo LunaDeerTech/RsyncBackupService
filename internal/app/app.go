@@ -45,15 +45,17 @@ func (a *App) Run() error {
 	if a.server == nil {
 		authService := service.NewAuthService(a.DB, a.Config.JWTSecret)
 		instanceService := service.NewInstanceService(a.DB)
+		notificationService := service.NewNotificationService(a.DB)
 		sshKeyService := service.NewSSHKeyService(a.DB)
 		strategyScheduler := schedulerpkg.NewScheduler()
-		executorService := service.NewExecutorService(a.DB, a.Config, nil, executorpkg.NewTaskManager())
-		restoreService := service.NewRestoreService(a.DB, a.Config, nil, authService)
+		executorService := service.NewExecutorService(a.DB, a.Config, nil, executorpkg.NewTaskManager(), notificationService)
+		restoreService := service.NewRestoreService(a.DB, a.Config, nil, authService, notificationService)
 		schedulerService := service.NewSchedulerService(strategyScheduler, executorService.RunStrategy)
 		storageTargetService := service.NewStorageTargetService(a.DB, schedulerService)
 		strategyService := service.NewStrategyService(a.DB, schedulerService)
 		userService := service.NewUserService(a.DB, authService)
 		permissionService := service.NewPermissionService(a.DB)
+		auditService := service.NewAuditService(a.DB)
 		auditRepo := repository.NewAuditLogRepository(a.DB)
 		if err := service.BootstrapSchedules(context.Background(), a.DB, schedulerService); err != nil {
 			return fmt.Errorf("bootstrap persisted strategy schedules: %w", err)
@@ -61,8 +63,10 @@ func (a *App) Run() error {
 
 		a.server = newHTTPServer(a.Config, api.NewRouter(api.Dependencies{
 			AuthService:          authService,
+			AuditService:         auditService,
 			ExecutorService:      executorService,
 			InstanceService:      instanceService,
+			NotificationService:  notificationService,
 			RestoreService:       restoreService,
 			SSHKeyService:        sshKeyService,
 			StorageTargetService: storageTargetService,

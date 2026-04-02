@@ -12,8 +12,10 @@ import (
 
 type Dependencies struct {
 	AuthService       *service.AuthService
+	AuditService      *service.AuditService
 	ExecutorService   *service.ExecutorService
 	InstanceService   *service.InstanceService
+	NotificationService *service.NotificationService
 	RestoreService    *service.RestoreService
 	SSHKeyService     *service.SSHKeyService
 	StorageTargetService *service.StorageTargetService
@@ -33,8 +35,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	authHandler := handler.NewAuthHandler(deps.AuthService)
+	auditHandler := handler.NewAuditHandler(deps.AuditService)
 	backupHandler := handler.NewBackupHandler(deps.ExecutorService)
 	instanceHandler := handler.NewInstanceHandler(deps.InstanceService)
+	notificationHandler := handler.NewNotificationHandler(deps.NotificationService)
 	restoreHandler := handler.NewRestoreHandler(deps.RestoreService)
 	sshKeyHandler := handler.NewSSHKeyHandler(deps.SSHKeyService)
 	storageTargetHandler := handler.NewStorageTargetHandler(deps.StorageTargetService)
@@ -91,9 +95,24 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	permissionGroup := apiGroup.Group("/instances/:id/permissions", middleware.RequireJWT())
 	permissionGroup.GET("", middleware.RequireAdmin(), permissionHandler.List)
 	permissionGroup.PUT("/:userID", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "instance_permissions.upsert", ResourceType: "instance_permissions"}), middleware.RequireAdmin(), permissionHandler.Upsert)
+	instanceGroup.GET("/:id/subscriptions", middleware.RequireInstanceRole(service.RoleViewer), notificationHandler.ListSubscriptions)
+	instanceGroup.POST("/:id/subscriptions", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_subscriptions.upsert", ResourceType: "notification_subscriptions"}), middleware.RequireInstanceRole(service.RoleViewer), notificationHandler.UpsertSubscription)
 
 	restoreRecordGroup := apiGroup.Group("/restore-records", middleware.RequireJWT())
 	restoreRecordGroup.GET("", restoreHandler.List)
+
+	notificationChannelGroup := apiGroup.Group("/notification-channels", middleware.RequireJWT())
+	notificationChannelGroup.GET("", notificationHandler.ListChannels)
+	notificationChannelGroup.POST("", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_channels.create", ResourceType: "notification_channels"}), middleware.RequireAdmin(), notificationHandler.CreateChannel)
+	notificationChannelGroup.PUT("/:id", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_channels.update", ResourceType: "notification_channels"}), middleware.RequireAdmin(), notificationHandler.UpdateChannel)
+	notificationChannelGroup.DELETE("/:id", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_channels.delete", ResourceType: "notification_channels"}), middleware.RequireAdmin(), notificationHandler.DeleteChannel)
+	notificationChannelGroup.POST("/:id/test", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_channels.test", ResourceType: "notification_channels"}), middleware.RequireAdmin(), notificationHandler.TestChannel)
+
+	subscriptionGroup := apiGroup.Group("/subscriptions", middleware.RequireJWT())
+	subscriptionGroup.DELETE("/:id", middleware.WithAuditMetadata(middleware.AuditMetadata{Action: "notification_subscriptions.delete", ResourceType: "notification_subscriptions"}), notificationHandler.DeleteSubscription)
+
+	auditGroup := apiGroup.Group("/audit-logs", middleware.RequireJWT())
+	auditGroup.GET("", middleware.RequireAdmin(), auditHandler.List)
 
 	return router
 }

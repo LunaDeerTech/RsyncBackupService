@@ -147,10 +147,12 @@ func newTask07TestRouter(t *testing.T) (http.Handler, task07APITestFixture) {
 	strategyService := service.NewStrategyService(db)
 	userService := service.NewUserService(db, authService)
 	permissionService := service.NewPermissionService(db)
+	notificationService := service.NewNotificationService(db)
+	auditService := service.NewAuditService(db)
 	auditRepo := repository.NewAuditLogRepository(db)
 	runner := &task07APIRunnerSpy{}
-	executorService := service.NewExecutorService(db, cfg, runner, executorpkg.NewTaskManager())
-	restoreService := service.NewRestoreService(db, cfg, runner, authService)
+	executorService := service.NewExecutorService(db, cfg, runner, executorpkg.NewTaskManager(), notificationService)
+	restoreService := service.NewRestoreService(db, cfg, runner, authService, notificationService)
 
 	var admin model.User
 	if err := db.Where("username = ?", cfg.AdminUser).First(&admin).Error; err != nil {
@@ -251,6 +253,7 @@ func newTask07TestRouter(t *testing.T) (http.Handler, task07APITestFixture) {
 
 	router := NewRouter(Dependencies{
 		AuthService:          authService,
+		AuditService:         auditService,
 		InstanceService:      instanceService,
 		SSHKeyService:        sshKeyService,
 		StorageTargetService: storageTargetService,
@@ -259,6 +262,7 @@ func newTask07TestRouter(t *testing.T) (http.Handler, task07APITestFixture) {
 		PermissionService:    permissionService,
 		AuditLogRepo:         auditRepo,
 		ExecutorService:      executorService,
+		NotificationService:  notificationService,
 		RestoreService:       restoreService,
 	})
 

@@ -30,6 +30,7 @@ type ExecutorService struct {
 	sshKeyRepo       repository.SSHKeyRepository
 	retentionService retentionCleaner
 	taskManager      *executorpkg.TaskManager
+	notificationDispatcher notificationDispatcher
 	runner           executorpkg.Runner
 	clock            func() time.Time
 }
@@ -48,12 +49,16 @@ type ListBackupRecordsRequest struct {
 
 const relayCacheSuccessMarkerName = ".relay-complete"
 
-func NewExecutorService(db *gorm.DB, cfg config.Config, runner executorpkg.Runner, taskManager *executorpkg.TaskManager) *ExecutorService {
+func NewExecutorService(db *gorm.DB, cfg config.Config, runner executorpkg.Runner, taskManager *executorpkg.TaskManager, dispatchers ...notificationDispatcher) *ExecutorService {
 	if runner == nil {
 		runner = executorpkg.NewExecRunner()
 	}
 	if taskManager == nil {
 		taskManager = executorpkg.NewTaskManager()
+	}
+	var dispatcher notificationDispatcher
+	if len(dispatchers) > 0 {
+		dispatcher = dispatchers[0]
 	}
 
 	return &ExecutorService{
@@ -65,6 +70,7 @@ func NewExecutorService(db *gorm.DB, cfg config.Config, runner executorpkg.Runne
 		sshKeyRepo:       repository.NewSSHKeyRepository(db),
 		retentionService: NewRetentionService(db),
 		taskManager:      taskManager,
+		notificationDispatcher: dispatcher,
 		runner:           runner,
 		clock: func() time.Time {
 			return time.Now().UTC()
@@ -228,6 +234,7 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 		if completeErr := s.completeBackupRecord(record.ID, model.BackupStatusFailed, plan.SnapshotPath, err.Error(), executorpkg.ProgressSnapshot{}); completeErr != nil {
 			return errors.Join(err, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 		return err
 	}
 
@@ -236,6 +243,7 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 		if completeErr := s.completeBackupRecord(record.ID, model.BackupStatusFailed, plan.SnapshotPath, err.Error(), executorpkg.ProgressSnapshot{}); completeErr != nil {
 			return errors.Join(err, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 		return err
 	}
 
@@ -249,6 +257,7 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 		if completeErr := s.completeBackupRecord(record.ID, model.BackupStatusFailed, plan.SnapshotPath, err.Error(), executorpkg.ProgressSnapshot{}); completeErr != nil {
 			return errors.Join(err, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 		return err
 	}
 
@@ -273,6 +282,7 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 		if completeErr := s.completeBackupRecord(record.ID, status, plan.SnapshotPath, executeErr.Error(), lastProgress); completeErr != nil {
 			return errors.Join(executeErr, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, status, executeErr.Error())
 		return executeErr
 	}
 
@@ -307,12 +317,14 @@ func (s *ExecutorService) runRollingTarget(ctx context.Context, strategy model.S
 		if completeErr := s.completeBackupRecord(record.ID, model.BackupStatusFailed, plan.SnapshotPath, postProcessingErr.Error(), lastProgress); completeErr != nil {
 			return errors.Join(postProcessingErr, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, postProcessingErr.Error())
 		return postProcessingErr
 	}
 
 	if completeErr := s.completeBackupRecord(record.ID, model.BackupStatusSuccess, plan.SnapshotPath, "", lastProgress); completeErr != nil {
 		return completeErr
 	}
+	s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusSuccess, "")
 
 	return nil
 }
@@ -341,6 +353,7 @@ func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Stra
 		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
 			return errors.Join(err, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 		return err
 	}
 
@@ -349,6 +362,7 @@ func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Stra
 		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
 			return errors.Join(err, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 		return err
 	}
 
@@ -359,6 +373,7 @@ func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Stra
 			if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, err.Error(), executorpkg.ColdBackupResult{}); completeErr != nil {
 				return errors.Join(err, completeErr)
 			}
+			s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, err.Error())
 			return err
 		}
 	}
@@ -385,6 +400,7 @@ func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Stra
 		if completeErr := s.completeColdBackupRecord(record.ID, status, archivePath, executeErr.Error(), result); completeErr != nil {
 			return errors.Join(executeErr, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, status, executeErr.Error())
 		return executeErr
 	}
 
@@ -397,8 +413,10 @@ func (s *ExecutorService) runColdTarget(ctx context.Context, strategy model.Stra
 		if completeErr := s.completeColdBackupRecord(record.ID, model.BackupStatusFailed, archivePath, cleanupErr.Error(), result); completeErr != nil {
 			return errors.Join(cleanupErr, completeErr)
 		}
+		s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusFailed, cleanupErr.Error())
 		return cleanupErr
 	}
+	s.dispatchBackupNotification(strategy, instance, record, model.BackupStatusSuccess, "")
 
 	return nil
 }
@@ -580,6 +598,15 @@ func (s *ExecutorService) completeColdBackupRecord(recordID uint, status, archiv
 	}
 
 	return nil
+}
+
+func (s *ExecutorService) dispatchBackupNotification(strategy model.Strategy, instance model.BackupInstance, record model.BackupRecord, status, errorMessage string) {
+	if s.notificationDispatcher == nil {
+		return
+	}
+	if err := s.notificationDispatcher.Notify(context.Background(), buildBackupNotificationEvent(strategy, instance, record, status, errorMessage, s.clock())); err != nil {
+		log.Printf("warning: dispatch backup notification: %v", err)
+	}
 }
 
 func (s *ExecutorService) estimateTargetSize(strategy model.Strategy, instance model.BackupInstance, target model.StorageTarget) uint64 {

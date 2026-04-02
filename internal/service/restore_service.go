@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,13 +50,18 @@ type RestoreService struct {
 	storageTargetRepo repository.StorageTargetRepository
 	sshKeyRepo        repository.SSHKeyRepository
 	verifyTokenConsumer verifyTokenConsumer
+	notificationDispatcher notificationDispatcher
 	runner            executorpkg.Runner
 	clock             func() time.Time
 }
 
-func NewRestoreService(db *gorm.DB, cfg config.Config, runner executorpkg.Runner, verifyTokenConsumer verifyTokenConsumer) *RestoreService {
+func NewRestoreService(db *gorm.DB, cfg config.Config, runner executorpkg.Runner, verifyTokenConsumer verifyTokenConsumer, dispatchers ...notificationDispatcher) *RestoreService {
 	if runner == nil {
 		runner = executorpkg.NewExecRunner()
+	}
+	var dispatcher notificationDispatcher
+	if len(dispatchers) > 0 {
+		dispatcher = dispatchers[0]
 	}
 
 	return &RestoreService{
@@ -65,6 +71,7 @@ func NewRestoreService(db *gorm.DB, cfg config.Config, runner executorpkg.Runner
 		storageTargetRepo: repository.NewStorageTargetRepository(db),
 		sshKeyRepo:        repository.NewSSHKeyRepository(db),
 		verifyTokenConsumer: verifyTokenConsumer,
+		notificationDispatcher: dispatcher,
 		runner:            runner,
 		clock: func() time.Time {
 			return time.Now().UTC()
@@ -124,6 +131,7 @@ func (s *RestoreService) Start(ctx context.Context, req RestoreRequest) (*model.
 		if completeErr := s.completeRestoreRecord(ctx, restoreRecord.ID, RestoreStatusFailed, executeErr.Error()); completeErr != nil {
 			return &restoreRecord, errors.Join(executeErr, completeErr)
 		}
+		s.dispatchRestoreNotification(instance, restoreRecord, RestoreStatusFailed, executeErr.Error())
 		restoreRecord.Status = RestoreStatusFailed
 		restoreRecord.ErrorMessage = executeErr.Error()
 		finishedAt := s.clock()
@@ -134,6 +142,7 @@ func (s *RestoreService) Start(ctx context.Context, req RestoreRequest) (*model.
 	if err := s.completeRestoreRecord(ctx, restoreRecord.ID, RestoreStatusSuccess, ""); err != nil {
 		return &restoreRecord, err
 	}
+	s.dispatchRestoreNotification(instance, restoreRecord, RestoreStatusSuccess, "")
 	finishedAt := s.clock()
 	restoreRecord.Status = RestoreStatusSuccess
 	restoreRecord.FinishedAt = &finishedAt
@@ -411,6 +420,15 @@ func (s *RestoreService) completeRestoreRecord(ctx context.Context, recordID uin
 	}
 
 	return fmt.Errorf("complete restore record: %w", lastErr)
+}
+
+func (s *RestoreService) dispatchRestoreNotification(instance model.BackupInstance, record model.RestoreRecord, status, errorMessage string) {
+	if s.notificationDispatcher == nil {
+		return
+	}
+	if err := s.notificationDispatcher.Notify(context.Background(), buildRestoreNotificationEvent(instance, record, status, errorMessage, s.clock())); err != nil {
+		log.Printf("warning: dispatch restore notification: %v", err)
+	}
 }
 
 func (s *RestoreService) createRestoreWorkspace(purpose string) (string, error) {
