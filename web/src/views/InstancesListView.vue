@@ -10,6 +10,7 @@ import AppCard from "../components/ui/AppCard.vue"
 import AppEmpty from "../components/ui/AppEmpty.vue"
 import AppFormField from "../components/ui/AppFormField.vue"
 import AppInput from "../components/ui/AppInput.vue"
+import AppModal from "../components/ui/AppModal.vue"
 import AppNotification from "../components/ui/AppNotification.vue"
 import AppSelect from "../components/ui/AppSelect.vue"
 import AppSwitch from "../components/ui/AppSwitch.vue"
@@ -24,8 +25,10 @@ const formError = ref("")
 const successMessage = ref("")
 const isLoading = ref(true)
 const isSubmitting = ref(false)
+const modalOpen = ref(false)
 const query = ref("")
 const enabledFilter = ref("all")
+const modalTitleId = "instances-list-modal-title"
 
 const form = reactive({
 	id: "",
@@ -81,7 +84,12 @@ function resetForm(): void {
 	formError.value = ""
 }
 
-function editInstance(instance: InstanceSummary): void {
+function openCreateModal(): void {
+	resetForm()
+	modalOpen.value = true
+}
+
+function openEditModal(instance: InstanceSummary): void {
 	form.id = String(instance.id)
 	form.name = instance.name
 	form.sourceType = instance.source_type
@@ -93,7 +101,15 @@ function editInstance(instance: InstanceSummary): void {
 	form.excludePatterns = instance.exclude_patterns.join("\n")
 	form.enabled = instance.enabled
 	formError.value = ""
-	window.scrollTo({ top: 0, behavior: "smooth" })
+	modalOpen.value = true
+}
+
+function closeModal(): void {
+	if (isSubmitting.value) {
+		return
+	}
+
+	modalOpen.value = false
 }
 
 function buildPayload(): CreateInstancePayload | UpdateInstancePayload {
@@ -151,6 +167,7 @@ async function submitForm(): Promise<void> {
 			successMessage.value = "实例已更新。"
 		}
 
+		modalOpen.value = false
 		resetForm()
 		await loadData()
 	} catch (error) {
@@ -167,9 +184,13 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<div class="page-action-row">
-			<AppButton variant="secondary" @click="resetForm">新建实例</AppButton>
-		</div>
+		<header class="page-header">
+			<div>
+				<h1 class="page-header__title">备份实例</h1>
+				<p class="page-header__subtitle">管理源路径、源主机和实例级恢复入口。</p>
+			</div>
+			<AppButton @click="openCreateModal">新建实例</AppButton>
+		</header>
 
 		<AppNotification v-if="errorMessage" title="实例列表加载失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="实例已保存" tone="success" :description="successMessage" />
@@ -186,78 +207,88 @@ onMounted(() => {
 			description="当前账户无法读取目标类型。若远程源绑定了 SSH 目标，恢复或滚动同步会经过本机缓存目录，请预留磁盘空间。"
 		/>
 
-		<section class="page-two-column">
-			<AppCard title="实例列表" description="支持按名称、主机或路径筛选。">
-				<div class="page-form-grid">
-					<AppFormField label="搜索">
-						<AppInput v-model="query" placeholder="名称 / 主机 / 路径" />
-					</AppFormField>
-					<AppFormField label="启用状态">
-						<AppSelect
-							v-model="enabledFilter"
-							:options="[
-								{ value: 'all', label: '全部' },
-								{ value: 'enabled', label: '已启用' },
-								{ value: 'disabled', label: '已停用' },
-							]"
-						/>
-					</AppFormField>
-				</div>
+		<AppCard title="实例列表" description="支持按名称、主机或路径筛选。">
+			<div class="page-form-grid">
+				<AppFormField label="搜索">
+					<AppInput v-model="query" placeholder="名称 / 主机 / 路径" />
+				</AppFormField>
+				<AppFormField label="启用状态">
+					<AppSelect
+						v-model="enabledFilter"
+						:options="[
+							{ value: 'all', label: '全部' },
+							{ value: 'enabled', label: '已启用' },
+							{ value: 'disabled', label: '已停用' },
+						]"
+					/>
+				</AppFormField>
+			</div>
 
-				<AppTable
-					:rows="filteredInstances"
-					:columns="[
-						{ key: 'name', label: '实例' },
-						{ key: 'source_path', label: '源路径' },
-						{ key: 'strategy_count', label: '策略' },
-						{ key: 'last_backup_status', label: '最近状态' },
-						{ key: 'enabled', label: '启用' },
-						{ key: 'actions', label: '操作' },
-					]"
-					row-key="id"
-				>
-					<template #cell-name="{ row }">
-						<div class="instances-list__name-cell">
-							<RouterLink class="instances-list__detail-link" :to="`/instances/${row.id}`">{{ row.name }}</RouterLink>
-							<AppTag v-if="row.relay_mode" tone="warning">中继模式</AppTag>
-							<AppTag v-else-if="row.relay_mode_uncertain" tone="warning">可能中继</AppTag>
-						</div>
-					</template>
-					<template #cell-source_path="{ row }">
-						<div class="instances-list__source-cell">
-							<span>{{ formatSource(row.source_type, row.source_path, row.source_host) }}</span>
-							<span class="page-muted">{{ formatDateTime(row.updated_at) }}</span>
-						</div>
-					</template>
-					<template #cell-strategy_count="{ value }">
-						<span>{{ value }} 条策略</span>
-					</template>
-					<template #cell-last_backup_status="{ row }">
-						<div class="instances-list__status-cell">
-							<AppTag :tone="statusTone(row.last_backup_status)">{{ formatStatusLabel(row.last_backup_status) }}</AppTag>
-							<span class="page-muted">{{ formatDateTime(row.last_backup_at) }}</span>
-						</div>
-					</template>
-					<template #cell-enabled="{ value }">
-						<AppTag :tone="value ? 'success' : 'warning'">{{ value ? "已启用" : "已停用" }}</AppTag>
-					</template>
-					<template #cell-actions="{ row }">
-						<div class="page-action-row--wrap">
-							<AppButton size="sm" variant="secondary" @click="editInstance(row)">编辑</AppButton>
-							<RouterLink class="instances-list__detail-link" :to="`/instances/${row.id}`">详情</RouterLink>
-						</div>
-					</template>
-				</AppTable>
+			<AppTable
+				:rows="filteredInstances"
+				:columns="[
+					{ key: 'name', label: '实例' },
+					{ key: 'source_path', label: '源路径' },
+					{ key: 'strategy_count', label: '策略' },
+					{ key: 'last_backup_status', label: '最近状态' },
+					{ key: 'enabled', label: '启用' },
+					{ key: 'actions', label: '操作' },
+				]"
+				row-key="id"
+			>
+				<template #cell-name="{ row }">
+					<div class="instances-list__name-cell">
+						<RouterLink class="instances-list__detail-link" :to="`/instances/${row.id}`">{{ row.name }}</RouterLink>
+						<AppTag v-if="row.relay_mode" tone="warning">中继模式</AppTag>
+						<AppTag v-else-if="row.relay_mode_uncertain" tone="warning">可能中继</AppTag>
+					</div>
+				</template>
+				<template #cell-source_path="{ row }">
+					<div class="instances-list__source-cell">
+						<span>{{ formatSource(row.source_type, row.source_path, row.source_host) }}</span>
+						<span class="page-muted">{{ formatDateTime(row.updated_at) }}</span>
+					</div>
+				</template>
+				<template #cell-strategy_count="{ value }">
+					<span>{{ value }} 条策略</span>
+				</template>
+				<template #cell-last_backup_status="{ row }">
+					<div class="instances-list__status-cell">
+						<AppTag :tone="statusTone(row.last_backup_status)">{{ formatStatusLabel(row.last_backup_status) }}</AppTag>
+						<span class="page-muted">{{ formatDateTime(row.last_backup_at) }}</span>
+					</div>
+				</template>
+				<template #cell-enabled="{ value }">
+					<AppTag :tone="value ? 'success' : 'warning'">{{ value ? "已启用" : "已停用" }}</AppTag>
+				</template>
+				<template #cell-actions="{ row }">
+					<div class="page-action-row--wrap">
+						<AppButton size="sm" variant="secondary" @click="openEditModal(row)">编辑</AppButton>
+						<RouterLink class="instances-list__detail-link" :to="`/instances/${row.id}`">详情</RouterLink>
+					</div>
+				</template>
+			</AppTable>
 
-				<AppEmpty
-					v-if="!isLoading && filteredInstances.length === 0"
-					title="当前没有实例"
-					description="创建一个实例后，这里会展示其状态摘要与详情入口。"
-					compact
-				/>
-			</AppCard>
+			<AppEmpty
+				v-if="!isLoading && filteredInstances.length === 0"
+				title="当前没有实例"
+				description="点击上方「新建实例」按钮创建第一个备份实例。"
+				compact
+			/>
+		</AppCard>
 
-			<AppCard :title="form.id === '' ? '新建实例' : '编辑实例'" description="页面层只收集表单，提交逻辑集中在 API 模块。">
+		<AppModal
+			:open="modalOpen"
+			:close-on-overlay="!isSubmitting"
+			labelled-by="instances-list-modal-title"
+			width="34rem"
+			@close="closeModal"
+		>
+			<section class="page-modal-form">
+				<header class="page-modal-form__header">
+					<h2 :id="modalTitleId" class="page-modal-form__title">{{ form.id === '' ? '新建实例' : '编辑实例' }}</h2>
+				</header>
+
 				<form class="page-stack" @submit.prevent="submitForm">
 					<div class="page-form-grid">
 						<AppFormField label="名称" required>
@@ -309,15 +340,34 @@ onMounted(() => {
 
 					<div class="page-action-row--wrap">
 						<AppButton type="submit" :loading="isSubmitting">{{ form.id === '' ? "创建实例" : "保存修改" }}</AppButton>
-						<AppButton type="button" variant="ghost" @click="resetForm">重置</AppButton>
+						<AppButton type="button" variant="ghost" @click="closeModal">取消</AppButton>
 					</div>
 				</form>
-			</AppCard>
-		</section>
+			</section>
+		</AppModal>
 	</section>
 </template>
 
 <style scoped>
+.page-modal-form {
+	display: grid;
+	gap: var(--space-4);
+	padding: var(--space-5);
+}
+
+.page-modal-form__header {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.page-modal-form__title {
+	margin: 0;
+	color: var(--text-strong);
+	font-size: 1.25rem;
+	font-weight: 700;
+	letter-spacing: -0.02em;
+}
+
 .instances-list__name-cell,
 .instances-list__source-cell,
 .instances-list__status-cell {
