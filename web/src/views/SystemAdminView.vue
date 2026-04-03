@@ -2,6 +2,10 @@
 import { ref } from "vue"
 
 import AppTabs from "../components/ui/AppTabs.vue"
+import AuditLogsTab from "./system/AuditLogsTab.vue"
+import NotificationChannelsTab from "./system/NotificationChannelsTab.vue"
+import SSHKeysTab from "./system/SSHKeysTab.vue"
+import UsersTab from "./system/UsersTab.vue"
 
 const activeTab = ref("users")
 
@@ -25,6 +29,9 @@ const tabs = [
 
 		<AppTabs v-model="activeTab" :tabs="tabs" aria-label="系统管理标签" />
 
-		<p class="page-muted">{{ activeTab }} — 此标签页内容将在后续阶段实现。</p>
+		<UsersTab v-if="activeTab === 'users'" />
+		<SSHKeysTab v-else-if="activeTab === 'ssh-keys'" />
+		<NotificationChannelsTab v-else-if="activeTab === 'notifications'" />
+		<AuditLogsTab v-else-if="activeTab === 'audit-logs'" />
 	</section>
 </template>

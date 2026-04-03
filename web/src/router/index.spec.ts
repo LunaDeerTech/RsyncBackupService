@@ -72,6 +72,22 @@ describe("router legacy redirects", () => {
 
 		expect(router.currentRoute.value.path).toBe("/profile")
 	})
+
+	it("redirects non-admin users away from the admin-only /system route", async () => {
+		const auth = useAuthStore()
+
+		auth.setSession({
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+		})
+		auth.setCurrentUser(viewerUser)
+
+		const router = createRouter()
+		await router.push("/system")
+		await router.isReady()
+
+		expect(router.currentRoute.value.path).toBe("/instances")
+	})
 })
 
 describe("sidebar-compatible route matching", () => {
