@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 
 import { ApiError } from "../../api/client"
-import { deleteStrategy, listStrategies, updateStrategy, createStrategy } from "../../api/strategies"
+import { createStrategy, deleteStrategy, listStrategies, updateStrategy } from "../../api/strategies"
 import { listStorageTargets } from "../../api/storageTargets"
 import type { StorageTargetSummary, StrategyPayload, StrategySummary } from "../../api/types"
 import AppButton from "../../components/ui/AppButton.vue"
 import AppCard from "../../components/ui/AppCard.vue"
+import AppDialog from "../../components/ui/AppDialog.vue"
 import AppEmpty from "../../components/ui/AppEmpty.vue"
 import AppFormField from "../../components/ui/AppFormField.vue"
 import AppInput from "../../components/ui/AppInput.vue"
+import AppModal from "../../components/ui/AppModal.vue"
 import AppNotification from "../../components/ui/AppNotification.vue"
 import AppSelect from "../../components/ui/AppSelect.vue"
 import AppSwitch from "../../components/ui/AppSwitch.vue"
@@ -24,7 +26,12 @@ const storageTargets = ref<StorageTargetSummary[]>([])
 const errorMessage = ref("")
 const formError = ref("")
 const successMessage = ref("")
+const modalOpen = ref(false)
+const deleteDialogOpen = ref(false)
+const deleteStrategyId = ref<number | null>(null)
+const deleteStrategyName = ref("")
 const isSubmitting = ref(false)
+const formModalTitleId = "strategies-tab-modal-title"
 
 const form = reactive({
 	id: "",
@@ -48,6 +55,8 @@ const compatibleTargets = computed(() =>
 	),
 )
 
+const compatibleTargetIds = computed(() => new Set(compatibleTargets.value.map((target) => String(target.id))))
+
 function toggleTarget(id: string): void {
 	selectedTargetIds.value = selectedTargetIds.value.includes(id)
 		? selectedTargetIds.value.filter((item) => item !== id)
@@ -70,7 +79,12 @@ function resetForm(): void {
 	formError.value = ""
 }
 
-function editStrategy(strategy: StrategySummary): void {
+function openCreateModal(): void {
+	resetForm()
+	modalOpen.value = true
+}
+
+function openEditModal(strategy: StrategySummary): void {
 	form.id = String(strategy.id)
 	form.name = strategy.name
 	form.backupType = strategy.backup_type
@@ -84,7 +98,27 @@ function editStrategy(strategy: StrategySummary): void {
 	form.enabled = strategy.enabled
 	selectedTargetIds.value = strategy.storage_target_ids.map((id) => String(id))
 	formError.value = ""
-	window.scrollTo({ top: 0, behavior: "smooth" })
+	modalOpen.value = true
+}
+
+function closeModal(): void {
+	if (isSubmitting.value) {
+		return
+	}
+
+	modalOpen.value = false
+}
+
+function openDeleteDialog(strategy: StrategySummary): void {
+	deleteStrategyId.value = strategy.id
+	deleteStrategyName.value = strategy.name
+	deleteDialogOpen.value = true
+}
+
+function closeDeleteDialog(): void {
+	deleteDialogOpen.value = false
+	deleteStrategyId.value = null
+	deleteStrategyName.value = ""
 }
 
 function buildPayload(): StrategyPayload {
@@ -136,6 +170,7 @@ async function submitForm(): Promise<void> {
 			successMessage.value = "策略已更新。"
 		}
 
+		modalOpen.value = false
 		resetForm()
 		await loadData()
 	} catch (error) {
@@ -145,14 +180,29 @@ async function submitForm(): Promise<void> {
 	}
 }
 
-async function removeStrategy(strategyId: number): Promise<void> {
+
+async function confirmDelete(): Promise<void> {
+	if (deleteStrategyId.value === null) {
+		return
+	}
+
 	try {
-		await deleteStrategy(strategyId)
+		await deleteStrategy(deleteStrategyId.value)
+		successMessage.value = `策略「${deleteStrategyName.value}」已删除。`
+		closeDeleteDialog()
 		await loadData()
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "删除策略失败。"
+		closeDeleteDialog()
 	}
 }
+
+watch(
+	() => form.backupType,
+	() => {
+		selectedTargetIds.value = selectedTargetIds.value.filter((id) => compatibleTargetIds.value.has(id))
+	},
+)
 
 onMounted(() => {
 	void loadData()
@@ -164,43 +214,58 @@ onMounted(() => {
 		<AppNotification v-if="errorMessage" title="策略加载失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="策略已保存" tone="success" :description="successMessage" />
 
-		<section class="page-two-column">
-			<AppCard title="策略列表" description="每个策略绑定备份类型、调度和目标集合。">
-				<AppTable
-					:rows="strategies"
-					:columns="[
-						{ key: 'name', label: '名称' },
-						{ key: 'backup_type', label: '类型' },
-						{ key: 'schedule', label: '调度' },
-						{ key: 'storage_target_ids', label: '目标数' },
-						{ key: 'enabled', label: '启用' },
-						{ key: 'actions', label: '操作' },
-					]"
-					row-key="id"
-				>
-					<template #cell-backup_type="{ value }">
-						<span>{{ formatBackupType(String(value)) }}</span>
-					</template>
-					<template #cell-schedule="{ row }">
-						<span>{{ formatSchedule(row) }}</span>
-					</template>
-					<template #cell-storage_target_ids="{ value }">
-						<span>{{ value.length }} 个目标</span>
-					</template>
-					<template #cell-enabled="{ value }">
-						<AppTag :tone="value ? 'success' : 'warning'">{{ value ? "启用" : "停用" }}</AppTag>
-					</template>
-					<template #cell-actions="{ row }">
-						<div class="page-action-row--wrap">
-							<AppButton size="sm" variant="secondary" @click="editStrategy(row)">编辑</AppButton>
-							<AppButton size="sm" variant="ghost" @click="removeStrategy(row.id)">删除</AppButton>
-						</div>
-					</template>
-				</AppTable>
-				<AppEmpty v-if="strategies.length === 0" title="尚未配置策略" compact />
-			</AppCard>
+		<div class="page-action-row--wrap page-actions-end">
+			<AppButton @click="openCreateModal">新建策略</AppButton>
+		</div>
 
-			<AppCard title="新建 / 编辑策略" description="滚动与冷备份使用不同的目标类型。">
+		<AppCard title="策略列表" description="每个策略绑定备份类型、调度和目标集合。">
+			<AppTable
+				:rows="strategies"
+				:columns="[
+					{ key: 'name', label: '名称' },
+					{ key: 'backup_type', label: '类型' },
+					{ key: 'schedule', label: '调度' },
+					{ key: 'storage_target_ids', label: '目标数' },
+					{ key: 'enabled', label: '启用' },
+					{ key: 'actions', label: '操作' },
+				]"
+				row-key="id"
+			>
+				<template #cell-backup_type="{ value }">
+					<span>{{ formatBackupType(String(value)) }}</span>
+				</template>
+				<template #cell-schedule="{ row }">
+					<span>{{ formatSchedule(row) }}</span>
+				</template>
+				<template #cell-storage_target_ids="{ value }">
+					<span>{{ value.length }} 个目标</span>
+				</template>
+				<template #cell-enabled="{ value }">
+					<AppTag :tone="value ? 'success' : 'warning'">{{ value ? "启用" : "停用" }}</AppTag>
+				</template>
+				<template #cell-actions="{ row }">
+					<div class="page-action-row--wrap">
+						<AppButton size="sm" variant="secondary" @click="openEditModal(row)">编辑</AppButton>
+						<AppButton size="sm" variant="ghost" @click="openDeleteDialog(row)">删除</AppButton>
+					</div>
+				</template>
+			</AppTable>
+			<AppEmpty v-if="strategies.length === 0" title="尚未配置策略" compact />
+		</AppCard>
+
+		<AppModal
+			:open="modalOpen"
+			:close-on-overlay="!isSubmitting"
+			:labelled-by="formModalTitleId"
+			width="36rem"
+			@close="closeModal"
+		>
+			<section class="page-modal-form">
+				<header class="page-modal-form__header">
+					<h2 :id="formModalTitleId" class="page-modal-form__title">{{ form.id === '' ? '新建策略' : '编辑策略' }}</h2>
+					<p class="page-muted">滚动与冷备份使用不同的目标类型。</p>
+				</header>
+
 				<form class="page-stack" @submit.prevent="submitForm">
 					<div class="page-form-grid">
 						<AppFormField label="策略名称" required>
@@ -272,10 +337,25 @@ onMounted(() => {
 
 					<div class="page-action-row--wrap">
 						<AppButton type="submit" :loading="isSubmitting">{{ form.id === '' ? "创建策略" : "保存修改" }}</AppButton>
-						<AppButton type="button" variant="ghost" @click="resetForm">重置</AppButton>
+						<AppButton type="button" variant="ghost" @click="closeModal">取消</AppButton>
 					</div>
 				</form>
-			</AppCard>
-		</section>
+			</section>
+		</AppModal>
+
+		<AppDialog :open="deleteDialogOpen" title="确认删除策略" tone="danger" @close="closeDeleteDialog">
+			<p>即将删除策略「{{ deleteStrategyName }}」。若该策略已经产生备份记录，系统会拒绝删除。</p>
+
+			<template #actions>
+				<AppButton variant="ghost" @click="closeDeleteDialog">取消</AppButton>
+				<AppButton variant="danger" @click="confirmDelete">确认删除</AppButton>
+			</template>
+		</AppDialog>
 	</section>
 </template>
+
+<style scoped>
+.page-actions-end {
+	justify-content: flex-end;
+}
+</style>

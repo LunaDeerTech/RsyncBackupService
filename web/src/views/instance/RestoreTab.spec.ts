@@ -42,7 +42,21 @@ describe("RestoreTab", () => {
 				error_message: "",
 			},
 		])
-		vi.mocked(listRestoreRecords).mockResolvedValue([])
+		vi.mocked(listRestoreRecords).mockResolvedValueOnce([])
+		vi.mocked(listRestoreRecords).mockResolvedValueOnce([
+			{
+				id: 99,
+				instance_id: 1,
+				backup_record_id: 12,
+				restore_target_path: "/srv/www",
+				overwrite: true,
+				status: "running",
+				started_at: "Wed, 02 Apr 2026 09:00:00 GMT",
+				finished_at: null,
+				error_message: "",
+				triggered_by: 1,
+			},
+		])
 		vi.mocked(verifyPassword).mockResolvedValue({ verify_token: "verify-token" })
 		vi.mocked(startRestore).mockResolvedValue({
 			id: 99,
@@ -58,7 +72,7 @@ describe("RestoreTab", () => {
 		})
 	})
 
-	it("requires password confirmation before restore submit", async () => {
+	it("launches restore from a modal and refreshes the record table after submit", async () => {
 		render(RestoreTab, {
 			props: {
 				instanceId: 1,
@@ -82,15 +96,40 @@ describe("RestoreTab", () => {
 
 		await waitFor(() => {
 			expect(listSnapshots).toHaveBeenCalledWith(1)
-			expect(screen.getAllByText(/存储目标 #4/).length).toBeGreaterThan(0)
+			expect(screen.getByRole("button", { name: "发起恢复" })).toBeInTheDocument()
 		})
 
-		await fireEvent.click(screen.getByRole("button", { name: "开始恢复" }))
+		expect(screen.queryByText("恢复参数")).not.toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "发起恢复" })).toBeInTheDocument()
+
+		await fireEvent.click(screen.getByRole("button", { name: "发起恢复" }))
 
 		await waitFor(() => {
-			expect(screen.getByRole("dialog", { name: "确认恢复" })).toBeInTheDocument()
-			expect(screen.getByText(/二次认证/)).toBeInTheDocument()
-			expect(screen.getAllByText(/存储目标 #4/).length).toBeGreaterThan(0)
+			expect(screen.getByRole("dialog", { name: "发起恢复" })).toBeInTheDocument()
+		})
+
+		expect(screen.getByText(/风险提示/)).toBeInTheDocument()
+		expect(screen.getByLabelText("确认密码")).toBeInTheDocument()
+		expect(screen.getAllByText(/存储目标 #4/).length).toBeGreaterThan(0)
+
+		await fireEvent.update(screen.getByLabelText("确认密码"), "secret-password")
+		await fireEvent.click(screen.getByRole("button", { name: "确认恢复" }))
+
+		await waitFor(() => {
+			expect(verifyPassword).toHaveBeenCalledWith("secret-password")
+			expect(startRestore).toHaveBeenCalledWith({
+				instance_id: 1,
+				backup_record_id: 12,
+				restore_target_path: "/srv/www",
+				overwrite: true,
+				verify_token: "verify-token",
+			})
+		})
+
+		await waitFor(() => {
+			expect(screen.queryByRole("dialog", { name: "发起恢复" })).not.toBeInTheDocument()
+			expect(screen.getByText("恢复任务已提交，记录 ID 99。" )).toBeInTheDocument()
+			expect(screen.getByText("/srv/www")).toBeInTheDocument()
 		})
 	})
 })

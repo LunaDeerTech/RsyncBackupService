@@ -1,29 +1,110 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, ref, watch } from "vue"
 
-import type { InstanceDetail, StrategySummary } from "../../api/types"
+import { ApiError } from "../../api/client"
+import { listBackups } from "../../api/backups"
+import { listRunningTasks } from "../../api/system"
+import type { BackupRecord, InstanceDetail, RunningTaskStatus, StrategySummary } from "../../api/types"
 import AppCard from "../../components/ui/AppCard.vue"
+import AppEmpty from "../../components/ui/AppEmpty.vue"
 import AppNotification from "../../components/ui/AppNotification.vue"
+import AppProgress from "../../components/ui/AppProgress.vue"
 import AppTag from "../../components/ui/AppTag.vue"
-import { formatBackupType, formatDateTime, formatSchedule, formatSource } from "../../utils/formatters"
+import AppTimeline from "../../components/ui/AppTimeline.vue"
+import {
+	formatBackupType,
+	formatBytes,
+	formatDateTime,
+	formatSource,
+	formatStatusLabel,
+	statusTone,
+} from "../../utils/formatters"
 
 const props = defineProps<{
 	instance: InstanceDetail
 	strategies: StrategySummary[]
+	canViewRunningTasks: boolean
 	relayMode: boolean
 	relayModeHint?: string
 	relayModeTitle?: string
 }>()
 
-const strategySummaries = computed(() =>
-	props.strategies.map((strategy) => ({
-		id: strategy.id,
-		name: strategy.name,
-		type: formatBackupType(strategy.backup_type),
-		schedule: formatSchedule(strategy),
-		targets: strategy.storage_target_ids.length,
-		enabled: strategy.enabled,
-	})),
+const recentBackups = ref<BackupRecord[]>([])
+const runningTasks = ref<RunningTaskStatus[]>([])
+const isLoading = ref(true)
+const runningTasksMessage = ref("")
+
+const activeStrategyCount = computed(() => props.strategies.filter((strategy) => strategy.enabled).length)
+const totalBackupCount = computed(() => recentBackups.value.length)
+const cumulativeBytes = computed(() =>
+	recentBackups.value.reduce((sum, record) => sum + record.total_size, 0),
+)
+const successRate = computed(() => {
+	const total = recentBackups.value.length
+
+	if (total === 0) {
+		return "—"
+	}
+
+	const successes = recentBackups.value.filter((record) => record.status === "success").length
+    return `${Math.round((successes / total) * 100)}%`
+})
+const lastBackup = computed(() => recentBackups.value[0] ?? null)
+const instanceTasks = computed(() =>
+	runningTasks.value.filter((task) => task.instance_id === props.instance.id),
+)
+const timelineItems = computed(() =>
+	recentBackups.value.slice(0, 10).map((record) => {
+		const strategyName = props.strategies.find((strategy) => strategy.id === record.strategy_id)?.name ?? "手动"
+
+		return {
+			id: record.id,
+			title: `${formatBackupType(record.backup_type)} · ${strategyName} → 目标 #${record.storage_target_id}`,
+			description: record.error_message
+				? `失败：${record.error_message}`
+				: `${formatBytes(record.total_size)}，${record.files_transferred} 个文件`,
+			timestamp: formatDateTime(record.finished_at ?? record.started_at),
+			tone: statusTone(record.status),
+		}
+	}),
+)
+
+async function loadData(): Promise<void> {
+	isLoading.value = true
+	runningTasksMessage.value = ""
+
+	const [backupsResult, tasksResult] = await Promise.allSettled([
+		listBackups(props.instance.id),
+		props.canViewRunningTasks ? listRunningTasks() : Promise.resolve(null),
+	])
+
+	if (backupsResult.status === "fulfilled") {
+		recentBackups.value = backupsResult.value
+	} else {
+		recentBackups.value = []
+	}
+
+	if (!props.canViewRunningTasks) {
+		runningTasks.value = []
+		runningTasksMessage.value = "当前账户没有实时任务查看权限。"
+	} else if (tasksResult.status === "fulfilled") {
+		runningTasks.value = tasksResult.value ?? []
+	} else {
+		runningTasks.value = []
+		runningTasksMessage.value = tasksResult.reason instanceof ApiError && tasksResult.reason.status === 403
+			? "当前账户没有实时任务查看权限。"
+			: "运行中任务暂时不可用，请稍后刷新。"
+	}
+
+	isLoading.value = false
+}
+
+watch(
+	[() => props.instance.id, () => props.canViewRunningTasks],
+	() => {
+		void loadData()
+	},
+	{ immediate: true },
 )
 </script>
 
@@ -36,33 +117,30 @@ const strategySummaries = computed(() =>
 			:description="relayModeHint || '该实例至少有一个远程源与远程目标的组合。执行链路会落到本机缓存目录，请检查可用磁盘空间。'"
 		/>
 
-		<section class="page-two-column">
-			<AppCard title="基本信息" description="实例标识、创建时间和启用状态。">
-				<dl class="page-detail-list">
-					<div>
-						<dt>ID</dt>
-						<dd>{{ instance.id }}</dd>
-					</div>
-					<div>
-						<dt>名称</dt>
-						<dd>{{ instance.name }}</dd>
-					</div>
-					<div>
-						<dt>创建者</dt>
-						<dd>{{ instance.created_by }}</dd>
-					</div>
-					<div>
-						<dt>创建时间</dt>
-						<dd>{{ formatDateTime(instance.created_at) }}</dd>
-					</div>
-					<div>
-						<dt>更新时间</dt>
-						<dd>{{ formatDateTime(instance.updated_at) }}</dd>
-					</div>
-				</dl>
+		<section class="page-kpi-grid" aria-label="实例关键指标">
+			<AppCard title="活跃策略" compact>
+				<p class="page-kpi__value">{{ activeStrategyCount }}</p>
 			</AppCard>
+			<AppCard title="备份总数" compact>
+				<p class="page-kpi__value">{{ totalBackupCount }}</p>
+			</AppCard>
+			<AppCard title="累计容量" compact>
+				<p class="page-kpi__value">{{ formatBytes(cumulativeBytes) }}</p>
+			</AppCard>
+			<AppCard title="成功率" compact>
+				<p class="page-kpi__value">{{ successRate }}</p>
+			</AppCard>
+			<AppCard title="最近备份" compact>
+				<div v-if="lastBackup" class="overview-tab__last-backup">
+					<AppTag :tone="statusTone(lastBackup.status)">{{ formatStatusLabel(lastBackup.status) }}</AppTag>
+					<span class="page-muted">{{ formatDateTime(lastBackup.finished_at ?? lastBackup.started_at) }}</span>
+				</div>
+				<p v-else class="page-kpi__value">—</p>
+			</AppCard>
+		</section>
 
-			<AppCard title="源配置" description="用于恢复默认目标路径和远程连接上下文。">
+		<section class="page-two-column">
+			<AppCard title="源配置" description="类型、路径、连接参数和排除规则。">
 				<dl class="page-detail-list">
 					<div>
 						<dt>源类型</dt>
@@ -86,30 +164,58 @@ const strategySummaries = computed(() =>
 					</div>
 				</dl>
 			</AppCard>
+
+			<AppCard title="当前运行任务" description="该实例正在执行的备份或恢复任务。">
+				<div v-if="instanceTasks.length > 0" class="page-stack">
+					<article v-for="task in instanceTasks" :key="task.task_id" class="overview-tab__task">
+						<div class="overview-tab__task-header">
+							<p class="page-section__title">任务 {{ task.task_id }}</p>
+							<AppTag :tone="statusTone(task.status)">{{ formatStatusLabel(task.status) }}</AppTag>
+						</div>
+						<AppProgress
+							:percentage="task.percentage"
+							:speed-text="task.speed_text"
+							:eta-text="task.remaining_text"
+							tone="running"
+							:aria-label="`任务 ${task.task_id} 进度`"
+						>
+							<template #label>进度</template>
+						</AppProgress>
+					</article>
+				</div>
+				<AppEmpty v-else-if="runningTasksMessage !== ''" title="无法显示运行中任务" :description="runningTasksMessage" compact />
+				<AppEmpty v-else title="没有运行中任务" description="当备份或恢复执行时，这里会显示实时进度。" compact />
+			</AppCard>
 		</section>
 
-		<AppCard title="策略摘要" description="策略的类型、调度与目标数量。">
-			<ul v-if="strategySummaries.length > 0" class="page-inline-list">
-				<li v-for="strategy in strategySummaries" :key="strategy.id">
-					<div class="overview-tab__strategy-header">
-						<strong>{{ strategy.name }}</strong>
-						<AppTag :tone="strategy.enabled ? 'success' : 'warning'">{{ strategy.enabled ? "启用" : "停用" }}</AppTag>
-					</div>
-					<p class="page-muted">{{ strategy.type }} · {{ strategy.schedule }}</p>
-					<p class="page-muted">{{ strategy.targets }} 个存储目标</p>
-				</li>
-			</ul>
-			<p v-else class="page-muted">该实例尚未配置策略。</p>
+		<AppCard title="最近活动" description="最近 10 条备份记录，按完成时间倒序。">
+			<AppTimeline v-if="timelineItems.length > 0" :items="timelineItems" compact />
+			<AppEmpty v-else-if="!isLoading" title="暂无备份记录" compact />
 		</AppCard>
 	</section>
 </template>
 
 <style scoped>
-.overview-tab__strategy-header {
+.overview-tab__last-backup {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+}
+
+.overview-tab__task {
+	display: grid;
+	gap: var(--space-3);
+	padding: var(--space-4);
+	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 88%, transparent);
+	border-radius: var(--radius-card);
+	background: color-mix(in srgb, var(--surface-elevated) 92%, var(--surface-panel-solid));
+}
+
+.overview-tab__task-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
 	gap: var(--space-3);
-	flex-wrap: wrap;
 }
 </style>

@@ -11,6 +11,7 @@ import AppButton from "../components/ui/AppButton.vue"
 import AppNotification from "../components/ui/AppNotification.vue"
 import AppTabs from "../components/ui/AppTabs.vue"
 import AppTag from "../components/ui/AppTag.vue"
+import { useAuthStore } from "../stores/auth"
 import { formatSource } from "../utils/formatters"
 import BackupsTab from "./instance/BackupsTab.vue"
 import OverviewTab from "./instance/OverviewTab.vue"
@@ -20,6 +21,7 @@ import SubscriptionsTab from "./instance/SubscriptionsTab.vue"
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const instance = ref<InstanceDetail | null>(null)
 const strategies = ref<StrategySummary[]>([])
@@ -30,13 +32,18 @@ const isLoading = ref(true)
 const activeTab = ref("overview")
 
 const instanceId = computed(() => Number.parseInt(String(route.params.id ?? "0"), 10) || 0)
-const tabs = [
-	{ value: "overview", label: "概览" },
-	{ value: "strategies", label: "策略" },
-	{ value: "backups", label: "备份历史" },
-	{ value: "restore", label: "恢复" },
-	{ value: "subscriptions", label: "通知订阅" },
-]
+const isAdmin = computed(() => auth.currentUser?.is_admin === true)
+const tabs = computed(() => {
+	const allTabs = [
+		{ value: "overview", label: "概览" },
+		{ value: "strategies", label: "策略", adminOnly: true },
+		{ value: "backups", label: "备份历史" },
+		{ value: "restore", label: "恢复", adminOnly: true },
+		{ value: "subscriptions", label: "通知订阅", adminOnly: true },
+	]
+
+	return allTabs.filter((tab) => !tab.adminOnly || isAdmin.value)
+})
 
 const relayMode = computed(() => {
 	if (instance.value?.source_type !== "remote") {
@@ -116,6 +123,16 @@ onMounted(() => {
 watch(instanceId, () => {
 	void loadDetail()
 })
+
+watch(
+	[tabs, activeTab],
+	([nextTabs, nextActiveTab]) => {
+		if (!nextTabs.some((tab) => tab.value === nextActiveTab)) {
+			activeTab.value = nextTabs[0]?.value ?? "overview"
+		}
+	},
+	{ immediate: true },
+)
 </script>
 
 <template>
@@ -132,19 +149,13 @@ watch(instanceId, () => {
 			</div>
 		</header>
 
-		<AppNotification
-			v-if="relayModeVisible"
-			:title="relayModeTitle"
-			tone="warning"
-			:description="relayModeHint"
-		/>
-
 		<AppTabs v-model="activeTab" :tabs="tabs" aria-label="实例详情标签" />
 
 		<OverviewTab
 			v-if="activeTab === 'overview'"
 			:instance="instance"
 			:strategies="strategies"
+			:can-view-running-tasks="isAdmin"
 			:relay-mode="relayModeVisible"
 			:relay-mode-hint="relayModeHint"
 			:relay-mode-title="relayModeTitle"
@@ -159,7 +170,7 @@ watch(instanceId, () => {
 			:relay-mode-hint="relayModeHint"
 			:relay-mode-title="relayModeTitle"
 		/>
-		<SubscriptionsTab v-else :instance-id="instance.id" />
+		<SubscriptionsTab v-else-if="activeTab === 'subscriptions'" :instance-id="instance.id" />
 	</section>
 
 	<section v-else class="page-view">
