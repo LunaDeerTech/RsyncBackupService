@@ -186,7 +186,7 @@ describe("AppShell", () => {
 		expect(screen.getByText("viewer").closest("a")).toHaveAttribute("href", "/profile")
 	})
 
-	it("shows only one instances title and description for non-admin users", async () => {
+	it("renders the instances page header action for non-admin users", async () => {
 		const auth = useAuthStore()
 
 		auth.setSession({
@@ -205,8 +205,8 @@ describe("AppShell", () => {
 			},
 		})
 
-		expect(screen.getAllByRole("heading", { name: "备份实例" })).toHaveLength(1)
-		expect(screen.getAllByText("管理源路径、源主机和实例级恢复入口。")).toHaveLength(1)
+		expect(screen.getByText("支持按名称、主机或路径筛选。")).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "新建实例" })).toBeInTheDocument()
 	})
 
 	it("renders the system admin placeholder route for administrators", async () => {
