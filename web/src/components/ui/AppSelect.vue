@@ -38,6 +38,7 @@ const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
 const open = ref(false)
 const highlightedIndex = ref(-1)
+const listPlacement = ref<"top" | "bottom">("bottom")
 
 watchSyncEffect(() => {
 	field?.setControlId(typeof attrs.id === "string" ? attrs.id : undefined)
@@ -99,11 +100,26 @@ function syncHighlightedIndex(preferLast = false): void {
 	highlightedIndex.value = preferLast ? props.options.length - 1 - candidateIndex : candidateIndex
 }
 
+function syncListPlacement(): void {
+	if (!triggerRef.value) {
+		listPlacement.value = "bottom"
+		return
+	}
+
+	const rect = triggerRef.value.getBoundingClientRect()
+	const estimatedHeight = Math.min(Math.max(props.options.length, 1), 6) * 44 + 20
+	const spaceBelow = window.innerHeight - rect.bottom
+	const spaceAbove = rect.top
+
+	listPlacement.value = spaceBelow < estimatedHeight && spaceAbove > spaceBelow ? "top" : "bottom"
+}
+
 function openList(preferLast = false): void {
 	if (props.disabled) {
 		return
 	}
 
+	syncListPlacement()
 	open.value = true
 	syncHighlightedIndex(preferLast)
 }
@@ -221,12 +237,22 @@ function onClickOutside(event: MouseEvent): void {
 	}
 }
 
+function onViewportChange(): void {
+	if (open.value) {
+		syncListPlacement()
+	}
+}
+
 onMounted(() => {
 	document.addEventListener("mousedown", onClickOutside)
+	window.addEventListener("resize", onViewportChange)
+	document.addEventListener("scroll", onViewportChange, true)
 })
 
 onBeforeUnmount(() => {
 	document.removeEventListener("mousedown", onClickOutside)
+	window.removeEventListener("resize", onViewportChange)
+	document.removeEventListener("scroll", onViewportChange, true)
 })
 </script>
 
@@ -257,7 +283,14 @@ onBeforeUnmount(() => {
 			<span class="app-select__chevron" aria-hidden="true">⌄</span>
 		</button>
 
-		<div v-if="open" :id="listboxId" class="app-select__listbox" role="listbox" :aria-labelledby="controlId">
+		<div
+			v-if="open"
+			:id="listboxId"
+			class="app-select__listbox"
+			role="listbox"
+			:aria-labelledby="controlId"
+			:data-placement="listPlacement"
+		>
 			<button
 				v-for="(option, index) in options"
 				:id="`select-option-${baseId}-${option.value}`"
@@ -357,12 +390,13 @@ onBeforeUnmount(() => {
 
 .app-select__listbox {
 	position: absolute;
-	top: calc(100% + var(--space-2));
 	left: 0;
 	right: 0;
 	display: grid;
 	gap: 0;
 	padding: 0.38rem;
+	max-height: min(16rem, calc(100vh - 2rem));
+	overflow: auto;
 	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 90%, transparent);
 	border-radius: calc(var(--radius-card) - 2px);
 	background: color-mix(in srgb, var(--surface-panel) 96%, transparent);
@@ -371,6 +405,14 @@ onBeforeUnmount(() => {
 	-webkit-backdrop-filter: blur(18px);
 	z-index: 20;
 	animation: select-panel-in var(--duration-fast) ease;
+}
+
+.app-select__listbox[data-placement="bottom"] {
+	top: calc(100% + var(--space-2));
+}
+
+.app-select__listbox[data-placement="top"] {
+	bottom: calc(100% + var(--space-2));
 }
 
 .app-select__option {
