@@ -333,31 +333,71 @@ func TestCreateStorageTargetRejectsBlankBasePath(t *testing.T) {
 	}
 }
 
-func TestRegisterSSHKeyRejectsWorldReadableFile(t *testing.T) {
+func TestCreateSSHKeyStoresManagedFileWith0600(t *testing.T) {
 	fixture := newResourceValidationFixture(t)
-	sshKeyService := NewSSHKeyService(fixture.db)
-	privateKeyPath := writeResourceValidationPrivateKey(t, 0o644)
-
-	err := sshKeyService.Register(context.Background(), "prod", privateKeyPath)
-	if err == nil || !strings.Contains(err.Error(), "0600") {
-		t.Fatalf("expected mode validation error, got %v", err)
-	}
-}
-
-func TestSSHKeyTestConnectionRejectsPermissionsChangedKey(t *testing.T) {
-	fixture := newResourceValidationFixture(t)
-	sshKeyService := NewSSHKeyService(fixture.db)
-	privateKeyPath := writeResourceValidationPrivateKey(t, 0o600)
+	dataDir := t.TempDir()
+	sshKeyService := NewSSHKeyService(fixture.db, dataDir)
+	privateKeyContent := string(generateResourceValidationPrivateKeyPEM(t))
 
 	sshKey, err := sshKeyService.Create(context.Background(), CreateSSHKeyRequest{
-		Name:           "prod",
-		PrivateKeyPath: privateKeyPath,
+		Name:       "prod",
+		PrivateKey: privateKeyContent,
 	})
 	if err != nil {
 		t.Fatalf("create ssh key: %v", err)
 	}
 
-	if err := os.Chmod(privateKeyPath, 0o644); err != nil {
+	privateKeyInfo, statErr := os.Stat(sshKey.PrivateKeyPath)
+	if statErr != nil {
+		t.Fatalf("stat managed private key: %v", statErr)
+	}
+	if privateKeyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("expected managed private key permissions 0600, got %04o", privateKeyInfo.Mode().Perm())
+	}
+	if filepath.Dir(sshKey.PrivateKeyPath) != filepath.Join(dataDir, managedSSHKeyDirName) {
+		t.Fatalf("expected managed private key under configured data dir, got %q", sshKey.PrivateKeyPath)
+	}
+}
+
+func TestCreateSSHKeyRejectsEmptyManagedStorageDir(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	sshKeyService := NewSSHKeyService(fixture.db, "")
+
+	_, err := sshKeyService.Create(context.Background(), CreateSSHKeyRequest{
+		Name:       "prod",
+		PrivateKey: string(generateResourceValidationPrivateKeyPEM(t)),
+	})
+	if !errors.Is(err, ErrManagedSSHKeyStorageNotConfigured) {
+		t.Fatalf("expected managed storage configuration error, got %v", err)
+	}
+}
+
+func TestCreateSSHKeyRejectsMissingPrivateKeyInput(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	sshKeyService := NewSSHKeyService(fixture.db, t.TempDir())
+
+	_, err := sshKeyService.Create(context.Background(), CreateSSHKeyRequest{
+		Name: "prod",
+	})
+	if !errors.Is(err, ErrPrivateKeyRequired) {
+		t.Fatalf("expected private key required error, got %v", err)
+	}
+}
+
+func TestSSHKeyTestConnectionRejectsPermissionsChangedKey(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	sshKeyService := NewSSHKeyService(fixture.db, t.TempDir())
+	privateKeyContent := string(generateResourceValidationPrivateKeyPEM(t))
+
+	sshKey, err := sshKeyService.Create(context.Background(), CreateSSHKeyRequest{
+		Name:       "prod",
+		PrivateKey: privateKeyContent,
+	})
+	if err != nil {
+		t.Fatalf("create ssh key: %v", err)
+	}
+
+	if err := os.Chmod(sshKey.PrivateKeyPath, 0o644); err != nil {
 		t.Fatalf("chmod private key: %v", err)
 	}
 
@@ -367,6 +407,77 @@ func TestSSHKeyTestConnectionRejectsPermissionsChangedKey(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "0600") {
 		t.Fatalf("expected mode validation error during test connection, got %v", err)
+	}
+}
+
+func TestDeleteSSHKeyPreservesLegacyPrivateKeyFile(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	sshKeyService := NewSSHKeyService(fixture.db, t.TempDir())
+	privateKeyPath := writeResourceValidationPrivateKey(t, 0o600)
+
+	sshKey := model.SSHKey{
+		Name:           "legacy",
+		PrivateKeyPath: privateKeyPath,
+		Fingerprint:    "legacy-fingerprint",
+	}
+	if err := fixture.db.Create(&sshKey).Error; err != nil {
+		t.Fatalf("seed legacy ssh key: %v", err)
+	}
+
+	if err := sshKeyService.Delete(context.Background(), sshKey.ID); err != nil {
+		t.Fatalf("delete legacy ssh key: %v", err)
+	}
+
+	if _, err := os.Stat(privateKeyPath); err != nil {
+		t.Fatal("expected legacy private key file to remain on disk")
+	}
+}
+
+func TestDeleteSSHKeyRollsBackWhenManagedFileCleanupFails(t *testing.T) {
+	fixture := newResourceValidationFixture(t)
+	dataDir := t.TempDir()
+	sshKeyService := NewSSHKeyService(fixture.db, dataDir)
+	sshKey, err := sshKeyService.Create(context.Background(), CreateSSHKeyRequest{
+		Name:       "managed",
+		PrivateKey: string(generateResourceValidationPrivateKeyPEM(t)),
+	})
+	if err != nil {
+		t.Fatalf("create ssh key: %v", err)
+	}
+
+	originalRemoveManagedPrivateKeyFile := removeManagedPrivateKeyFile
+	removeManagedPrivateKeyFile = func(path string) error {
+		if strings.Contains(path, ".pending-delete-") {
+			return errors.New("simulated managed ssh key delete failure")
+		}
+		return originalRemoveManagedPrivateKeyFile(path)
+	}
+	t.Cleanup(func() {
+		removeManagedPrivateKeyFile = originalRemoveManagedPrivateKeyFile
+	})
+
+	err = sshKeyService.Delete(context.Background(), sshKey.ID)
+	if err == nil {
+		t.Fatal("expected delete to fail when managed file cleanup fails")
+	}
+
+	var storedSSHKey model.SSHKey
+	if err := fixture.db.First(&storedSSHKey, sshKey.ID).Error; err != nil {
+		t.Fatalf("expected ssh key row to be restored, got %v", err)
+	}
+	if storedSSHKey.PrivateKeyPath != sshKey.PrivateKeyPath {
+		t.Fatalf("expected ssh key path %q to be restored, got %q", sshKey.PrivateKeyPath, storedSSHKey.PrivateKeyPath)
+	}
+	if _, err := os.Stat(sshKey.PrivateKeyPath); err != nil {
+		t.Fatalf("expected managed private key to be restored, got %v", err)
+	}
+
+	pendingDeleteFiles, globErr := filepath.Glob(sshKey.PrivateKeyPath + ".pending-delete-*")
+	if globErr != nil {
+		t.Fatalf("glob staged delete files: %v", globErr)
+	}
+	if len(pendingDeleteFiles) != 0 {
+		t.Fatalf("expected no staged delete files to remain, got %v", pendingDeleteFiles)
 	}
 }
 
@@ -414,7 +525,7 @@ func createResourceValidationStorageTarget(t *testing.T, db *gorm.DB, name, targ
 	return target
 }
 
-func writeResourceValidationPrivateKey(t *testing.T, mode os.FileMode) string {
+func generateResourceValidationPrivateKeyPEM(t *testing.T) []byte {
 	t.Helper()
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -422,7 +533,13 @@ func writeResourceValidationPrivateKey(t *testing.T, mode os.FileMode) string {
 		t.Fatalf("generate rsa private key: %v", err)
 	}
 
-	encodedKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+}
+
+func writeResourceValidationPrivateKey(t *testing.T, mode os.FileMode) string {
+	t.Helper()
+
+	encodedKey := generateResourceValidationPrivateKeyPEM(t)
 	privateKeyPath := filepath.Join(t.TempDir(), "id_rsa")
 	if err := os.WriteFile(privateKeyPath, encodedKey, mode); err != nil {
 		t.Fatalf("write private key: %v", err)

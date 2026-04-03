@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -208,7 +209,7 @@ func (s *DashboardService) listStorageOverview(ctx context.Context) ([]Dashboard
 	type storageStatsRow struct {
 		StorageTargetID uint
 		BackupCount     int64
-		LastBackupAt    time.Time
+		LastBackupAt    sql.NullString
 	}
 
 	var statsRows []storageStatsRow
@@ -235,6 +236,10 @@ func (s *DashboardService) listStorageOverview(ctx context.Context) ([]Dashboard
 	items := make([]DashboardStorageSummary, 0, len(targets))
 	for _, target := range targets {
 		stats := statsByTargetID[target.ID]
+		lastBackupAt, err := parseDashboardAggregateTime(stats.LastBackupAt)
+		if err != nil {
+			return nil, err
+		}
 		var availableBytes uint64
 		backend, err := buildStorageBackend(ctx, s.sshKeyRepo, target)
 		if err == nil && backend != nil {
@@ -252,20 +257,44 @@ func (s *DashboardService) listStorageOverview(ctx context.Context) ([]Dashboard
 			StorageTargetType: target.Type,
 			AvailableBytes:    availableBytes,
 			BackupCount:       stats.BackupCount,
-			LastBackupAt:      formatOptionalDashboardTime(zeroTimeToNil(stats.LastBackupAt)),
+			LastBackupAt:      formatOptionalDashboardTime(lastBackupAt),
 		})
 	}
 
 	return items, nil
 }
 
-func zeroTimeToNil(value time.Time) *time.Time {
-	if value.IsZero() {
-		return nil
+func parseDashboardAggregateTime(value sql.NullString) (*time.Time, error) {
+	trimmed := strings.TrimSpace(value.String)
+	if !value.Valid || trimmed == "" {
+		return nil, nil
 	}
 
-	copyValue := value
-	return &copyValue
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05Z07:00",
+	} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			parsed = parsed.UTC()
+			return &parsed, nil
+		}
+	}
+
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
+			parsed = parsed.UTC()
+			return &parsed, nil
+		}
+	}
+
+	return nil, fmt.Errorf("parse dashboard aggregate time %q: unsupported format", value.String)
 }
 
 func formatOptionalDashboardTime(value *time.Time) *string {

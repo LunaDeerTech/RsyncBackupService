@@ -48,7 +48,7 @@ func (a *App) Run() error {
 		authService := service.NewAuthService(a.DB, a.Config.JWTSecret)
 		instanceService := service.NewInstanceService(a.DB)
 		notificationService := service.NewNotificationService(a.DB)
-		sshKeyService := service.NewSSHKeyService(a.DB)
+		sshKeyService := service.NewSSHKeyService(a.DB, a.Config.DataDir)
 		strategyScheduler := schedulerpkg.NewScheduler()
 		taskManager := executorpkg.NewTaskManager()
 		executorService := service.NewExecutorService(a.DB, a.Config, nil, taskManager, notificationService)

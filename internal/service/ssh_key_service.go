@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
@@ -15,8 +17,8 @@ import (
 )
 
 type CreateSSHKeyRequest struct {
-	Name           string `json:"name"`
-	PrivateKeyPath string `json:"private_key_path"`
+	Name       string `json:"name"`
+	PrivateKey string `json:"private_key"`
 }
 
 type TestSSHKeyConnectionRequest struct {
@@ -28,12 +30,18 @@ type TestSSHKeyConnectionRequest struct {
 type SSHKeyService struct {
 	db         *gorm.DB
 	sshKeyRepo repository.SSHKeyRepository
+	dataDir    string
 }
 
-func NewSSHKeyService(db *gorm.DB) *SSHKeyService {
+const managedSSHKeyDirName = "ssh-keys"
+
+var removeManagedPrivateKeyFile = os.Remove
+
+func NewSSHKeyService(db *gorm.DB, dataDir string) *SSHKeyService {
 	return &SSHKeyService{
 		db:         db,
 		sshKeyRepo: repository.NewSSHKeyRepository(db),
+		dataDir:    strings.TrimSpace(dataDir),
 	}
 }
 
@@ -42,16 +50,12 @@ func (s *SSHKeyService) List(ctx context.Context) ([]model.SSHKey, error) {
 }
 
 func (s *SSHKeyService) Create(ctx context.Context, req CreateSSHKeyRequest) (model.SSHKey, error) {
-	return s.create(ctx, req.Name, req.PrivateKeyPath)
-}
-
-func (s *SSHKeyService) Register(ctx context.Context, name, privateKeyPath string) error {
-	_, err := s.create(ctx, name, privateKeyPath)
-	return err
+	return s.create(ctx, req.Name, req.PrivateKey)
 }
 
 func (s *SSHKeyService) Delete(ctx context.Context, id uint) error {
-	if _, err := s.findSSHKey(ctx, id); err != nil {
+	sshKey, err := s.findSSHKey(ctx, id)
+	if err != nil {
 		return err
 	}
 
@@ -71,7 +75,30 @@ func (s *SSHKeyService) Delete(ctx context.Context, id uint) error {
 		return ErrResourceInUse
 	}
 
-	return s.sshKeyRepo.Delete(ctx, id)
+	stagedDeletePath, err := s.stageManagedPrivateKeyDeletion(sshKey.PrivateKeyPath)
+	if err != nil {
+		return err
+	}
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := repository.NewSSHKeyRepository(tx).Delete(ctx, id); err != nil {
+			return err
+		}
+
+		if err := s.finalizeManagedPrivateKeyDeletion(stagedDeletePath); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		if rollbackErr := s.restoreManagedPrivateKey(stagedDeletePath, sshKey.PrivateKeyPath); rollbackErr != nil {
+			return fmt.Errorf("%w: %v", err, rollbackErr)
+		}
+		return err
+	}
+
+	return nil
 }
 
 func (s *SSHKeyService) TestConnection(ctx context.Context, id uint, req TestSSHKeyConnectionRequest) error {
@@ -106,40 +133,49 @@ func (s *SSHKeyService) TestConnection(ctx context.Context, id uint, req TestSSH
 	return nil
 }
 
-func (s *SSHKeyService) create(ctx context.Context, name, privateKeyPath string) (model.SSHKey, error) {
+func (s *SSHKeyService) create(ctx context.Context, name, privateKey string) (model.SSHKey, error) {
 	trimmedName := strings.TrimSpace(name)
-	trimmedPrivateKeyPath := strings.TrimSpace(privateKeyPath)
+	trimmedPrivateKey := strings.TrimSpace(privateKey)
 	if trimmedName == "" {
 		return model.SSHKey{}, ErrNameRequired
 	}
-	if trimmedPrivateKeyPath == "" {
-		return model.SSHKey{}, ErrPrivateKeyPathRequired
+	if trimmedPrivateKey == "" {
+		return model.SSHKey{}, ErrPrivateKeyRequired
 	}
 
-	privateKeyInfo, err := os.Stat(trimmedPrivateKeyPath)
+	return s.createFromPrivateKeyContent(ctx, trimmedName, trimmedPrivateKey)
+}
+
+func (s *SSHKeyService) createFromPrivateKeyContent(ctx context.Context, name, privateKey string) (model.SSHKey, error) {
+	privateKeyBytes := []byte(privateKey)
+	if !strings.HasSuffix(privateKey, "\n") {
+		privateKeyBytes = append(privateKeyBytes, '\n')
+	}
+
+	privateKeyPath, cleanupFile, err := s.writeManagedPrivateKey(privateKeyBytes)
 	if err != nil {
-		return model.SSHKey{}, fmt.Errorf("stat ssh private key: %w", err)
-	}
-	if !privateKeyInfo.Mode().IsRegular() {
-		return model.SSHKey{}, ErrInvalidSSHKey
-	}
-	if privateKeyInfo.Mode().Perm() != 0o600 {
-		return model.SSHKey{}, fmt.Errorf("%w: got %04o", ErrInvalidSSHKeyPermissions, privateKeyInfo.Mode().Perm())
+		return model.SSHKey{}, err
 	}
 
-	privateKeyBytes, err := os.ReadFile(trimmedPrivateKeyPath)
+	signer, err := storage.LoadSSHSigner(privateKeyPath)
 	if err != nil {
-		return model.SSHKey{}, fmt.Errorf("read ssh private key: %w", err)
+		cleanupFile()
+		return model.SSHKey{}, normalizeSSHRuntimeError(err)
 	}
 
-	signer, err := ssh.ParsePrivateKey(privateKeyBytes)
+	sshKey, err := s.persistSSHKey(ctx, name, privateKeyPath, signer)
 	if err != nil {
-		return model.SSHKey{}, fmt.Errorf("%w: %v", ErrInvalidSSHKey, err)
+		cleanupFile()
+		return model.SSHKey{}, err
 	}
 
+	return sshKey, nil
+}
+
+func (s *SSHKeyService) persistSSHKey(ctx context.Context, name, privateKeyPath string, signer ssh.Signer) (model.SSHKey, error) {
 	sshKey := model.SSHKey{
-		Name:           trimmedName,
-		PrivateKeyPath: trimmedPrivateKeyPath,
+		Name:           name,
+		PrivateKeyPath: privateKeyPath,
 		Fingerprint:    ssh.FingerprintSHA256(signer.PublicKey()),
 	}
 	if err := s.sshKeyRepo.Create(ctx, &sshKey); err != nil {
@@ -147,6 +183,113 @@ func (s *SSHKeyService) create(ctx context.Context, name, privateKeyPath string)
 	}
 
 	return sshKey, nil
+}
+
+func (s *SSHKeyService) writeManagedPrivateKey(privateKeyBytes []byte) (string, func(), error) {
+	managedDir, err := s.managedSSHKeyDir()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(managedDir, 0o700); err != nil {
+		return "", nil, fmt.Errorf("prepare ssh key storage: %w", err)
+	}
+
+	file, err := os.CreateTemp(managedDir, "upload-*.pem")
+	if err != nil {
+		return "", nil, fmt.Errorf("create managed ssh key file: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(file.Name())
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("chmod managed ssh key file: %w", err)
+	}
+	if _, err := file.Write(privateKeyBytes); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("write managed ssh key file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("close managed ssh key file: %w", err)
+	}
+
+	return file.Name(), cleanup, nil
+}
+
+
+func (s *SSHKeyService) managedSSHKeyDir() (string, error) {
+	baseDir := strings.TrimSpace(s.dataDir)
+	if baseDir == "" {
+		return "", ErrManagedSSHKeyStorageNotConfigured
+	}
+
+	return filepath.Join(baseDir, managedSSHKeyDirName), nil
+}
+
+func (s *SSHKeyService) stageManagedPrivateKeyDeletion(privateKeyPath string) (string, error) {
+	if !s.isManagedPrivateKeyPath(privateKeyPath) {
+		return "", nil
+	}
+
+	if _, err := os.Stat(privateKeyPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("stat managed ssh key file: %w", err)
+	}
+
+	stagedDeletePath := fmt.Sprintf("%s.pending-delete-%d", privateKeyPath, time.Now().UnixNano())
+	if err := os.Rename(privateKeyPath, stagedDeletePath); err != nil {
+		return "", fmt.Errorf("stage managed ssh key file deletion: %w", err)
+	}
+
+	return stagedDeletePath, nil
+}
+
+func (s *SSHKeyService) restoreManagedPrivateKey(stagedDeletePath, privateKeyPath string) error {
+	if stagedDeletePath == "" {
+		return nil
+	}
+
+	if err := os.Rename(stagedDeletePath, privateKeyPath); err != nil {
+		return fmt.Errorf("restore managed ssh key file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SSHKeyService) finalizeManagedPrivateKeyDeletion(stagedDeletePath string) error {
+	if stagedDeletePath == "" {
+		return nil
+	}
+
+	if err := removeManagedPrivateKeyFile(stagedDeletePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove managed ssh key file: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SSHKeyService) isManagedPrivateKeyPath(privateKeyPath string) bool {
+	trimmedPath := strings.TrimSpace(privateKeyPath)
+	if trimmedPath == "" {
+		return false
+	}
+	managedDir, err := s.managedSSHKeyDir()
+	if err != nil {
+		return false
+	}
+
+	relativePath, err := filepath.Rel(filepath.Clean(managedDir), filepath.Clean(trimmedPath))
+	if err != nil {
+		return false
+	}
+
+	return relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(os.PathSeparator))
 }
 
 func (s *SSHKeyService) findSSHKey(ctx context.Context, id uint) (model.SSHKey, error) {

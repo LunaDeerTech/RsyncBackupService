@@ -160,7 +160,7 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 
-	cfg := config.Config{AdminUser: "admin", AdminPassword: "secret"}
+	cfg := config.Config{AdminUser: "admin", AdminPassword: "secret", DataDir: t.TempDir()}
 	if err := repository.MigrateAndSeed(db, cfg); err != nil {
 		t.Fatalf("migrate and seed: %v", err)
 	}
@@ -171,7 +171,7 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 	executorService := service.NewExecutorService(db, cfg, nil, nil, notificationService)
 	instanceService := service.NewInstanceService(db)
 	restoreService := service.NewRestoreService(db, cfg, nil, authService, notificationService)
-	sshKeyService := service.NewSSHKeyService(db)
+	sshKeyService := service.NewSSHKeyService(db, cfg.DataDir)
 	storageTargetService := service.NewStorageTargetService(db)
 	strategyService := service.NewStrategyService(db)
 	userService := service.NewUserService(db, authService)

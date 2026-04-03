@@ -62,6 +62,7 @@ const errorId = computed(() => field.errorId.value)
 .app-form-field {
 	display: grid;
 	gap: var(--space-2);
+	min-width: 0;
 }
 
 .app-form-field__header {
@@ -89,7 +90,8 @@ const errorId = computed(() => field.errorId.value)
 
 .app-form-field__control {
 	display: grid;
-	}
+	min-width: 0;
+}
 
 .app-form-field__error {
 	display: inline-flex;

@@ -142,7 +142,7 @@ func newTask07TestRouter(t *testing.T) (http.Handler, task07APITestFixture) {
 
 	authService := service.NewAuthService(db, cfg.JWTSecret)
 	instanceService := service.NewInstanceService(db)
-	sshKeyService := service.NewSSHKeyService(db)
+	sshKeyService := service.NewSSHKeyService(db, cfg.DataDir)
 	storageTargetService := service.NewStorageTargetService(db)
 	strategyService := service.NewStrategyService(db)
 	userService := service.NewUserService(db, authService)

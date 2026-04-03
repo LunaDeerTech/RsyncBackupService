@@ -288,11 +288,11 @@ func TestStorageTargetCRUDAndConnectionTest(t *testing.T) {
 }
 
 func TestStorageTargetConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKeyPath(t *testing.T) {
-	router, _ := newAuthTestRouter(t)
+	router, fixture := newAuthTestRouter(t)
 	accessToken := loginForAccessToken(t, router, "admin", "secret")
-	privateKeyPath := writeAPIResourceTestPrivateKey(t, 0o600)
+	privateKeyContent := string(generateAPIResourceTestPrivateKeyPEM(t))
 
-	createSSHKeyReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewBufferString(`{"name":"prod","private_key_path":"`+privateKeyPath+`"}`))
+	createSSHKeyReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", marshalSSHKeyCreateRequest(t, "prod", privateKeyContent))
 	createSSHKeyReq.Header.Set("Authorization", "Bearer "+accessToken)
 	createSSHKeyReq.Header.Set("Content-Type", "application/json")
 	createSSHKeyResp := httptest.NewRecorder()
@@ -306,6 +306,11 @@ func TestStorageTargetConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKe
 	}
 	if err := json.NewDecoder(createSSHKeyResp.Body).Decode(&sshKeyBody); err != nil {
 		t.Fatalf("decode ssh key response: %v", err)
+	}
+
+	var storedSSHKey model.SSHKey
+	if err := fixture.db.First(&storedSSHKey, sshKeyBody.ID).Error; err != nil {
+		t.Fatalf("load stored ssh key: %v", err)
 	}
 
 	createTargetReq := httptest.NewRequest(http.MethodPost, "/api/storage-targets", bytes.NewBufferString(`{"name":"remote","type":"rolling_ssh","host":"127.0.0.1","user":"root","ssh_key_id":`+strconv.FormatUint(uint64(sshKeyBody.ID), 10)+`,"base_path":"/srv/backup"}`))
@@ -324,8 +329,8 @@ func TestStorageTargetConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKe
 		t.Fatalf("decode storage target response: %v", err)
 	}
 
-	if err := os.Chmod(privateKeyPath, 0o644); err != nil {
-		t.Fatalf("chmod private key: %v", err)
+	if err := os.Chmod(storedSSHKey.PrivateKeyPath, 0o644); err != nil {
+		t.Fatal("chmod managed private key")
 	}
 
 	testReq := httptest.NewRequest(http.MethodPost, "/api/storage-targets/"+strconv.FormatUint(uint64(targetBody.ID), 10)+"/test", nil)
@@ -335,17 +340,17 @@ func TestStorageTargetConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKe
 	if testResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", testResp.Code)
 	}
-	if strings.Contains(testResp.Body.String(), privateKeyPath) {
+	if strings.Contains(testResp.Body.String(), storedSSHKey.PrivateKeyPath) {
 		t.Fatal("expected storage target test response to omit private key path")
 	}
 }
 
 func TestSSHKeyRegisterDoesNotExposePrivateKeyPath(t *testing.T) {
-	router, _ := newAuthTestRouter(t)
+	router, fixture := newAuthTestRouter(t)
 	accessToken := loginForAccessToken(t, router, "admin", "secret")
-	privateKeyPath := writeAPIResourceTestPrivateKey(t, 0o600)
+	privateKeyContent := string(generateAPIResourceTestPrivateKeyPEM(t))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewBufferString(`{"name":"prod","private_key_path":"`+privateKeyPath+`"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", marshalSSHKeyCreateRequest(t, "prod", privateKeyContent))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -355,8 +360,9 @@ func TestSSHKeyRegisterDoesNotExposePrivateKeyPath(t *testing.T) {
 	if resp.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.Code)
 	}
-	if strings.Contains(resp.Body.String(), privateKeyPath) {
-		t.Fatal("expected ssh key response to omit private key path")
+	responseBody := resp.Body.String()
+	if strings.Contains(responseBody, "BEGIN RSA PRIVATE KEY") {
+		t.Fatal("expected ssh key response to omit uploaded private key material")
 	}
 
 	var body struct {
@@ -370,14 +376,52 @@ func TestSSHKeyRegisterDoesNotExposePrivateKeyPath(t *testing.T) {
 	if body.ID == 0 || body.Name != "prod" || body.Fingerprint == "" {
 		t.Fatalf("expected ssh key metadata response, got %+v", body)
 	}
+
+	var storedSSHKey model.SSHKey
+	if err := fixture.db.First(&storedSSHKey, body.ID).Error; err != nil {
+		t.Fatalf("load stored ssh key: %v", err)
+	}
+	if strings.Contains(responseBody, storedSSHKey.PrivateKeyPath) {
+		t.Fatal("expected ssh key response to omit managed private key path")
+	}
+	privateKeyInfo, err := os.Stat(storedSSHKey.PrivateKeyPath)
+	if err != nil {
+		t.Fatal("stat managed private key")
+	}
+	if privateKeyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("expected managed private key to be 0600, got %04o", privateKeyInfo.Mode().Perm())
+	}
 }
 
-func TestSSHKeyConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKeyPath(t *testing.T) {
+func TestSSHKeyCreateRejectsLegacyPrivateKeyPathPayload(t *testing.T) {
 	router, _ := newAuthTestRouter(t)
 	accessToken := loginForAccessToken(t, router, "admin", "secret")
 	privateKeyPath := writeAPIResourceTestPrivateKey(t, 0o600)
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewBufferString(`{"name":"prod","private_key_path":"`+privateKeyPath+`"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewBufferString(`{"name":"prod","private_key_path":"`+privateKeyPath+`"}`))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.Code)
+	}
+	if strings.Contains(resp.Body.String(), privateKeyPath) {
+		t.Fatal("expected legacy private key path payload to be rejected without leaking the path")
+	}
+	if !strings.Contains(resp.Body.String(), service.ErrPrivateKeyRequired.Error()) {
+		t.Fatalf("expected private key required error, got %s", resp.Body.String())
+	}
+}
+
+func TestSSHKeyConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKeyPath(t *testing.T) {
+	router, fixture := newAuthTestRouter(t)
+	accessToken := loginForAccessToken(t, router, "admin", "secret")
+	privateKeyContent := string(generateAPIResourceTestPrivateKeyPEM(t))
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", marshalSSHKeyCreateRequest(t, "prod", privateKeyContent))
 	createReq.Header.Set("Authorization", "Bearer "+accessToken)
 	createReq.Header.Set("Content-Type", "application/json")
 
@@ -394,8 +438,13 @@ func TestSSHKeyConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKeyPath(t
 		t.Fatalf("decode create response: %v", err)
 	}
 
-	if err := os.Chmod(privateKeyPath, 0o644); err != nil {
-		t.Fatalf("chmod private key: %v", err)
+	var storedSSHKey model.SSHKey
+	if err := fixture.db.First(&storedSSHKey, createdBody.ID).Error; err != nil {
+		t.Fatalf("load stored ssh key: %v", err)
+	}
+
+	if err := os.Chmod(storedSSHKey.PrivateKeyPath, 0o644); err != nil {
+		t.Fatal("chmod managed private key")
 	}
 
 	testReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys/"+strconv.FormatUint(uint64(createdBody.ID), 10)+"/test", bytes.NewBufferString(`{"host":"127.0.0.1","user":"root"}`))
@@ -408,17 +457,17 @@ func TestSSHKeyConnectionRejectsInvalidPermissionsWithoutLeakingPrivateKeyPath(t
 	if testResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", testResp.Code)
 	}
-	if strings.Contains(testResp.Body.String(), privateKeyPath) {
+	if strings.Contains(testResp.Body.String(), storedSSHKey.PrivateKeyPath) {
 		t.Fatal("expected ssh key test response to omit private key path")
 	}
 }
 
 func TestSSHKeyDeleteRemovesRegisteredKey(t *testing.T) {
-	router, _ := newAuthTestRouter(t)
+	router, fixture := newAuthTestRouter(t)
 	accessToken := loginForAccessToken(t, router, "admin", "secret")
-	privateKeyPath := writeAPIResourceTestPrivateKey(t, 0o600)
+	privateKeyContent := string(generateAPIResourceTestPrivateKeyPEM(t))
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", bytes.NewBufferString(`{"name":"prod","private_key_path":"`+privateKeyPath+`"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/ssh-keys", marshalSSHKeyCreateRequest(t, "prod", privateKeyContent))
 	createReq.Header.Set("Authorization", "Bearer "+accessToken)
 	createReq.Header.Set("Content-Type", "application/json")
 
@@ -435,6 +484,11 @@ func TestSSHKeyDeleteRemovesRegisteredKey(t *testing.T) {
 		t.Fatalf("decode create response: %v", err)
 	}
 
+	var storedSSHKey model.SSHKey
+	if err := fixture.db.First(&storedSSHKey, createdBody.ID).Error; err != nil {
+		t.Fatalf("load stored ssh key: %v", err)
+	}
+
 	listReq := httptest.NewRequest(http.MethodGet, "/api/ssh-keys", nil)
 	listReq.Header.Set("Authorization", "Bearer "+accessToken)
 	listResp := httptest.NewRecorder()
@@ -442,7 +496,7 @@ func TestSSHKeyDeleteRemovesRegisteredKey(t *testing.T) {
 	if listResp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", listResp.Code)
 	}
-	if strings.Contains(listResp.Body.String(), privateKeyPath) {
+	if strings.Contains(listResp.Body.String(), storedSSHKey.PrivateKeyPath) {
 		t.Fatal("expected ssh key list response to omit private key path")
 	}
 
@@ -473,6 +527,9 @@ func TestSSHKeyDeleteRemovesRegisteredKey(t *testing.T) {
 			t.Fatalf("expected ssh key %d to be deleted, got %+v", createdBody.ID, listedSSHKeys)
 		}
 	}
+	if _, err := os.Stat(storedSSHKey.PrivateKeyPath); !os.IsNotExist(err) {
+		t.Fatal("expected managed private key file to be removed")
+	}
 }
 
 func issueAPIVerifyToken(t *testing.T, router http.Handler, accessToken, password string) string {
@@ -501,7 +558,7 @@ func issueAPIVerifyToken(t *testing.T, router http.Handler, accessToken, passwor
 	return body.VerifyToken
 }
 
-func writeAPIResourceTestPrivateKey(t *testing.T, mode os.FileMode) string {
+func generateAPIResourceTestPrivateKeyPEM(t *testing.T) []byte {
 	t.Helper()
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -509,11 +566,31 @@ func writeAPIResourceTestPrivateKey(t *testing.T, mode os.FileMode) string {
 		t.Fatalf("generate rsa private key: %v", err)
 	}
 
-	encodedKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+}
+
+func writeAPIResourceTestPrivateKey(t *testing.T, mode os.FileMode) string {
+	t.Helper()
+
+	encodedKey := generateAPIResourceTestPrivateKeyPEM(t)
 	privateKeyPath := filepath.Join(t.TempDir(), "id_rsa")
 	if err := os.WriteFile(privateKeyPath, encodedKey, mode); err != nil {
 		t.Fatalf("write private key: %v", err)
 	}
 
 	return privateKeyPath
+}
+
+func marshalSSHKeyCreateRequest(t *testing.T, name, privateKey string) *bytes.Buffer {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]string{
+		"name":        name,
+		"private_key": privateKey,
+	})
+	if err != nil {
+		t.Fatalf("marshal ssh key create request: %v", err)
+	}
+
+	return bytes.NewBuffer(payload)
 }

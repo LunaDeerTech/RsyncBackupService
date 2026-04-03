@@ -44,6 +44,7 @@ const listTop = ref(0)
 const listLeft = ref(0)
 const listWidth = ref(0)
 const listMaxHeight = ref(256)
+const hoverPreview = ref<{ text: string; top: number; left: number } | null>(null)
 
 watchSyncEffect(() => {
 	field?.setControlId(typeof attrs.id === "string" ? attrs.id : undefined)
@@ -82,6 +83,16 @@ const listboxStyle = computed(() => ({
 	overflowX: "hidden",
 	overflowY: "auto",
 }))
+const hoverPreviewStyle = computed(() => {
+	if (hoverPreview.value === null) {
+		return undefined
+	}
+
+	return {
+		top: `${hoverPreview.value.top}px`,
+		left: `${hoverPreview.value.left}px`,
+	}
+})
 
 function findEnabledIndex(startIndex: number, direction: 1 | -1): number {
 	const total = props.options.length
@@ -156,6 +167,7 @@ function openList(preferLast = false): void {
 function closeList(): void {
 	open.value = false
 	highlightedIndex.value = -1
+	hoverPreview.value = null
 }
 
 async function focusTrigger(): Promise<void> {
@@ -271,8 +283,56 @@ function onClickOutside(event: MouseEvent): void {
 
 function onViewportChange(): void {
 	if (open.value) {
+		hoverPreview.value = null
 		void syncListPosition()
 	}
+}
+
+function clearHoverPreview(): void {
+	hoverPreview.value = null
+}
+
+function showHoverPreview(event: MouseEvent, option: AppSelectOption): void {
+	if (!(event.currentTarget instanceof HTMLButtonElement)) {
+		return
+	}
+
+	const labelElement = event.currentTarget.querySelector(".app-select__option-label")
+	if (!(labelElement instanceof HTMLElement)) {
+		return
+	}
+
+	if (labelElement.scrollWidth <= labelElement.clientWidth) {
+		clearHoverPreview()
+		return
+	}
+
+	const optionRect = event.currentTarget.getBoundingClientRect()
+	const previewGap = 12
+	const previewMargin = 12
+	const previewMaxWidth = 320
+	const left = Math.max(
+		previewMargin,
+		Math.min(optionRect.right + previewGap, window.innerWidth - previewMargin - previewMaxWidth),
+	)
+	const top = Math.max(
+		previewMargin,
+		Math.min(optionRect.top, window.innerHeight - previewMargin - optionRect.height),
+	)
+
+	hoverPreview.value = {
+		text: option.label,
+		top,
+		left,
+	}
+}
+
+function handleOptionMouseEnter(event: MouseEvent, option: AppSelectOption, index: number): void {
+	if (!option.disabled) {
+		highlightedIndex.value = index
+	}
+
+	showHoverPreview(event, option)
 }
 
 onMounted(() => {
@@ -339,11 +399,15 @@ onBeforeUnmount(() => {
 					:disabled="option.disabled"
 					@mousedown.prevent
 					@click="selectValue(option)"
-					@mouseenter="highlightedIndex = option.disabled ? highlightedIndex : index"
+					@mouseenter="handleOptionMouseEnter($event, option, index)"
+					@mouseleave="clearHoverPreview"
 				>
-					<span>{{ option.label }}</span>
+					<span class="app-select__option-label">{{ option.label }}</span>
 					<span v-if="modelValue === option.value" class="app-select__check" aria-hidden="true">✓</span>
 				</button>
+			</div>
+			<div v-if="hoverPreview !== null" class="app-select__hover-preview" role="tooltip" :style="hoverPreviewStyle">
+				{{ hoverPreview.text }}
 			</div>
 		</Teleport>
 	</div>
@@ -352,10 +416,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-select {
 	position: relative;
-	}
+	min-width: 0;
+}
 
 .app-select__trigger {
 	width: 100%;
+	max-width: 100%;
+	min-width: 0;
 	min-height: 2.72rem;
 	padding: 0.72rem 2.45rem 0.72rem 0.88rem;
 	border: var(--border-width) solid var(--control-border);
@@ -456,6 +523,7 @@ onBeforeUnmount(() => {
 	align-items: center;
 	gap: var(--space-3);
 	width: 100%;
+	min-width: 0;
 	padding: 0.62rem 0.74rem;
 	border: var(--border-width) solid transparent;
 	border-radius: calc(var(--radius-button) - 3px);
@@ -469,6 +537,35 @@ onBeforeUnmount(() => {
 		background var(--duration-fast) ease,
 		border-color var(--duration-fast) ease,
 		color var(--duration-fast) ease;
+}
+
+.app-select__option span:first-child {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.app-select__hover-preview {
+	position: fixed;
+	max-width: min(20rem, calc(100vw - 1.5rem));
+	padding: 0.68rem 0.8rem;
+	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 90%, transparent);
+	border-radius: calc(var(--radius-card) - 2px);
+	background: color-mix(in srgb, var(--surface-panel) 98%, transparent);
+	box-shadow: var(--shadow-ambient);
+	color: var(--text-strong);
+	font-size: 0.88rem;
+	font-weight: 600;
+	line-height: 1.45;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	pointer-events: none;
+	z-index: 61;
+	backdrop-filter: blur(18px);
+	-webkit-backdrop-filter: blur(18px);
+	animation: select-panel-in var(--duration-fast) ease;
 }
 
 .app-select__option[data-active="true"] {

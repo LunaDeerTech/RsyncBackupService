@@ -269,7 +269,7 @@ func (s *SSHStorage) buildSSHClientConfig() (*ssh.ClientConfig, string, error) {
 		return nil, "", fmt.Errorf("ssh private key path is required")
 	}
 
-	signer, err := loadSSHSigner(trimmedPrivateKeyPath)
+	signer, err := LoadSSHSigner(trimmedPrivateKeyPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -287,7 +287,7 @@ func (s *SSHStorage) buildSSHClientConfig() (*ssh.ClientConfig, string, error) {
 	}, net.JoinHostPort(trimmedHost, strconv.Itoa(port)), nil
 }
 
-func loadSSHSigner(privateKeyPath string) (ssh.Signer, error) {
+func LoadSSHSigner(privateKeyPath string) (ssh.Signer, error) {
 	privateKeyInfo, err := os.Stat(privateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("ssh private key file is unreadable")

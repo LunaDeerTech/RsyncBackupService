@@ -41,7 +41,7 @@ type StorageBackend interface {
 
 ```go
 func (s *StrategyService) ValidateCreate(req CreateStrategyRequest) error
-func (s *SSHKeyService) Register(ctx context.Context, name, privateKeyPath string) error
+func (s *SSHKeyService) Create(ctx context.Context, req CreateSSHKeyRequest) (model.SSHKey, error)
 func (s *StorageTargetService) TestConnection(ctx context.Context, id uint) error
 ```
 

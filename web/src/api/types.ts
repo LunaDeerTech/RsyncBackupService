@@ -140,7 +140,7 @@ export interface SSHKeySummary {
 
 export interface SSHKeyPayload {
 	name: string
-	private_key_path: string
+	private_key: string
 }
 
 export interface SSHKeyConnectionPayload {

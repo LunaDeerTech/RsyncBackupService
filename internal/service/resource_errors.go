@@ -32,7 +32,8 @@ var (
 	ErrNameRequired             = errors.New("name is required")
 	ErrNotificationChannelNotFound = errors.New("notification channel not found")
 	ErrNotificationSubscriptionNotFound = errors.New("notification subscription not found")
-	ErrPrivateKeyPathRequired   = errors.New("private key path is required")
+	ErrManagedSSHKeyStorageNotConfigured = errors.New("ssh key storage data dir is required")
+	ErrPrivateKeyRequired       = errors.New("private key is required")
 	ErrRestoreTargetExists      = errors.New("restore target path already exists")
 	ErrRestoreTargetPathRequired = errors.New("restore target path is required")
 	ErrResourceInUse            = errors.New("resource is still in use")
@@ -70,7 +71,7 @@ func IsValidationError(err error) bool {
 		errors.Is(err, ErrDuplicateStorageTargetLocation),
 		errors.Is(err, ErrRollingTargetConflict),
 		errors.Is(err, ErrNameRequired),
-		errors.Is(err, ErrPrivateKeyPathRequired),
+		errors.Is(err, ErrPrivateKeyRequired),
 		errors.Is(err, ErrRestoreTargetPathRequired),
 		errors.Is(err, ErrScheduleRequired),
 		errors.Is(err, ErrSSHKeyRequired),

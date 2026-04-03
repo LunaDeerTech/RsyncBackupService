@@ -97,4 +97,54 @@ describe("AppSelect", () => {
 			boxSizing: "border-box",
 		})
 	})
+
+	it("shows a hover preview when an option label is truncated", async () => {
+		const longLabel = "用于测试密钥 - 这是一个非常长的选项名称，用来验证悬浮预览是否会展示完整内容"
+
+		render(AppSelect, {
+			props: {
+				modelValue: "test-key",
+				options: [
+					{ value: "viewer", label: "viewer" },
+					{ value: "test-key", label: longLabel },
+				],
+			},
+		})
+
+		await fireEvent.click(screen.getByRole("combobox"))
+
+		const option = screen.getByRole("option", { name: longLabel })
+		const label = option.querySelector("span") as HTMLElement
+		Object.defineProperty(label, "scrollWidth", {
+			configurable: true,
+			value: 420,
+		})
+		Object.defineProperty(label, "clientWidth", {
+			configurable: true,
+			value: 160,
+		})
+		vi.spyOn(option, "getBoundingClientRect").mockReturnValue({
+			width: 220,
+			height: 44,
+			top: 100,
+			right: 240,
+			bottom: 144,
+			left: 20,
+			x: 20,
+			y: 100,
+			toJSON: () => ({}),
+		})
+
+		await fireEvent.mouseEnter(option)
+
+		await waitFor(() => {
+			expect(screen.getByRole("tooltip")).toHaveTextContent(longLabel)
+		})
+
+		await fireEvent.mouseLeave(option)
+
+		await waitFor(() => {
+			expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+		})
+	})
 })

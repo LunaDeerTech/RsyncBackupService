@@ -7,6 +7,7 @@ import type { SSHKeySummary } from "../api/types"
 import AppButton from "../components/ui/AppButton.vue"
 import AppCard from "../components/ui/AppCard.vue"
 import AppEmpty from "../components/ui/AppEmpty.vue"
+import AppFileInput from "../components/ui/AppFileInput.vue"
 import AppFormField from "../components/ui/AppFormField.vue"
 import AppInput from "../components/ui/AppInput.vue"
 import AppNotification from "../components/ui/AppNotification.vue"
@@ -18,10 +19,12 @@ const errorMessage = ref("")
 const successMessage = ref("")
 const isSubmitting = ref(false)
 const testingId = ref<number | null>(null)
+const createFileInputKey = ref(0)
+const createFile = ref<File | null>(null)
+const createFileName = ref("")
 
 const createForm = reactive({
 	name: "",
-	privateKeyPath: "",
 })
 
 const testForm = reactive({
@@ -35,6 +38,15 @@ const keyOptions = computed(() => [
 	{ value: "", label: "选择 SSH 密钥" },
 	...keys.value.map((item) => ({ value: String(item.id), label: `${item.name} · ${item.fingerprint}` })),
 ])
+
+const createFileDescription = computed(() =>
+	createFileName.value !== "" ? `已选择：${createFileName.value}` : "上传后由服务端以 0600 权限托管到数据目录。",
+)
+
+function onCreateFileSelect(file: File | null): void {
+	createFile.value = file
+	createFileName.value = file?.name ?? ""
+}
 
 async function loadKeys(): Promise<void> {
 	errorMessage.value = ""
@@ -50,18 +62,26 @@ async function loadKeys(): Promise<void> {
 }
 
 async function submitCreate(): Promise<void> {
-	isSubmitting.value = true
 	errorMessage.value = ""
 	successMessage.value = ""
+	if (createFile.value === null) {
+		errorMessage.value = "请选择私钥文件。"
+		return
+	}
+
+	isSubmitting.value = true
 
 	try {
+		const privateKey = await createFile.value.text()
 		await createSSHKey({
 			name: createForm.name.trim(),
-			private_key_path: createForm.privateKeyPath.trim(),
+			private_key: privateKey,
 		})
 		successMessage.value = "SSH 密钥已登记。"
 		createForm.name = ""
-		createForm.privateKeyPath = ""
+		createFile.value = null
+		createFileName.value = ""
+		createFileInputKey.value += 1
 		await loadKeys()
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "登记 SSH 密钥失败。"
@@ -153,13 +173,13 @@ onMounted(() => {
 			</AppCard>
 
 			<div class="page-stack">
-				<AppCard title="登记 SSH 密钥" description="仅保存路径与派生指纹，私钥内容不会直接传入前端。">
+				<AppCard title="登记 SSH 密钥" description="从本地选择私钥文件，上传后由服务端托管并派生指纹。">
 					<form class="page-stack" @submit.prevent="submitCreate">
 						<AppFormField label="名称" required>
 							<AppInput v-model="createForm.name" placeholder="prod-root" />
 						</AppFormField>
-						<AppFormField label="私钥路径" required>
-							<AppInput v-model="createForm.privateKeyPath" placeholder="/var/lib/rsync-backup/keys/prod" />
+						<AppFormField label="私钥文件" required :description="createFileDescription">
+							<AppFileInput :key="createFileInputKey" accept=".pem,.key,.rsa,.txt" @select="onCreateFileSelect" />
 						</AppFormField>
 						<AppButton type="submit" :loading="isSubmitting">登记密钥</AppButton>
 					</form>

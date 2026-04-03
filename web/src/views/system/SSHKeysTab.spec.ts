@@ -25,6 +25,14 @@ const secondaryKey = {
 	created_at: "Wed, 02 Apr 2026 09:00:00 GMT",
 }
 
+function createPrivateKeyFile(content: string): File {
+	const file = new File([content], "id_rsa", { type: "application/x-pem-file" })
+	Object.defineProperty(file, "text", {
+		value: vi.fn().mockResolvedValue(content),
+	})
+	return file
+}
+
 async function renderTab(): Promise<void> {
 	render(SSHKeysTab)
 
@@ -59,6 +67,7 @@ describe("SSHKeysTab", () => {
 		vi.mocked(listSSHKeys)
 			.mockResolvedValueOnce([primaryKey])
 			.mockResolvedValueOnce([primaryKey, secondaryKey])
+		const privateKey = "-----BEGIN RSA PRIVATE KEY-----\nsecondary\n-----END RSA PRIVATE KEY-----"
 
 		await renderTab()
 
@@ -67,13 +76,17 @@ describe("SSHKeysTab", () => {
 		const dialog = screen.getByRole("dialog", { name: "登记 SSH 密钥" })
 		expect(dialog).toBeInTheDocument()
 		await fireEvent.update(screen.getByLabelText("名称"), "secondary-key")
-		await fireEvent.update(screen.getByLabelText("私钥路径"), "/var/lib/keys/secondary")
+		await fireEvent.change(screen.getByLabelText("私钥文件"), {
+			target: {
+				files: [createPrivateKeyFile(privateKey)],
+			},
+		})
 		await fireEvent.click(within(dialog).getByRole("button", { name: "登记密钥" }))
 
 		await waitFor(() => {
 			expect(createSSHKey).toHaveBeenCalledWith({
 				name: "secondary-key",
-				private_key_path: "/var/lib/keys/secondary",
+				private_key: privateKey,
 			})
 		})
 
@@ -85,7 +98,8 @@ describe("SSHKeysTab", () => {
 	})
 
 	it("keeps SSH key registration failures inside the modal", async () => {
-		vi.mocked(createSSHKey).mockRejectedValue(new ApiError("私钥路径不存在", 400))
+		const privateKey = "-----BEGIN RSA PRIVATE KEY-----\nmissing\n-----END RSA PRIVATE KEY-----"
+		vi.mocked(createSSHKey).mockRejectedValue(new ApiError("无效的 SSH 私钥", 400))
 
 		await renderTab()
 
@@ -93,11 +107,15 @@ describe("SSHKeysTab", () => {
 
 		const dialog = screen.getByRole("dialog", { name: "登记 SSH 密钥" })
 		await fireEvent.update(screen.getByLabelText("名称"), "secondary-key")
-		await fireEvent.update(screen.getByLabelText("私钥路径"), "/var/lib/keys/missing")
+		await fireEvent.change(screen.getByLabelText("私钥文件"), {
+			target: {
+				files: [createPrivateKeyFile(privateKey)],
+			},
+		})
 		await fireEvent.click(within(dialog).getByRole("button", { name: "登记密钥" }))
 
 		await waitFor(() => {
-			expect(within(dialog).getByRole("alert")).toHaveTextContent("私钥路径不存在")
+			expect(within(dialog).getByRole("alert")).toHaveTextContent("无效的 SSH 私钥")
 		})
 
 		expect(screen.getByRole("dialog", { name: "登记 SSH 密钥" })).toBeInTheDocument()

@@ -572,9 +572,10 @@ const successMessage = ref("")
 // Create Modal
 const createModalOpen = ref(false)
 const isCreating = ref(false)
+const createFile = ref<File | null>(null)
+const createFileName = ref("")
 const createForm = reactive({
 	name: "",
-	privateKeyPath: "",
 })
 
 // Test Modal
@@ -611,8 +612,14 @@ async function loadKeys(): Promise<void> {
 // --- Create ---
 function openCreateModal(): void {
 	createForm.name = ""
-	createForm.privateKeyPath = ""
+	createFile.value = null
+	createFileName.value = ""
 	createModalOpen.value = true
+}
+
+function onCreateFileSelect(file: File | null): void {
+	createFile.value = file
+	createFileName.value = file?.name ?? ""
 }
 
 function closeCreateModal(): void {
@@ -621,14 +628,20 @@ function closeCreateModal(): void {
 }
 
 async function submitCreate(): Promise<void> {
-	isCreating.value = true
 	errorMessage.value = ""
 	successMessage.value = ""
+	if (createFile.value === null) {
+		errorMessage.value = "请选择私钥文件。"
+		return
+	}
+
+	isCreating.value = true
 
 	try {
+		const privateKey = await createFile.value.text()
 		await createSSHKey({
 			name: createForm.name.trim(),
-			private_key_path: createForm.privateKeyPath.trim(),
+			private_key: privateKey,
 		})
 		successMessage.value = "SSH 密钥已登记。"
 		createModalOpen.value = false
@@ -747,14 +760,18 @@ onMounted(() => {
 			<section class="page-modal-form">
 				<header class="page-modal-form__header">
 					<h2 class="page-modal-form__title">登记 SSH 密钥</h2>
-					<p class="page-muted">仅保存路径与派生指纹，私钥内容不会传入前端。</p>
+					<p class="page-muted">从本地选择私钥文件，上传后由服务端托管并派生指纹。</p>
 				</header>
 				<form class="page-stack" @submit.prevent="submitCreate">
 					<AppFormField label="名称" required>
 						<AppInput v-model="createForm.name" placeholder="prod-root" />
 					</AppFormField>
-					<AppFormField label="私钥路径" required>
-						<AppInput v-model="createForm.privateKeyPath" placeholder="/var/lib/rsync-backup/keys/prod" />
+					<AppFormField
+						label="私钥文件"
+						required
+						:description="createFileName ? `已选择：${createFileName}` : '上传后由服务端以 0600 权限托管到数据目录。'"
+					>
+						<AppFileInput accept=".pem,.key,.rsa,.txt" @select="onCreateFileSelect" />
 					</AppFormField>
 					<div class="page-action-row--wrap">
 						<AppButton type="submit" :loading="isCreating">登记密钥</AppButton>

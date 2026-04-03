@@ -167,11 +167,11 @@ NotificationSubscription ──> User + Instance + Channel
 |------|------|------|
 | id | INTEGER PK | |
 | name | TEXT | 密钥名称（显示用） |
-| private_key_path | TEXT | 密钥文件在服务器上的路径 |
+| private_key_path | TEXT | 服务端托管后的私钥文件路径 |
 | fingerprint | TEXT | 指纹（用于展示和校验） |
 | created_at | DATETIME | |
 
-> 不存储密钥内容本身，仅存服务器本地路径。启动时校验文件权限为 600。
+> 前端上传私钥内容后，由服务端写入受控目录并设置 0600。数据库只保存服务端本地路径，不保存私钥内容本身。
 
 #### backup_instances — 备份实例
 
