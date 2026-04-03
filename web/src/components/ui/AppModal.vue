@@ -9,6 +9,7 @@ interface AppModalProps {
 	describedBy?: string
 	tone?: "default" | "danger"
 	closeOnOverlay?: boolean
+	width?: string
 }
 
 const props = withDefaults(defineProps<AppModalProps>(), {
@@ -16,6 +17,7 @@ const props = withDefaults(defineProps<AppModalProps>(), {
 	describedBy: undefined,
 	tone: "default",
 	closeOnOverlay: true,
+	width: "36rem",
 })
 
 const emit = defineEmits<{
@@ -107,6 +109,7 @@ onBeforeUnmount(() => {
 			:data-tone="tone"
 			:aria-labelledby="labelledBy"
 			:aria-describedby="describedBy"
+			:style="{ width: `min(100%, ${width})` }"
 			tabindex="-1"
 		>
 			<slot />
@@ -129,7 +132,6 @@ onBeforeUnmount(() => {
 }
 
 .app-modal__panel {
-	width: min(100%, 36rem);
 	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 92%, transparent);
 	border-radius: var(--radius-dialog);
 	background: var(--dialog-surface);

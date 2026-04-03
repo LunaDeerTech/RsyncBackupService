@@ -5,91 +5,95 @@ import { ApiError } from "../api/client"
 import AppShell from "../layout/AppShell.vue"
 import { useAuthStore } from "../stores/auth"
 
+const DashboardView = () => import("../views/DashboardView.vue")
+const InstancesListView = () => import("../views/InstancesListView.vue")
+const InstanceDetailView = () => import("../views/InstanceDetailView.vue")
+const StorageTargetsView = () => import("../views/StorageTargetsView.vue")
+const SystemAdminView = () => import("../views/SystemAdminView.vue")
+const ProfileView = () => import("../views/ProfileView.vue")
+
+async function ensureCurrentUser() {
+	const auth = useAuthStore()
+
+	if (auth.accessToken === null) {
+		auth.setCurrentUser(null)
+		return null
+	}
+
+	if (auth.currentUser !== null) {
+		return auth.currentUser
+	}
+
+	try {
+		const currentUser = await getCurrentUser()
+		auth.setCurrentUser(currentUser)
+		return currentUser
+	} catch (error) {
+		if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+			auth.clearSession()
+			return null
+		}
+
+		return null
+	}
+}
+
 const protectedRoutes: RouteRecordRaw[] = [
-	{
-		path: "",
-		name: "dashboard",
-		component: () => import("../views/DashboardView.vue"),
-		meta: {
-			requiresAuth: true,
-			requiresAdmin: true,
-			title: "仪表盘",
-			description: "统计卡片、运行中任务、最近备份与存储概览。",
-		},
-	},
 	{
 		path: "instances",
 		name: "instances",
-		component: () => import("../views/InstancesListView.vue"),
+		component: InstancesListView,
 		meta: {
-			requiresAuth: true,
 			title: "备份实例",
-			description: "实例列表、基础筛选和实例创建入口。",
+			description: "管理源路径、源主机和实例级恢复入口。",
+		},
+	},
+	{
+		path: "",
+		name: "dashboard",
+		component: DashboardView,
+		meta: {
+			title: "运维仪表盘",
+			description: "查看全局统计、运行中任务、最近备份与存储容量。",
+			requiresAdmin: true,
 		},
 	},
 	{
 		path: "instances/:id",
 		name: "instance-detail",
-		component: () => import("../views/InstanceDetailView.vue"),
+		component: InstanceDetailView,
 		meta: {
-			requiresAuth: true,
 			title: "实例详情",
-			description: "概览、策略、备份历史、恢复和通知订阅。",
+			description: "查看实例配置、策略、备份历史与恢复操作。",
 		},
 	},
 	{
 		path: "storage-targets",
-		name: "storageTargets",
-		component: () => import("../views/StorageTargetsView.vue"),
+		name: "storage-targets",
+		component: StorageTargetsView,
 		meta: {
-			requiresAuth: true,
-			requiresAdmin: true,
 			title: "存储目标",
-			description: "管理本地与 SSH 存储目标，并执行连通性测试。",
+			description: "按备份类型管理目标路径，并执行连通性测试。",
+			requiresAdmin: true,
 		},
 	},
 	{
-		path: "ssh-keys",
-		name: "sshKeys",
-		component: () => import("../views/SSHKeysView.vue"),
+		path: "system",
+		name: "system",
+		component: SystemAdminView,
 		meta: {
-			requiresAuth: true,
+			title: "系统管理",
+			description: "用户管理、SSH 密钥、通知渠道与审计日志。",
 			requiresAdmin: true,
-			title: "SSH 密钥",
-			description: "登记 SSH 密钥并对目标主机执行验证。",
 		},
 	},
 	{
-		path: "notifications",
-		name: "notifications",
-		component: () => import("../views/NotificationsView.vue"),
+		path: "profile",
+		name: "profile",
+		component: ProfileView,
 		meta: {
-			requiresAuth: true,
-			requiresAdmin: true,
-			title: "通知渠道",
-			description: "配置 SMTP 渠道并管理通知测试。",
-		},
-	},
-	{
-		path: "audit-logs",
-		name: "auditLogs",
-		component: () => import("../views/AuditLogsView.vue"),
-		meta: {
-			requiresAuth: true,
-			requiresAdmin: true,
-			title: "审计日志",
-			description: "筛选关键操作并查看本页结果的时间线摘要。",
-		},
-	},
-	{
-		path: "settings",
-		name: "settings",
-		component: () => import("../views/SettingsView.vue"),
-		meta: {
-			requiresAuth: true,
-			requiresAdmin: true,
-			title: "系统设置",
-			description: "用户管理、密码修改和实例权限设置。",
+			title: "个人信息",
+			description: "查看会话信息和修改密码。",
 		},
 	},
 ]
@@ -117,6 +121,43 @@ const previewRoutes: RouteRecordRaw[] = import.meta.env.DEV
 		]
 	: []
 
+const legacyRoutes: RouteRecordRaw[] = [
+	{
+		path: "/ssh-keys",
+		redirect: "/system",
+	},
+	{
+		path: "/notifications",
+		redirect: "/system",
+	},
+	{
+		path: "/audit-logs",
+		redirect: "/system",
+	},
+	{
+		path: "/settings",
+		name: "legacy-settings",
+		meta: {
+			requiresAuth: true,
+		},
+		beforeEnter: async () => {
+			const auth = useAuthStore()
+
+			if (auth.accessToken === null) {
+				return {
+					name: "login",
+					query: {
+						redirect: "/settings",
+					},
+				}
+			}
+
+			const currentUser = auth.currentUser ?? (await ensureCurrentUser())
+			return currentUser?.is_admin === true ? "/system" : "/profile"
+		},
+	},
+]
+
 const routes: RouteRecordRaw[] = [
 	...previewRoutes,
 	{
@@ -129,6 +170,7 @@ const routes: RouteRecordRaw[] = [
 			description: "通过用户名和密码进入 Rsync Backup Service。",
 		},
 	},
+	...legacyRoutes,
 	{
 		path: "/",
 		component: AppShell,
@@ -148,32 +190,6 @@ export function createRouter(): Router {
 		history: createWebHistory(),
 		routes,
 	})
-
-	async function ensureCurrentUser() {
-		const auth = useAuthStore()
-
-		if (auth.accessToken === null) {
-			auth.setCurrentUser(null)
-			return null
-		}
-
-		if (auth.currentUser !== null) {
-			return auth.currentUser
-		}
-
-		try {
-			const currentUser = await getCurrentUser()
-			auth.setCurrentUser(currentUser)
-			return currentUser
-		} catch (error) {
-			if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-				auth.clearSession()
-				return null
-			}
-
-			return null
-		}
-	}
 
 	router.beforeEach(async (to) => {
 		const auth = useAuthStore()
