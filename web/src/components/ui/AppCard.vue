@@ -45,7 +45,6 @@ withDefaults(defineProps<AppCardProps>(), {
 	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 90%, transparent);
 	border-radius: var(--radius-card);
 	background:
-		linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), transparent 22%),
 		color-mix(in srgb, var(--surface-panel) 96%, transparent);
 	box-shadow: var(--shadow-ambient);
 	overflow: hidden;
