@@ -343,25 +343,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-modal-form {
-	display: grid;
-	gap: var(--space-4);
-	padding: var(--space-5);
-}
-
-.page-modal-form__header {
-	display: grid;
-	gap: var(--space-2);
-}
-
-.page-modal-form__title {
-	margin: 0;
-	color: var(--text-strong);
-	font-size: 1.25rem;
-	font-weight: 700;
-	letter-spacing: -0.02em;
-}
-
 .instances-list__name-cell,
 .instances-list__source-cell,
 .instances-list__status-cell {

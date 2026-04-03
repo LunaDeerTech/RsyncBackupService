@@ -7,9 +7,11 @@ import { listSSHKeys } from "../api/sshKeys"
 import type { SSHKeySummary, StorageTargetPayload, StorageTargetSummary } from "../api/types"
 import AppButton from "../components/ui/AppButton.vue"
 import AppCard from "../components/ui/AppCard.vue"
+import AppDialog from "../components/ui/AppDialog.vue"
 import AppEmpty from "../components/ui/AppEmpty.vue"
 import AppFormField from "../components/ui/AppFormField.vue"
 import AppInput from "../components/ui/AppInput.vue"
+import AppModal from "../components/ui/AppModal.vue"
 import AppNotification from "../components/ui/AppNotification.vue"
 import AppSelect from "../components/ui/AppSelect.vue"
 import AppTable from "../components/ui/AppTable.vue"
@@ -27,8 +29,16 @@ const sshKeys = ref<SSHKeySummary[]>([])
 const errorMessage = ref("")
 const successMessage = ref("")
 const formError = ref("")
-const testingId = ref<number | null>(null)
+const modalOpen = ref(false)
+const deleteDialogOpen = ref(false)
+const deleteTargetId = ref<number | null>(null)
+const deleteTargetName = ref("")
+const testModalOpen = ref(false)
+const testTarget = ref<StorageTargetSummary | null>(null)
 const isSubmitting = ref(false)
+const isTesting = ref(false)
+const formModalTitleId = "storage-targets-form-modal-title"
+const testModalTitleId = "storage-targets-test-modal-title"
 
 const form = reactive({
 	id: "",
@@ -54,6 +64,14 @@ const sshKeyOptions = computed(() => [
 ])
 
 const isRemoteTarget = computed(() => form.type.endsWith("_ssh"))
+const testTargetConnection = computed(() => {
+	if (!testTarget.value?.host) {
+		return "本地目标"
+	}
+
+	const userPrefix = testTarget.value.user ? `${testTarget.value.user}@` : ""
+    return `${userPrefix}${testTarget.value.host}:${testTarget.value.port}`
+})
 
 const groupedTargets = computed<TargetGroup[]>(() => [
 	{
@@ -80,7 +98,12 @@ function resetForm(): void {
 	formError.value = ""
 }
 
-function editTarget(target: StorageTargetSummary): void {
+function openCreateModal(): void {
+	resetForm()
+	modalOpen.value = true
+}
+
+function openEditModal(target: StorageTargetSummary): void {
 	form.id = String(target.id)
 	form.name = target.name
 	form.type = target.type
@@ -90,20 +113,59 @@ function editTarget(target: StorageTargetSummary): void {
 	form.sshKeyId = target.ssh_key_id ? String(target.ssh_key_id) : ""
 	form.basePath = target.base_path
 	formError.value = ""
-	window.scrollTo({ top: 0, behavior: "smooth" })
+	modalOpen.value = true
+}
+
+function closeModal(): void {
+	if (isSubmitting.value) {
+		return
+	}
+
+	modalOpen.value = false
+}
+
+function openDeleteDialog(target: StorageTargetSummary): void {
+	deleteTargetId.value = target.id
+	deleteTargetName.value = target.name
+	deleteDialogOpen.value = true
+}
+
+function closeDeleteDialog(): void {
+	deleteDialogOpen.value = false
+	deleteTargetId.value = null
+	deleteTargetName.value = ""
+}
+
+function openTestModal(target: StorageTargetSummary): void {
+	testTarget.value = target
+	testModalOpen.value = true
+}
+
+function closeTestModal(): void {
+	if (isTesting.value) {
+		return
+	}
+
+	testModalOpen.value = false
+	testTarget.value = null
 }
 
 function buildPayload(): StorageTargetPayload {
-	return {
+	const payload: StorageTargetPayload = {
 		name: form.name.trim(),
 		type: form.type,
-		host: isRemoteTarget.value ? form.host.trim() : undefined,
-		port: isRemoteTarget.value ? Number.parseInt(form.port, 10) || 22 : undefined,
-		user: isRemoteTarget.value ? form.user.trim() : undefined,
-		ssh_key_id: isRemoteTarget.value && form.sshKeyId !== "" ? Number.parseInt(form.sshKeyId, 10) : null,
 		base_path: form.basePath.trim(),
 	}
-}
+
+	if (isRemoteTarget.value) {
+		payload.host = form.host.trim()
+		payload.port = Number.parseInt(form.port, 10) || 22
+		payload.user = form.user.trim()
+		payload.ssh_key_id = form.sshKeyId !== "" ? Number.parseInt(form.sshKeyId, 10) : null
+	}
+
+	return payload
+	}
 
 async function loadData(): Promise<void> {
 	errorMessage.value = ""
@@ -115,7 +177,7 @@ async function loadData(): Promise<void> {
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "加载存储目标失败。"
 	}
-}
+	}
 
 async function submitForm(): Promise<void> {
 	formError.value = ""
@@ -131,6 +193,7 @@ async function submitForm(): Promise<void> {
 			successMessage.value = "存储目标已更新。"
 		}
 
+		modalOpen.value = false
 		resetForm()
 		await loadData()
 	} catch (error) {
@@ -138,35 +201,46 @@ async function submitForm(): Promise<void> {
 	} finally {
 		isSubmitting.value = false
 	}
-}
+	}
 
-async function handleTest(targetId: number): Promise<void> {
-	testingId.value = targetId
+async function confirmTest(): Promise<void> {
+	if (!testTarget.value) {
+		return
+	}
+
 	errorMessage.value = ""
 	successMessage.value = ""
+	isTesting.value = true
 
 	try {
-		await testStorageTarget(targetId)
-		successMessage.value = `存储目标 ${targetId} 连通性测试成功。`
+		await testStorageTarget(testTarget.value.id)
+		successMessage.value = `存储目标「${testTarget.value.name}」连通性测试成功。`
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "存储目标测试失败。"
 	} finally {
-		testingId.value = null
+		isTesting.value = false
+		closeTestModal()
 	}
-}
+	}
 
-async function handleDelete(targetId: number): Promise<void> {
+async function confirmDelete(): Promise<void> {
+	if (deleteTargetId.value === null) {
+		return
+	}
+
 	errorMessage.value = ""
 	successMessage.value = ""
 
 	try {
-		await deleteStorageTarget(targetId)
-		successMessage.value = `存储目标 ${targetId} 已删除。`
+		await deleteStorageTarget(deleteTargetId.value)
+		successMessage.value = `存储目标「${deleteTargetName.value}」已删除。`
+		closeDeleteDialog()
 		await loadData()
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "删除存储目标失败。"
+		closeDeleteDialog()
 	}
-}
+	}
 
 onMounted(() => {
 	void loadData()
@@ -176,48 +250,65 @@ onMounted(() => {
 <template>
 	<section class="page-view">
 		<div class="page-action-row">
-			<AppButton variant="secondary" @click="resetForm">新建目标</AppButton>
+			<AppButton @click="openCreateModal">新建目标</AppButton>
 		</div>
 
 		<AppNotification v-if="errorMessage" title="存储目标操作失败" tone="danger" :description="errorMessage" />
-		<AppNotification v-if="successMessage" title="存储目标已更新" tone="success" :description="successMessage" />
+		<AppNotification v-if="successMessage" title="存储目标操作成功" tone="success" :description="successMessage" />
 
-		<section class="page-two-column">
-			<div class="page-stack">
-				<AppCard v-for="group in groupedTargets" :key="group.title" :title="group.title" :description="group.description">
-					<AppTable
-						:rows="group.items"
-						:columns="[
-							{ key: 'name', label: '名称' },
-							{ key: 'type', label: '类型' },
-							{ key: 'base_path', label: '基础路径' },
-							{ key: 'updated_at', label: '更新时间' },
-							{ key: 'actions', label: '操作' },
-						]"
-						row-key="id"
-					>
-						<template #cell-type="{ row }">
-							<div class="page-stack">
-								<AppTag :tone="row.type.endsWith('_ssh') ? 'info' : 'default'">{{ row.type }}</AppTag>
-								<span v-if="row.host" class="page-muted">{{ row.user }}@{{ row.host }}:{{ row.port }}</span>
-							</div>
-						</template>
-						<template #cell-updated_at="{ value }">
-							<span>{{ formatDateTime(String(value)) }}</span>
-						</template>
-						<template #cell-actions="{ row }">
-							<div class="page-action-row--wrap">
-								<AppButton size="sm" variant="secondary" @click="editTarget(row)">编辑</AppButton>
-								<AppButton size="sm" variant="ghost" :loading="testingId === row.id" @click="handleTest(row.id)">测试</AppButton>
-								<AppButton size="sm" variant="ghost" @click="handleDelete(row.id)">删除</AppButton>
-							</div>
-						</template>
-					</AppTable>
-					<AppEmpty v-if="group.items.length === 0" title="当前没有目标" compact />
-				</AppCard>
-			</div>
+		<div class="page-stack">
+			<AppCard v-for="group in groupedTargets" :key="group.title" :title="group.title" :description="group.description">
+				<AppTable
+					v-if="group.items.length > 0"
+					:rows="group.items"
+					:columns="[
+						{ key: 'name', label: '名称' },
+						{ key: 'type', label: '类型' },
+						{ key: 'base_path', label: '基础路径' },
+						{ key: 'updated_at', label: '更新时间' },
+						{ key: 'actions', label: '操作' },
+					]"
+					row-key="id"
+				>
+					<template #cell-type="{ row }">
+						<div class="page-stack">
+							<AppTag :tone="row.type.endsWith('_ssh') ? 'info' : 'default'">{{ row.type }}</AppTag>
+							<span v-if="row.host" class="page-muted">{{ row.user }}@{{ row.host }}:{{ row.port }}</span>
+						</div>
+					</template>
+					<template #cell-updated_at="{ value }">
+						<span>{{ formatDateTime(String(value)) }}</span>
+					</template>
+					<template #cell-actions="{ row }">
+						<div class="page-action-row--wrap">
+							<AppButton size="sm" variant="secondary" @click="openEditModal(row)">编辑</AppButton>
+							<AppButton size="sm" variant="ghost" @click="openTestModal(row)">测试</AppButton>
+							<AppButton size="sm" variant="ghost" @click="openDeleteDialog(row)">删除</AppButton>
+						</div>
+					</template>
+				</AppTable>
+				<AppEmpty
+					v-else
+					title="当前没有目标"
+					description="点击上方「新建目标」按钮添加存储目标。"
+					compact
+				/>
+			</AppCard>
+		</div>
 
-			<AppCard :title="form.id === '' ? '新建存储目标' : '编辑存储目标'" description="本地目标只需基础路径，SSH 目标还需要连接信息。">
+		<AppModal
+			:open="modalOpen"
+			:close-on-overlay="!isSubmitting"
+			labelled-by="storage-targets-form-modal-title"
+			width="34rem"
+			@close="closeModal"
+		>
+			<section class="page-modal-form">
+				<header class="page-modal-form__header">
+					<h2 :id="formModalTitleId" class="page-modal-form__title">{{ form.id === '' ? '新建存储目标' : '编辑存储目标' }}</h2>
+					<p class="page-muted">本地目标只需基础路径，SSH 目标还需要连接信息。</p>
+				</header>
+
 				<form class="page-stack" @submit.prevent="submitForm">
 					<div class="page-form-grid">
 						<AppFormField label="名称" required>
@@ -259,10 +350,56 @@ onMounted(() => {
 
 					<div class="page-action-row--wrap">
 						<AppButton type="submit" :loading="isSubmitting">{{ form.id === '' ? '创建目标' : '保存修改' }}</AppButton>
-						<AppButton type="button" variant="ghost" @click="resetForm">重置</AppButton>
+						<AppButton type="button" variant="ghost" @click="closeModal">取消</AppButton>
 					</div>
 				</form>
-			</AppCard>
-		</section>
+			</section>
+		</AppModal>
+
+		<AppModal
+			:open="testModalOpen"
+			:close-on-overlay="!isTesting"
+			labelled-by="storage-targets-test-modal-title"
+			width="30rem"
+			@close="closeTestModal"
+		>
+			<section class="page-modal-form">
+				<header class="page-modal-form__header">
+					<h2 :id="testModalTitleId" class="page-modal-form__title">测试存储目标连通性</h2>
+					<p class="page-muted">将对存储目标「{{ testTarget?.name ?? '' }}」执行一次即时连通性检查。</p>
+				</header>
+
+				<div class="page-stack">
+					<dl class="page-detail-list">
+						<div>
+							<dt>目标类型</dt>
+							<dd>{{ testTarget?.type ?? '—' }}</dd>
+						</div>
+						<div>
+							<dt>基础路径</dt>
+							<dd class="page-mono">{{ testTarget?.base_path ?? '—' }}</dd>
+						</div>
+						<div v-if="testTarget?.host">
+							<dt>远程连接</dt>
+							<dd>{{ testTargetConnection }}</dd>
+						</div>
+					</dl>
+
+					<div class="page-action-row--wrap">
+						<AppButton :loading="isTesting" @click="confirmTest">开始测试</AppButton>
+						<AppButton variant="ghost" @click="closeTestModal">取消</AppButton>
+					</div>
+				</div>
+			</section>
+		</AppModal>
+
+		<AppDialog :open="deleteDialogOpen" title="确认删除存储目标" tone="danger" @close="closeDeleteDialog">
+			<p>即将删除存储目标「{{ deleteTargetName }}」。若该目标仍被策略引用或已经存在备份记录，系统会拒绝删除。</p>
+
+			<template #actions>
+				<AppButton variant="ghost" @click="closeDeleteDialog">取消</AppButton>
+				<AppButton variant="danger" @click="confirmDelete">确认删除</AppButton>
+			</template>
+		</AppDialog>
 	</section>
 </template>

@@ -201,6 +201,7 @@ function onTriggerKeydown(event: KeyboardEvent): void {
 
 	if (event.key === "Escape" && open.value) {
 		event.preventDefault()
+		event.stopPropagation()
 		closeList()
 		return
 	}

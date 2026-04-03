@@ -19,4 +19,21 @@ describe("AppModal", () => {
 			width: "min(100%, 32rem)",
 		})
 	})
+
+	it("constrains tall content with a scrollable panel", () => {
+		render(AppModal, {
+			props: {
+				open: true,
+				labelledBy: "modal-title",
+			},
+			slots: {
+				default: '<h2 id="modal-title">长表单</h2>',
+			},
+		})
+
+		expect(screen.getByRole("dialog", { name: "长表单" })).toHaveStyle({
+			maxHeight: "min(calc(100dvh - 2rem), 100%)",
+			overflow: "auto",
+		})
+	})
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 
 import { cycleFocus, focusFirstElement } from "./focus"
 
@@ -25,6 +25,11 @@ const emit = defineEmits<{
 }>()
 
 const panelRef = ref<HTMLElement | null>(null)
+const panelStyle = computed(() => ({
+	width: `min(100%, ${props.width})`,
+	maxHeight: "min(calc(100dvh - 2rem), 100%)",
+	overflow: "auto",
+}))
 let previousFocusedElement: HTMLElement | null = null
 
 async function focusPanel(): Promise<void> {
@@ -109,7 +114,7 @@ onBeforeUnmount(() => {
 			:data-tone="tone"
 			:aria-labelledby="labelledBy"
 			:aria-describedby="describedBy"
-			:style="{ width: `min(100%, ${width})` }"
+			:style="panelStyle"
 			tabindex="-1"
 		>
 			<slot />
