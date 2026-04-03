@@ -257,6 +257,118 @@ describe("InstancesListView", () => {
 		})
 	})
 
+	it("omits ssh-specific fields when creating a local instance", async () => {
+		vi.mocked(createInstance).mockResolvedValue({
+			id: 3,
+			name: "logs-01",
+			source_type: "local",
+			source_port: 0,
+			source_path: "/srv/logs",
+			exclude_patterns: [],
+			enabled: true,
+			created_by: 1,
+			created_at: "Wed, 02 Apr 2026 10:10:00 GMT",
+			updated_at: "Wed, 02 Apr 2026 10:10:00 GMT",
+		})
+		vi.mocked(listInstances).mockResolvedValueOnce([
+			{
+				id: 1,
+				name: "web-01",
+				source_type: "remote",
+				source_host: "192.0.2.10",
+				source_port: 22,
+				source_user: "backup",
+				source_ssh_key_id: 2,
+				source_path: "/srv/www",
+				exclude_patterns: ["node_modules"],
+				enabled: true,
+				created_by: 1,
+				created_at: "Wed, 02 Apr 2026 08:00:00 GMT",
+				updated_at: "Wed, 02 Apr 2026 08:30:00 GMT",
+				strategy_count: 2,
+				last_backup_status: "success",
+				last_backup_at: "Wed, 02 Apr 2026 09:00:00 GMT",
+				relay_mode: true,
+				relay_mode_uncertain: false,
+			},
+		])
+		vi.mocked(listInstances).mockResolvedValueOnce([
+			{
+				id: 1,
+				name: "web-01",
+				source_type: "remote",
+				source_host: "192.0.2.10",
+				source_port: 22,
+				source_user: "backup",
+				source_ssh_key_id: 2,
+				source_path: "/srv/www",
+				exclude_patterns: ["node_modules"],
+				enabled: true,
+				created_by: 1,
+				created_at: "Wed, 02 Apr 2026 08:00:00 GMT",
+				updated_at: "Wed, 02 Apr 2026 08:30:00 GMT",
+				strategy_count: 2,
+				last_backup_status: "success",
+				last_backup_at: "Wed, 02 Apr 2026 09:00:00 GMT",
+				relay_mode: true,
+				relay_mode_uncertain: false,
+			},
+			{
+				id: 3,
+				name: "logs-01",
+				source_type: "local",
+				source_port: 0,
+				source_path: "/srv/logs",
+				exclude_patterns: [],
+				enabled: true,
+				created_by: 1,
+				created_at: "Wed, 02 Apr 2026 10:10:00 GMT",
+				updated_at: "Wed, 02 Apr 2026 10:10:00 GMT",
+				strategy_count: 0,
+				last_backup_status: undefined,
+				last_backup_at: null,
+				relay_mode: false,
+				relay_mode_uncertain: false,
+			},
+		])
+
+		const router = createRouter()
+		await router.push("/instances")
+		await router.isReady()
+
+		render(InstancesListView, {
+			global: {
+				plugins: [router],
+			},
+		})
+
+		await waitFor(() => {
+			expect(screen.getByText("web-01")).toBeInTheDocument()
+		})
+
+		await fireEvent.click(screen.getByRole("button", { name: "新建实例" }))
+		await fireEvent.update(screen.getByLabelText("名称"), "logs-01")
+		await fireEvent.update(screen.getByLabelText("源路径"), "/srv/logs")
+		await fireEvent.click(screen.getByRole("button", { name: "创建实例" }))
+
+		await waitFor(() => {
+			expect(createInstance).toHaveBeenCalledTimes(1)
+		})
+
+		const payload = vi.mocked(createInstance).mock.calls[0]?.[0]
+
+		expect(payload).toMatchObject({
+			name: "logs-01",
+			source_type: "local",
+			source_path: "/srv/logs",
+			enabled: true,
+		})
+		expect(payload).not.toHaveProperty("source_host")
+		expect(payload).not.toHaveProperty("source_user")
+		expect(payload).not.toHaveProperty("source_ssh_key_id")
+		expect(payload).not.toHaveProperty("source_port")
+	})
+
 	it("keeps the create modal open while submitting", async () => {
 		let resolveCreate: ((value: Awaited<ReturnType<typeof createInstance>>) => void) | undefined
 		const createPromise = new Promise<Awaited<ReturnType<typeof createInstance>>>((resolve) => {

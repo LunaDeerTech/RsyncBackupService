@@ -113,20 +113,22 @@ function closeModal(): void {
 }
 
 function buildPayload(): CreateInstancePayload | UpdateInstancePayload {
-	return {
+	const payload: CreateInstancePayload | UpdateInstancePayload = {
 		name: form.name.trim(),
 		source_type: form.sourceType,
-		source_host: form.sourceType === "remote" ? form.sourceHost.trim() : undefined,
-		source_port: Number.parseInt(form.sourcePort, 10) || 22,
-		source_user: form.sourceType === "remote" ? form.sourceUser.trim() : undefined,
-		source_ssh_key_id:
-			form.sourceType === "remote" && form.sourceSSHKeyID !== ""
-				? Number.parseInt(form.sourceSSHKeyID, 10)
-				: null,
 		source_path: form.sourcePath.trim(),
 		exclude_patterns: splitLines(form.excludePatterns),
 		enabled: form.enabled,
 	}
+
+	if (form.sourceType === "remote") {
+		payload.source_host = form.sourceHost.trim()
+		payload.source_port = Number.parseInt(form.sourcePort, 10) || 22
+		payload.source_user = form.sourceUser.trim()
+		payload.source_ssh_key_id = form.sourceSSHKeyID !== "" ? Number.parseInt(form.sourceSSHKeyID, 10) : null
+	}
+
+	return payload
 }
 
 async function loadData(): Promise<void> {
