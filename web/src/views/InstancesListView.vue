@@ -167,13 +167,9 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
-				<h1 class="page-header__title">备份实例</h1>
-				<p class="page-header__subtitle">管理源路径、源主机和实例级恢复入口。</p>
-			</div>
+		<div class="page-action-row">
 			<AppButton variant="secondary" @click="resetForm">新建实例</AppButton>
-		</header>
+		</div>
 
 		<AppNotification v-if="errorMessage" title="实例列表加载失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="实例已保存" tone="success" :description="successMessage" />

@@ -2,6 +2,8 @@ import { render, screen, within } from "@testing-library/vue"
 
 import App from "../App.vue"
 import { getCurrentUser } from "../api/auth"
+import { listSSHKeys } from "../api/sshKeys"
+import { listStorageTargets } from "../api/storageTargets"
 import { createRouter } from "../router"
 import { useAuthStore } from "../stores/auth"
 import { useUiStore, THEME_STORAGE_KEY } from "../stores/ui"
@@ -11,6 +13,21 @@ vi.mock("../api/auth", () => ({
 	getCurrentUser: vi.fn(),
 	verifyPassword: vi.fn(),
 	changePassword: vi.fn(),
+}))
+
+vi.mock("../api/storageTargets", () => ({
+	listStorageTargets: vi.fn(),
+	createStorageTarget: vi.fn(),
+	updateStorageTarget: vi.fn(),
+	deleteStorageTarget: vi.fn(),
+	testStorageTarget: vi.fn(),
+}))
+
+vi.mock("../api/sshKeys", () => ({
+	listSSHKeys: vi.fn(),
+	createSSHKey: vi.fn(),
+	deleteSSHKey: vi.fn(),
+	testSSHKey: vi.fn(),
 }))
 
 describe("AppShell", () => {
@@ -38,6 +55,10 @@ describe("AppShell", () => {
 		useUiStore().setTheme("light")
 		vi.mocked(getCurrentUser).mockReset()
 		vi.mocked(getCurrentUser).mockResolvedValue(adminUser)
+		vi.mocked(listStorageTargets).mockReset()
+		vi.mocked(listStorageTargets).mockResolvedValue([])
+		vi.mocked(listSSHKeys).mockReset()
+		vi.mocked(listSSHKeys).mockResolvedValue([])
 	})
 
 	it("redirects anonymous users to /login", async () => {
@@ -95,6 +116,30 @@ describe("AppShell", () => {
 		expect(within(banner as HTMLElement).queryByRole("button")).not.toBeInTheDocument()
 	})
 
+	it("shows only one dashboard title and description after the shell takeover", async () => {
+		const auth = useAuthStore()
+
+		auth.setSession({
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+		})
+		auth.setCurrentUser(adminUser)
+
+		const router = createRouter()
+		await router.push("/")
+		await router.isReady()
+
+		render(App, {
+			global: {
+				plugins: [router],
+			},
+		})
+
+		expect(screen.getAllByRole("heading", { name: "运维仪表盘" })).toHaveLength(1)
+		expect(screen.getAllByText("查看全局统计、运行中任务、最近备份与存储容量。")).toHaveLength(1)
+		expect(screen.getByRole("button", { name: "刷新概览" })).toBeInTheDocument()
+	})
+
 	it("redirects non-admin users away from the admin dashboard", async () => {
 		const auth = useAuthStore()
 
@@ -141,6 +186,29 @@ describe("AppShell", () => {
 		expect(screen.getByText("viewer").closest("a")).toHaveAttribute("href", "/profile")
 	})
 
+	it("shows only one instances title and description for non-admin users", async () => {
+		const auth = useAuthStore()
+
+		auth.setSession({
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+		})
+		auth.setCurrentUser(viewerUser)
+
+		const router = createRouter()
+		await router.push("/instances")
+		await router.isReady()
+
+		render(App, {
+			global: {
+				plugins: [router],
+			},
+		})
+
+		expect(screen.getAllByRole("heading", { name: "备份实例" })).toHaveLength(1)
+		expect(screen.getAllByText("管理源路径、源主机和实例级恢复入口。")).toHaveLength(1)
+	})
+
 	it("renders the system admin placeholder route for administrators", async () => {
 		const auth = useAuthStore()
 
@@ -164,7 +232,33 @@ describe("AppShell", () => {
 		expect(screen.getByRole("tab", { name: "SSH 密钥" })).toBeInTheDocument()
 		expect(screen.getByRole("tab", { name: "通知渠道" })).toBeInTheDocument()
 		expect(screen.getByRole("tab", { name: "审计日志" })).toBeInTheDocument()
+		expect(screen.getAllByRole("heading", { name: "系统管理" })).toHaveLength(1)
+		expect(screen.getAllByText("用户管理、SSH 密钥、通知渠道与审计日志。")).toHaveLength(1)
 		expect(screen.getByText("users — 此标签页内容将在后续阶段实现。")).toBeInTheDocument()
+	})
+
+	it("shows only one storage-targets title and keeps the create action visible", async () => {
+		const auth = useAuthStore()
+
+		auth.setSession({
+			accessToken: "access-token",
+			refreshToken: "refresh-token",
+		})
+		auth.setCurrentUser(adminUser)
+
+		const router = createRouter()
+		await router.push("/storage-targets")
+		await router.isReady()
+
+		render(App, {
+			global: {
+				plugins: [router],
+			},
+		})
+
+		expect(screen.getAllByRole("heading", { name: "存储目标" })).toHaveLength(1)
+		expect(screen.getAllByText("按备份类型管理目标路径，并执行连通性测试。")).toHaveLength(1)
+		expect(screen.getByRole("button", { name: "新建目标" })).toBeInTheDocument()
 	})
 
 	it("renders the profile placeholder route for authenticated users", async () => {
@@ -186,6 +280,8 @@ describe("AppShell", () => {
 			},
 		})
 
+		expect(screen.getAllByRole("heading", { name: "个人信息" })).toHaveLength(1)
+		expect(screen.getAllByText("查看会话信息和修改密码。")).toHaveLength(1)
 		expect(screen.getByText("当前会话")).toBeInTheDocument()
 		expect(screen.getByText("用户名：viewer")).toBeInTheDocument()
 		expect(screen.getByText("角色：普通用户")).toBeInTheDocument()

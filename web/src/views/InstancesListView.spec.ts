@@ -61,7 +61,7 @@ describe("InstancesListView", () => {
 			expect(screen.getByText("web-01")).toBeInTheDocument()
 		})
 
-		expect(screen.getByRole("heading", { name: "备份实例" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "新建实例" })).toBeInTheDocument()
 		expect(screen.getByText(/192\.0\.2\.10:\/srv\/www/)).toBeInTheDocument()
 		expect(screen.getByText("2 条策略")).toBeInTheDocument()
 		expect(screen.getAllByText("中继模式").length).toBeGreaterThan(0)

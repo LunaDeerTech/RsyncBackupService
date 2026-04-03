@@ -123,13 +123,9 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
-				<h1 class="page-header__title">运维仪表盘</h1>
-				<p class="page-header__subtitle">查看全局统计、运行中任务、最近备份与存储容量。</p>
-			</div>
+		<div class="page-action-row">
 			<AppButton variant="secondary" @click="loadDashboard">刷新概览</AppButton>
-		</header>
+		</div>
 
 		<AppNotification v-if="errorMessage" title="仪表盘加载失败" tone="danger" :description="errorMessage" />
 

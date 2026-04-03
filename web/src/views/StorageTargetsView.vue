@@ -175,13 +175,9 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
-				<h1 class="page-header__title">存储目标</h1>
-				<p class="page-header__subtitle">按备份类型管理目标路径，并执行连通性测试。</p>
-			</div>
+		<div class="page-action-row">
 			<AppButton variant="secondary" @click="resetForm">新建目标</AppButton>
-		</header>
+		</div>
 
 		<AppNotification v-if="errorMessage" title="存储目标操作失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="存储目标已更新" tone="success" :description="successMessage" />
