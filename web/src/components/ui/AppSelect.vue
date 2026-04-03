@@ -36,9 +36,14 @@ const field = useFormFieldContext()
 const baseId = useId()
 const rootRef = ref<HTMLElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
+const listboxRef = ref<HTMLElement | null>(null)
 const open = ref(false)
 const highlightedIndex = ref(-1)
 const listPlacement = ref<"top" | "bottom">("bottom")
+const listTop = ref(0)
+const listLeft = ref(0)
+const listWidth = ref(0)
+const listMaxHeight = ref(256)
 
 watchSyncEffect(() => {
 	field?.setControlId(typeof attrs.id === "string" ? attrs.id : undefined)
@@ -68,6 +73,15 @@ const activeOptionId = computed(() => {
 
 	return `select-option-${baseId}-${props.options[highlightedIndex.value]?.value}`
 })
+const listboxStyle = computed(() => ({
+	top: `${listTop.value}px`,
+	left: `${listLeft.value}px`,
+	width: `${listWidth.value}px`,
+	maxHeight: `${listMaxHeight.value}px`,
+	boxSizing: "border-box",
+	overflowX: "hidden",
+	overflowY: "auto",
+}))
 
 function findEnabledIndex(startIndex: number, direction: 1 | -1): number {
 	const total = props.options.length
@@ -100,18 +114,33 @@ function syncHighlightedIndex(preferLast = false): void {
 	highlightedIndex.value = preferLast ? props.options.length - 1 - candidateIndex : candidateIndex
 }
 
-function syncListPlacement(): void {
-	if (!triggerRef.value) {
-		listPlacement.value = "bottom"
+async function syncListPosition(): Promise<void> {
+	await nextTick()
+
+	if (!triggerRef.value || !listboxRef.value) {
 		return
 	}
 
-	const rect = triggerRef.value.getBoundingClientRect()
-	const estimatedHeight = Math.min(Math.max(props.options.length, 1), 6) * 44 + 20
-	const spaceBelow = window.innerHeight - rect.bottom
-	const spaceAbove = rect.top
+	const viewportMargin = 12
+	const triggerRect = triggerRef.value.getBoundingClientRect()
+	const naturalHeight = listboxRef.value.scrollHeight || Math.min(Math.max(props.options.length, 1), 6) * 44 + 20
+	const spaceBelow = Math.max(window.innerHeight - triggerRect.bottom - viewportMargin, 0)
+	const spaceAbove = Math.max(triggerRect.top - viewportMargin, 0)
 
-	listPlacement.value = spaceBelow < estimatedHeight && spaceAbove > spaceBelow ? "top" : "bottom"
+	listPlacement.value = spaceBelow < naturalHeight && spaceAbove > spaceBelow ? "top" : "bottom"
+
+	const availableHeight = Math.max(listPlacement.value === "top" ? spaceAbove : spaceBelow, 96)
+	const renderedHeight = Math.min(Math.max(naturalHeight, 96), availableHeight)
+
+	listLeft.value = Math.max(
+		viewportMargin,
+		Math.min(triggerRect.left, window.innerWidth - triggerRect.width - viewportMargin),
+	)
+	listTop.value = listPlacement.value === "top"
+		? Math.max(viewportMargin, triggerRect.top - renderedHeight - 8)
+		: Math.min(triggerRect.bottom + 8, window.innerHeight - renderedHeight - viewportMargin)
+	listWidth.value = triggerRect.width
+	listMaxHeight.value = availableHeight
 }
 
 function openList(preferLast = false): void {
@@ -119,9 +148,9 @@ function openList(preferLast = false): void {
 		return
 	}
 
-	syncListPlacement()
 	open.value = true
 	syncHighlightedIndex(preferLast)
+	void syncListPosition()
 }
 
 function closeList(): void {
@@ -228,18 +257,21 @@ function onTriggerKeydown(event: KeyboardEvent): void {
 }
 
 function onClickOutside(event: MouseEvent): void {
-	if (!rootRef.value || !(event.target instanceof Node)) {
+	if (!(event.target instanceof Node)) {
 		return
 	}
 
-	if (!rootRef.value.contains(event.target)) {
+	const clickedTrigger = rootRef.value?.contains(event.target) ?? false
+	const clickedListbox = listboxRef.value?.contains(event.target) ?? false
+
+	if (!clickedTrigger && !clickedListbox) {
 		closeList()
 	}
 }
 
 function onViewportChange(): void {
 	if (open.value) {
-		syncListPlacement()
+		void syncListPosition()
 	}
 }
 
@@ -283,33 +315,37 @@ onBeforeUnmount(() => {
 			<span class="app-select__chevron" aria-hidden="true">⌄</span>
 		</button>
 
-		<div
-			v-if="open"
-			:id="listboxId"
-			class="app-select__listbox"
-			role="listbox"
-			:aria-labelledby="controlId"
-			:data-placement="listPlacement"
-		>
-			<button
-				v-for="(option, index) in options"
-				:id="`select-option-${baseId}-${option.value}`"
-				:key="option.value"
-				type="button"
-				class="app-select__option"
-				role="option"
-					tabindex="-1"
-				:data-active="highlightedIndex === index ? 'true' : 'false'"
-				:aria-selected="modelValue === option.value ? 'true' : 'false'"
-				:disabled="option.disabled"
-					@mousedown.prevent
-				@click="selectValue(option)"
-				@mouseenter="highlightedIndex = option.disabled ? highlightedIndex : index"
+		<Teleport to="body">
+			<div
+				v-if="open"
+				:id="listboxId"
+				ref="listboxRef"
+				class="app-select__listbox"
+				role="listbox"
+				:aria-labelledby="controlId"
+				:data-placement="listPlacement"
+				:style="listboxStyle"
 			>
-				<span>{{ option.label }}</span>
-				<span v-if="modelValue === option.value" class="app-select__check" aria-hidden="true">✓</span>
-			</button>
-		</div>
+				<button
+					v-for="(option, index) in options"
+					:id="`select-option-${baseId}-${option.value}`"
+					:key="option.value"
+					type="button"
+					class="app-select__option"
+					role="option"
+					tabindex="-1"
+					:data-active="highlightedIndex === index ? 'true' : 'false'"
+					:aria-selected="modelValue === option.value ? 'true' : 'false'"
+					:disabled="option.disabled"
+					@mousedown.prevent
+					@click="selectValue(option)"
+					@mouseenter="highlightedIndex = option.disabled ? highlightedIndex : index"
+				>
+					<span>{{ option.label }}</span>
+					<span v-if="modelValue === option.value" class="app-select__check" aria-hidden="true">✓</span>
+				</button>
+			</div>
+		</Teleport>
 	</div>
 </template>
 
@@ -389,21 +425,20 @@ onBeforeUnmount(() => {
 }
 
 .app-select__listbox {
-	position: absolute;
-	left: 0;
-	right: 0;
+	position: fixed;
 	display: grid;
 	gap: 0;
 	padding: 0.38rem;
-	max-height: min(16rem, calc(100vh - 2rem));
-	overflow: auto;
+	box-sizing: border-box;
+	overflow-x: hidden;
+	overflow-y: auto;
 	border: var(--border-width) solid color-mix(in srgb, var(--border-default) 90%, transparent);
 	border-radius: calc(var(--radius-card) - 2px);
 	background: color-mix(in srgb, var(--surface-panel) 96%, transparent);
 	box-shadow: var(--shadow-ambient);
 	backdrop-filter: blur(18px);
 	-webkit-backdrop-filter: blur(18px);
-	z-index: 20;
+	z-index: 60;
 	animation: select-panel-in var(--duration-fast) ease;
 }
 

@@ -90,7 +90,7 @@ async function handleLogout(): Promise<void> {
 			<p class="sidebar-nav__brand-subtitle">运维备份控制台</p>
 		</div>
 
-		<div class="sidebar-nav__groups">
+		<div class="sidebar-nav__groups" style="overflow-x: hidden">
 			<div v-for="group in visibleGroups" :key="group.label" class="sidebar-nav__group">
 				<p class="sidebar-nav__group-label">{{ group.label }}</p>
 				<div class="sidebar-nav__links">
@@ -172,6 +172,7 @@ async function handleLogout(): Promise<void> {
 	min-height: 0;
 	flex-direction: column;
 	gap: var(--space-5);
+	overflow-x: hidden;
 	overflow-y: auto;
 }
 
@@ -207,14 +208,12 @@ async function handleLogout(): Promise<void> {
 	color: var(--text-default);
 	text-decoration: none;
 	transition:
-		transform var(--duration-fast) ease,
 		background-color var(--duration-fast) ease,
 		border-color var(--duration-fast) ease,
 		color var(--duration-fast) ease;
 }
 
 .sidebar-nav__link:hover {
-	transform: translateX(2px);
 	background: var(--nav-link-bg-hover);
 	border-color: var(--border-default);
 	color: var(--text-strong);
