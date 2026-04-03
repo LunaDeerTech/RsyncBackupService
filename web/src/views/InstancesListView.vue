@@ -7,7 +7,6 @@ import { listSSHKeys } from "../api/sshKeys"
 import type { CreateInstancePayload, InstanceSummary, SSHKeySummary, UpdateInstancePayload } from "../api/types"
 import AppButton from "../components/ui/AppButton.vue"
 import AppCard from "../components/ui/AppCard.vue"
-import AppEmpty from "../components/ui/AppEmpty.vue"
 import AppFormField from "../components/ui/AppFormField.vue"
 import AppInput from "../components/ui/AppInput.vue"
 import AppModal from "../components/ui/AppModal.vue"
@@ -270,13 +269,6 @@ onMounted(() => {
 					</div>
 				</template>
 			</AppTable>
-
-			<AppEmpty
-				v-if="!isLoading && filteredInstances.length === 0"
-				title="当前没有实例"
-				description="点击上方「新建实例」按钮创建第一个备份实例。"
-				compact
-			/>
 		</AppCard>
 
 		<AppModal
