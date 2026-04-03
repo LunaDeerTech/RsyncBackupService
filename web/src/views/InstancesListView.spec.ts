@@ -66,7 +66,7 @@ describe("InstancesListView", () => {
 		await router.push("/instances")
 		await router.isReady()
 
-		render(InstancesListView, {
+		const { container } = render(InstancesListView, {
 			global: {
 				plugins: [router],
 			},
@@ -77,13 +77,20 @@ describe("InstancesListView", () => {
 			expect(screen.getByText("web-01")).toBeInTheDocument()
 		})
 
-		expect(screen.getByRole("button", { name: "新建实例" })).toBeInTheDocument()
+		const header = container.querySelector(".page-header.page-header--inset.page-header--shell-aligned")
+		const createButton = screen.getByRole("button", { name: "新建实例" })
+
+		expect(header).not.toBeNull()
+		expect(container.querySelector(".page-header__content")).not.toBeNull()
+		expect(screen.getByText("INSTANCES")).toBeInTheDocument()
+		expect(createButton.closest(".app-card__header")).not.toBeNull()
+		expect(createButton).toBeInTheDocument()
 		expect(screen.getByText(/192\.0\.2\.10:\/srv\/www/)).toBeInTheDocument()
 		expect(screen.getByText("2 条策略")).toBeInTheDocument()
 		expect(screen.getAllByText("中继模式").length).toBeGreaterThan(0)
 	})
 
-	it("opens and closes the create modal from the page header action", async () => {
+	it("opens and closes the create modal from the list card header action", async () => {
 		const router = createRouter()
 		await router.push("/instances")
 		await router.isReady()

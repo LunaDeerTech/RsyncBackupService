@@ -240,12 +240,15 @@ onMounted(async () => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">SETTINGS</p>
 				<h1 class="page-header__title">系统设置</h1>
 				<p class="page-header__subtitle">聚焦用户管理、密码修改和实例权限设置，不扩展额外系统管理功能。</p>
 			</div>
-			<AppButton variant="secondary" @click="loadBaseData">刷新设置</AppButton>
+			<div class="page-header__actions">
+				<AppButton variant="secondary" @click="loadBaseData">刷新设置</AppButton>
+			</div>
 		</header>
 
 		<AppNotification v-if="errorMessage" title="设置页面操作失败" tone="danger" :description="errorMessage" />

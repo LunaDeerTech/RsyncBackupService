@@ -137,12 +137,13 @@ watch(
 
 <template>
 	<section v-if="instance" class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">INSTANCE</p>
 				<h1 class="page-header__title">{{ instance.name }}</h1>
 				<p class="page-header__subtitle">{{ formatSource(instance.source_type, instance.source_path, instance.source_host) }}</p>
 			</div>
-			<div class="page-action-row--wrap">
+			<div class="page-header__actions">
 				<AppTag :tone="instance.enabled ? 'success' : 'warning'">{{ instance.enabled ? "已启用" : "已停用" }}</AppTag>
 				<AppButton variant="secondary" @click="loadDetail">刷新</AppButton>
 				<AppButton variant="ghost" @click="goBack">返回实例列表</AppButton>
@@ -174,8 +175,9 @@ watch(
 	</section>
 
 	<section v-else class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">INSTANCE</p>
 				<h1 class="page-header__title">实例详情</h1>
 				<p class="page-header__subtitle">载入实例、策略与恢复上下文。</p>
 			</div>

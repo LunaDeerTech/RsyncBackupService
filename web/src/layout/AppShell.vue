@@ -1,8 +1,9 @@
 <template>
 	<div class="app-shell" data-testid="app-shell">
-		<SidebarNav />
+		<aside class="app-shell__sidebar">
+			<SidebarNav />
+		</aside>
 		<div class="app-shell__body">
-			<TopBar />
 			<main class="app-shell__content">
 				<RouterView />
 			</main>
@@ -12,7 +13,6 @@
 
 <script setup lang="ts">
 import SidebarNav from "./SidebarNav.vue"
-import TopBar from "./TopBar.vue"
 </script>
 
 <style scoped>
@@ -20,8 +20,18 @@ import TopBar from "./TopBar.vue"
 	display: grid;
 	grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
 	min-height: 100vh;
+	min-height: 100dvh;
+	align-items: start;
 	gap: var(--space-4);
 	padding: var(--space-4);
+}
+
+.app-shell__sidebar {
+	position: sticky;
+	top: var(--space-4);
+	height: calc(100dvh - var(--space-8));
+	min-height: 0;
+	align-self: start;
 }
 
 .app-shell__body {
@@ -41,6 +51,12 @@ import TopBar from "./TopBar.vue"
 	.app-shell {
 		grid-template-columns: 1fr;
 		padding: var(--space-3);
+	}
+
+	.app-shell__sidebar {
+		position: static;
+		top: auto;
+		height: auto;
 	}
 }
 </style>

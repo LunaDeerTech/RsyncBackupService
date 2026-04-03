@@ -113,12 +113,15 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">SSH KEYS</p>
 				<h1 class="page-header__title">SSH 密钥</h1>
 				<p class="page-header__subtitle">登记可复用的密钥，并针对远程主机执行一次连接验证。</p>
 			</div>
-			<AppButton variant="secondary" @click="loadKeys">刷新</AppButton>
+			<div class="page-header__actions">
+				<AppButton variant="secondary" @click="loadKeys">刷新</AppButton>
+			</div>
 		</header>
 
 		<AppNotification v-if="errorMessage" title="SSH 密钥操作失败" tone="danger" :description="errorMessage" />

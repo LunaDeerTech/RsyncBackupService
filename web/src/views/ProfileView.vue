@@ -11,6 +11,14 @@ const isAdmin = computed(() => auth.currentUser?.is_admin === true)
 
 <template>
 	<section class="page-view">
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">PROFILE</p>
+				<h1 class="page-header__title">个人信息</h1>
+				<p class="page-header__subtitle">查看会话信息和修改密码。</p>
+			</div>
+		</header>
+
 		<AppCard title="当前会话" description="你的登录账户信息。">
 			<p>用户名：{{ username }}</p>
 			<p>角色：{{ isAdmin ? "管理员" : "普通用户" }}</p>

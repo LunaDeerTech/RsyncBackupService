@@ -18,9 +18,15 @@ import AppTable from "../components/ui/AppTable.vue"
 import AppTag from "../components/ui/AppTag.vue"
 import { formatDateTime } from "../utils/formatters"
 
+type TargetGroupKey = "rolling" | "cold"
+type StorageTargetType = "rolling_local" | "rolling_ssh" | "cold_local" | "cold_ssh"
+
 type TargetGroup = {
+	key: TargetGroupKey
 	title: string
 	description: string
+	createLabel: string
+	emptyDescription: string
 	items: StorageTargetSummary[]
 }
 
@@ -43,7 +49,7 @@ const testModalTitleId = "storage-targets-test-modal-title"
 const form = reactive({
 	id: "",
 	name: "",
-	type: "rolling_local",
+	type: "rolling_local" as StorageTargetType,
 	host: "",
 	port: "22",
 	user: "",
@@ -58,38 +64,75 @@ const typeOptions = [
 	{ value: "cold_ssh", label: "冷备份 / SSH" },
 ]
 
+const createTypeOptions: Record<TargetGroupKey, Array<{ value: StorageTargetType; label: string }>> = {
+	rolling: [
+		{ value: "rolling_local", label: "本地路径" },
+		{ value: "rolling_ssh", label: "SSH 主机" },
+	],
+	cold: [
+		{ value: "cold_local", label: "本地路径" },
+		{ value: "cold_ssh", label: "SSH 主机" },
+	],
+}
+
 const sshKeyOptions = computed(() => [
 	{ value: "", label: "选择 SSH 密钥" },
 	...sshKeys.value.map((item) => ({ value: String(item.id), label: `${item.name} · ${item.fingerprint}` })),
 ])
 
 const isRemoteTarget = computed(() => form.type.endsWith("_ssh"))
+const isCreatingTarget = computed(() => form.id === "")
+const currentFormGroup = computed<TargetGroupKey>(() => (form.type.startsWith("cold_") ? "cold" : "rolling"))
+const formTypeOptions = computed(() => (isCreatingTarget.value ? createTypeOptions[currentFormGroup.value] : typeOptions))
+const formTypeFieldLabel = computed(() => (isCreatingTarget.value ? "接入方式" : "目标类型"))
+const formModalTitle = computed(() => {
+	if (!isCreatingTarget.value) {
+		return "编辑存储目标"
+	}
+
+	return currentFormGroup.value === "cold" ? "新建冷备归档目标" : "新建滚动备份目标"
+})
+const formModalDescription = computed(() => {
+	if (!isCreatingTarget.value) {
+		return "本地目标只需基础路径，SSH 目标还需要连接信息。"
+	}
+
+	return currentFormGroup.value === "cold"
+		? "创建冷备归档目标，可选择本地路径或 SSH 主机作为接入方式。"
+		: "创建滚动备份目标，可选择本地路径或 SSH 主机作为接入方式。"
+})
 const testTargetConnection = computed(() => {
 	if (!testTarget.value?.host) {
 		return "本地目标"
 	}
 
 	const userPrefix = testTarget.value.user ? `${testTarget.value.user}@` : ""
-    return `${userPrefix}${testTarget.value.host}:${testTarget.value.port}`
+	return `${userPrefix}${testTarget.value.host}:${testTarget.value.port}`
 })
 
 const groupedTargets = computed<TargetGroup[]>(() => [
 	{
+		key: "rolling",
 		title: "滚动备份目标",
 		description: "用于 rsync 快照与 link-dest 增量路径。",
+		createLabel: "新建滚动备份目标",
+		emptyDescription: "点击右上角「新建滚动备份目标」按钮添加目标。",
 		items: targets.value.filter((item) => item.type.startsWith("rolling_")),
 	},
 	{
+		key: "cold",
 		title: "冷备归档目标",
 		description: "用于 tar 归档或分卷文件的上传与保留。",
+		createLabel: "新建冷备归档目标",
+		emptyDescription: "点击右上角「新建冷备归档目标」按钮添加目标。",
 		items: targets.value.filter((item) => item.type.startsWith("cold_")),
 	},
 ])
 
-function resetForm(): void {
+function resetForm(defaultType: StorageTargetType = "rolling_local"): void {
 	form.id = ""
 	form.name = ""
-	form.type = "rolling_local"
+	form.type = defaultType
 	form.host = ""
 	form.port = "22"
 	form.user = ""
@@ -98,8 +141,8 @@ function resetForm(): void {
 	formError.value = ""
 }
 
-function openCreateModal(): void {
-	resetForm()
+function openCreateModal(group: TargetGroupKey): void {
+	resetForm(group === "cold" ? "cold_local" : "rolling_local")
 	modalOpen.value = true
 }
 
@@ -165,7 +208,7 @@ function buildPayload(): StorageTargetPayload {
 	}
 
 	return payload
-	}
+}
 
 async function loadData(): Promise<void> {
 	errorMessage.value = ""
@@ -177,7 +220,7 @@ async function loadData(): Promise<void> {
 	} catch (error) {
 		errorMessage.value = error instanceof ApiError ? error.message : "加载存储目标失败。"
 	}
-	}
+}
 
 async function submitForm(): Promise<void> {
 	formError.value = ""
@@ -201,7 +244,7 @@ async function submitForm(): Promise<void> {
 	} finally {
 		isSubmitting.value = false
 	}
-	}
+}
 
 async function confirmTest(): Promise<void> {
 	if (!testTarget.value) {
@@ -221,7 +264,7 @@ async function confirmTest(): Promise<void> {
 		isTesting.value = false
 		closeTestModal()
 	}
-	}
+}
 
 async function confirmDelete(): Promise<void> {
 	if (deleteTargetId.value === null) {
@@ -240,7 +283,7 @@ async function confirmDelete(): Promise<void> {
 		errorMessage.value = error instanceof ApiError ? error.message : "删除存储目标失败。"
 		closeDeleteDialog()
 	}
-	}
+}
 
 onMounted(() => {
 	void loadData()
@@ -249,15 +292,29 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<div class="page-action-row">
-			<AppButton @click="openCreateModal">新建目标</AppButton>
-		</div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">STORAGE TARGETS</p>
+				<h1 class="page-header__title">存储目标</h1>
+				<p class="page-header__subtitle">按备份类型管理目标路径，并执行连通性测试。</p>
+			</div>
+		</header>
 
 		<AppNotification v-if="errorMessage" title="存储目标操作失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="存储目标操作成功" tone="success" :description="successMessage" />
 
 		<div class="page-stack">
-			<AppCard v-for="group in groupedTargets" :key="group.title" :title="group.title" :description="group.description">
+			<AppCard v-for="group in groupedTargets" :key="group.title">
+				<template #header>
+					<div class="storage-targets__card-header">
+						<div class="storage-targets__card-heading">
+							<h2 class="storage-targets__card-title">{{ group.title }}</h2>
+							<p class="storage-targets__card-description">{{ group.description }}</p>
+						</div>
+						<AppButton size="sm" @click="openCreateModal(group.key)">{{ group.createLabel }}</AppButton>
+					</div>
+				</template>
+
 				<AppTable
 					v-if="group.items.length > 0"
 					:rows="group.items"
@@ -290,7 +347,7 @@ onMounted(() => {
 				<AppEmpty
 					v-else
 					title="当前没有目标"
-					description="点击上方「新建目标」按钮添加存储目标。"
+					:description="group.emptyDescription"
 					compact
 				/>
 			</AppCard>
@@ -305,8 +362,8 @@ onMounted(() => {
 		>
 			<section class="page-modal-form">
 				<header class="page-modal-form__header">
-					<h2 :id="formModalTitleId" class="page-modal-form__title">{{ form.id === '' ? '新建存储目标' : '编辑存储目标' }}</h2>
-					<p class="page-muted">本地目标只需基础路径，SSH 目标还需要连接信息。</p>
+					<h2 :id="formModalTitleId" class="page-modal-form__title">{{ formModalTitle }}</h2>
+					<p class="page-muted">{{ formModalDescription }}</p>
 				</header>
 
 				<form class="page-stack" @submit.prevent="submitForm">
@@ -315,8 +372,8 @@ onMounted(() => {
 							<AppInput v-model="form.name" placeholder="archive-primary" />
 						</AppFormField>
 
-						<AppFormField label="目标类型" required>
-							<AppSelect v-model="form.type" :options="typeOptions" />
+						<AppFormField :label="formTypeFieldLabel" required>
+							<AppSelect v-model="form.type" :options="formTypeOptions" />
 						</AppFormField>
 
 						<AppFormField label="基础路径" required>
@@ -403,3 +460,36 @@ onMounted(() => {
 		</AppDialog>
 	</section>
 </template>
+
+<style scoped>
+.storage-targets__card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: var(--space-4);
+	flex-wrap: wrap;
+}
+
+.storage-targets__card-heading {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.storage-targets__card-title,
+.storage-targets__card-description {
+	margin: 0;
+}
+
+.storage-targets__card-title {
+	color: var(--text-strong);
+	font-size: 1.08rem;
+	line-height: 1.15;
+	letter-spacing: -0.03em;
+}
+
+.storage-targets__card-description {
+	color: var(--text-muted);
+	font-size: 0.92rem;
+	line-height: 1.6;
+}
+</style>

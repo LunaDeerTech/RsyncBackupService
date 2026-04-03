@@ -123,9 +123,16 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<div class="page-action-row">
-			<AppButton variant="secondary" @click="loadDashboard">刷新概览</AppButton>
-		</div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">DASHBOARD</p>
+				<h1 class="page-header__title">系统概览</h1>
+				<p class="page-header__subtitle">监控备份健康、运行任务与容量风险。</p>
+			</div>
+			<div class="page-header__actions">
+				<AppButton variant="secondary" @click="loadDashboard">刷新概览</AppButton>
+			</div>
+		</header>
 
 		<AppNotification v-if="errorMessage" title="仪表盘加载失败" tone="danger" :description="errorMessage" />
 

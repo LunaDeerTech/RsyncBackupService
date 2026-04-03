@@ -185,12 +185,12 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">INSTANCES</p>
 				<h1 class="page-header__title">备份实例</h1>
 				<p class="page-header__subtitle">管理源路径、源主机和实例级恢复入口。</p>
 			</div>
-			<AppButton @click="openCreateModal">新建实例</AppButton>
 		</header>
 
 		<AppNotification v-if="errorMessage" title="实例列表加载失败" tone="danger" :description="errorMessage" />
@@ -208,7 +208,17 @@ onMounted(() => {
 			description="当前账户无法读取目标类型。若远程源绑定了 SSH 目标，恢复或滚动同步会经过本机缓存目录，请预留磁盘空间。"
 		/>
 
-		<AppCard title="实例列表" description="支持按名称、主机或路径筛选。">
+		<AppCard>
+			<template #header>
+				<div class="instances-list__card-header">
+					<div class="instances-list__card-heading">
+						<h2 class="instances-list__card-title">实例列表</h2>
+						<p class="instances-list__card-description">支持按名称、主机或路径筛选。</p>
+					</div>
+					<AppButton @click="openCreateModal">新建实例</AppButton>
+				</div>
+			</template>
+
 			<div class="page-form-grid">
 				<AppFormField label="搜索">
 					<AppInput v-model="query" placeholder="名称 / 主机 / 路径" />
@@ -343,11 +353,38 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.instances-list__card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: var(--space-4);
+	flex-wrap: wrap;
+}
+
+.instances-list__card-heading,
 .instances-list__name-cell,
 .instances-list__source-cell,
 .instances-list__status-cell {
 	display: grid;
 	gap: var(--space-2);
+}
+
+.instances-list__card-title,
+.instances-list__card-description {
+	margin: 0;
+}
+
+.instances-list__card-title {
+	color: var(--text-strong);
+	font-size: 1.08rem;
+	line-height: 1.15;
+	letter-spacing: -0.03em;
+}
+
+.instances-list__card-description {
+	color: var(--text-muted);
+	font-size: 0.92rem;
+	line-height: 1.6;
 }
 
 .instances-list__detail-link {

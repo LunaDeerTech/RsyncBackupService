@@ -121,12 +121,15 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">AUDIT LOGS</p>
 				<h1 class="page-header__title">审计日志</h1>
 				<p class="page-header__subtitle">按用户、动作、资源类型和时间范围筛选关键操作记录。</p>
 			</div>
-			<AppButton variant="secondary" @click="loadData">刷新</AppButton>
+			<div class="page-header__actions">
+				<AppButton variant="secondary" @click="loadData">刷新</AppButton>
+			</div>
 		</header>
 
 		<AppNotification v-if="errorMessage" title="审计日志加载失败" tone="danger" :description="errorMessage" />

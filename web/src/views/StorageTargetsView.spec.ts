@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/vue"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/vue"
 
 import {
 	createStorageTarget,
@@ -45,13 +45,22 @@ const rollingTarget = {
 }
 
 async function renderView(): Promise<void> {
-	render(StorageTargetsView)
+	const result = render(StorageTargetsView)
 
 	await waitFor(() => {
 		expect(listStorageTargets).toHaveBeenCalledTimes(1)
 		expect(listSSHKeys).toHaveBeenCalledTimes(1)
 		expect(screen.getByText("archive-primary")).toBeInTheDocument()
 	})
+
+	return result
+}
+
+function getGroupCard(title: string): HTMLElement {
+	const heading = screen.getByRole("heading", { name: title })
+	const card = heading.closest(".app-card")
+	expect(card).not.toBeNull()
+	return card as HTMLElement
 }
 
 describe("StorageTargetsView", () => {
@@ -67,51 +76,64 @@ describe("StorageTargetsView", () => {
 		vi.mocked(listSSHKeys).mockResolvedValue(sshKeyItems)
 	})
 
-	it("opens the create modal, reveals ssh fields, and closes through every dismiss path", async () => {
-		await renderView()
+	it("opens the rolling-target modal, reveals ssh fields, and closes through every dismiss path", async () => {
+		const { container } = await renderView()
+		const rollingGroup = getGroupCard("滚动备份目标")
+		const coldGroup = getGroupCard("冷备归档目标")
 
-		expect(screen.getByText("点击上方「新建目标」按钮添加存储目标。")).toBeInTheDocument()
-		expect(screen.queryByRole("dialog", { name: "新建存储目标" })).not.toBeInTheDocument()
+		expect(container.querySelector(".page-header.page-header--inset.page-header--shell-aligned")).not.toBeNull()
+		expect(container.querySelector(".page-header__content")).not.toBeNull()
+		expect(screen.getByText("STORAGE TARGETS")).toBeInTheDocument()
+		expect(screen.getByRole("heading", { name: "存储目标" })).toBeInTheDocument()
+		expect(screen.getByText("按备份类型管理目标路径，并执行连通性测试。")).toBeInTheDocument()
+		expect(within(rollingGroup).getByRole("button", { name: "新建滚动备份目标" }).closest(".app-card__header")).not.toBeNull()
+		expect(within(coldGroup).getByRole("button", { name: "新建冷备归档目标" }).closest(".app-card__header")).not.toBeNull()
 
-		await fireEvent.click(screen.getByRole("button", { name: "新建目标" }))
+		expect(within(coldGroup).getByText("点击右上角「新建冷备归档目标」按钮添加目标。")).toBeInTheDocument()
+		expect(screen.queryByRole("dialog", { name: "新建滚动备份目标" })).not.toBeInTheDocument()
 
-		expect(screen.getByRole("dialog", { name: "新建存储目标" })).toBeInTheDocument()
+		await fireEvent.click(within(rollingGroup).getByRole("button", { name: "新建滚动备份目标" }))
+
+		expect(screen.getByRole("dialog", { name: "新建滚动备份目标" })).toBeInTheDocument()
 		expect(screen.getByLabelText("名称")).toBeInTheDocument()
 		expect(screen.getByLabelText("基础路径")).toBeInTheDocument()
 		expect(screen.queryByLabelText("主机")).not.toBeInTheDocument()
 
-		await fireEvent.click(screen.getByRole("combobox", { name: "目标类型" }))
-		await fireEvent.click(screen.getByRole("option", { name: "滚动备份 / SSH" }))
+		await fireEvent.click(screen.getByRole("combobox", { name: "接入方式" }))
+		expect(screen.getByRole("option", { name: "本地路径" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "SSH 主机" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "冷备份 / 本地" })).not.toBeInTheDocument()
+		await fireEvent.click(screen.getByRole("option", { name: "SSH 主机" }))
 
 		expect(screen.getByLabelText("主机")).toBeInTheDocument()
 		expect(screen.getByLabelText("用户")).toBeInTheDocument()
 		expect(screen.getByText("SSH 目标的连通性测试会直接验证主机、用户和密钥组合。")).toBeInTheDocument()
 
-		await fireEvent.click(screen.getByRole("combobox", { name: "目标类型" }))
-		await fireEvent.keyDown(screen.getByRole("combobox", { name: "目标类型" }), { key: "Escape" })
-		expect(screen.getByRole("dialog", { name: "新建存储目标" })).toBeInTheDocument()
+		await fireEvent.click(screen.getByRole("combobox", { name: "接入方式" }))
+		await fireEvent.keyDown(screen.getByRole("combobox", { name: "接入方式" }), { key: "Escape" })
+		expect(screen.getByRole("dialog", { name: "新建滚动备份目标" })).toBeInTheDocument()
 
 		await fireEvent.click(screen.getByRole("button", { name: "取消" }))
 		await waitFor(() => {
-			expect(screen.queryByRole("dialog", { name: "新建存储目标" })).not.toBeInTheDocument()
+			expect(screen.queryByRole("dialog", { name: "新建滚动备份目标" })).not.toBeInTheDocument()
 		})
 
-		await fireEvent.click(screen.getByRole("button", { name: "新建目标" }))
-		await fireEvent.keyDown(screen.getByRole("dialog", { name: "新建存储目标" }), { key: "Escape" })
+		await fireEvent.click(within(rollingGroup).getByRole("button", { name: "新建滚动备份目标" }))
+		await fireEvent.keyDown(screen.getByRole("dialog", { name: "新建滚动备份目标" }), { key: "Escape" })
 		await waitFor(() => {
-			expect(screen.queryByRole("dialog", { name: "新建存储目标" })).not.toBeInTheDocument()
+			expect(screen.queryByRole("dialog", { name: "新建滚动备份目标" })).not.toBeInTheDocument()
 		})
 
-		await fireEvent.click(screen.getByRole("button", { name: "新建目标" }))
-		const overlay = screen.getByRole("dialog", { name: "新建存储目标" }).parentElement
+		await fireEvent.click(within(rollingGroup).getByRole("button", { name: "新建滚动备份目标" }))
+		const overlay = screen.getByRole("dialog", { name: "新建滚动备份目标" }).parentElement
 		expect(overlay).not.toBeNull()
 		await fireEvent.click(overlay as HTMLElement)
 		await waitFor(() => {
-			expect(screen.queryByRole("dialog", { name: "新建存储目标" })).not.toBeInTheDocument()
+			expect(screen.queryByRole("dialog", { name: "新建滚动备份目标" })).not.toBeInTheDocument()
 		})
 	})
 
-	it("creates a target and closes the modal after refreshing the grouped list", async () => {
+	it("creates a cold target from the cold-target card and closes the modal after refreshing the grouped list", async () => {
 		const createdTarget = {
 			id: 2,
 			name: "cold-vault",
@@ -128,11 +150,11 @@ describe("StorageTargetsView", () => {
 		vi.mocked(createStorageTarget).mockResolvedValue(createdTarget)
 
 		await renderView()
+		const coldGroup = getGroupCard("冷备归档目标")
 
-		await fireEvent.click(screen.getByRole("button", { name: "新建目标" }))
+		await fireEvent.click(within(coldGroup).getByRole("button", { name: "新建冷备归档目标" }))
+		expect(screen.getByRole("dialog", { name: "新建冷备归档目标" })).toBeInTheDocument()
 		await fireEvent.update(screen.getByLabelText("名称"), "cold-vault")
-		await fireEvent.click(screen.getByRole("combobox", { name: "目标类型" }))
-		await fireEvent.click(screen.getByRole("option", { name: "冷备份 / 本地" }))
 		await fireEvent.update(screen.getByLabelText("基础路径"), "/srv/cold")
 		await fireEvent.click(screen.getByRole("button", { name: "创建目标" }))
 
@@ -145,7 +167,7 @@ describe("StorageTargetsView", () => {
 		})
 
 		await waitFor(() => {
-			expect(screen.queryByRole("dialog", { name: "新建存储目标" })).not.toBeInTheDocument()
+			expect(screen.queryByRole("dialog", { name: "新建冷备归档目标" })).not.toBeInTheDocument()
 			expect(screen.getByText("存储目标已创建。")).toBeInTheDocument()
 			expect(screen.getByText("cold-vault")).toBeInTheDocument()
 		})
@@ -169,8 +191,14 @@ describe("StorageTargetsView", () => {
 
 		expect(screen.getByRole("dialog", { name: "编辑存储目标" })).toBeInTheDocument()
 		expect(screen.getByLabelText("名称")).toHaveValue("archive-primary")
+		expect(screen.getByLabelText("目标类型")).toBeInTheDocument()
 		expect(screen.getByLabelText("主机")).toHaveValue("192.0.2.20")
 		expect(screen.getByLabelText("用户")).toHaveValue("backup")
+
+		await fireEvent.click(screen.getByRole("combobox", { name: "目标类型" }))
+		expect(screen.getByRole("option", { name: "滚动备份 / 本地" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "冷备份 / 本地" })).toBeInTheDocument()
+		await fireEvent.keyDown(screen.getByRole("combobox", { name: "目标类型" }), { key: "Escape" })
 
 		await fireEvent.update(screen.getByLabelText("名称"), "archive-secondary")
 		await fireEvent.click(screen.getByRole("button", { name: "保存修改" }))

@@ -180,12 +180,15 @@ onMounted(() => {
 
 <template>
 	<section class="page-view">
-		<header class="page-header">
-			<div>
+		<header class="page-header page-header--inset page-header--shell-aligned">
+			<div class="page-header__content">
+				<p class="page-header__eyebrow">NOTIFICATIONS</p>
 				<h1 class="page-header__title">通知渠道</h1>
 				<p class="page-header__subtitle">配置 SMTP 渠道，并用单独的收件配置发送测试通知。</p>
 			</div>
-			<AppButton variant="secondary" @click="resetForm">新建渠道</AppButton>
+			<div class="page-header__actions">
+				<AppButton variant="secondary" @click="resetForm">新建渠道</AppButton>
+			</div>
 		</header>
 
 		<AppNotification v-if="errorMessage" title="通知渠道操作失败" tone="danger" :description="errorMessage" />

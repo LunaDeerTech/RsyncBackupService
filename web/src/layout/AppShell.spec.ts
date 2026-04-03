@@ -79,7 +79,7 @@ describe("AppShell", () => {
 		expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark")
 	})
 
-	it("renders grouped navigation and a simplified top bar for admins", async () => {
+	it("renders grouped navigation for admins without a shell top bar", async () => {
 		const auth = useAuthStore()
 
 		auth.setSession({
@@ -102,21 +102,18 @@ describe("AppShell", () => {
 		const banner = document.querySelector(".top-bar")
 
 		expect(screen.getByTestId("app-shell")).toBeInTheDocument()
-		expect(banner).not.toBeNull()
+		expect(banner).toBeNull()
 		expect(within(navigation).getByText("工作区")).toBeInTheDocument()
 		expect(within(navigation).getByText("管理")).toBeInTheDocument()
 		expect(within(navigation).getByText("系统管理")).toBeInTheDocument()
 		expect(screen.getByRole("button", { name: "深色主题" })).toBeInTheDocument()
 		expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument()
 		expect(screen.getByText("admin").closest("a")).toHaveAttribute("href", "/profile")
-		expect(banner).toHaveTextContent("运维仪表盘")
-		expect(banner).toHaveTextContent("查看全局统计、运行中任务、最近备份与存储容量。")
-		expect(banner).not.toHaveTextContent("Operations Console")
-		expect(within(banner as HTMLElement).queryByText("会话已验证")).not.toBeInTheDocument()
-		expect(within(banner as HTMLElement).queryByRole("button")).not.toBeInTheDocument()
+		expect(screen.queryByText("Operations Console")).not.toBeInTheDocument()
+		expect(screen.queryByText("会话已验证")).not.toBeInTheDocument()
 	})
 
-	it("shows only one dashboard title and description after the shell takeover", async () => {
+	it("shows the dashboard page heading and refresh action once", async () => {
 		const auth = useAuthStore()
 
 		auth.setSession({
@@ -135,8 +132,8 @@ describe("AppShell", () => {
 			},
 		})
 
-		expect(screen.getAllByRole("heading", { name: "运维仪表盘" })).toHaveLength(1)
-		expect(screen.getAllByText("查看全局统计、运行中任务、最近备份与存储容量。")).toHaveLength(1)
+		expect(screen.getAllByRole("heading", { name: "系统概览" })).toHaveLength(1)
+		expect(screen.getAllByText("监控备份健康、运行任务与容量风险。")).toHaveLength(1)
 		expect(screen.getByRole("button", { name: "刷新概览" })).toBeInTheDocument()
 	})
 
@@ -237,7 +234,7 @@ describe("AppShell", () => {
 		expect(screen.getByText("users — 此标签页内容将在后续阶段实现。")).toBeInTheDocument()
 	})
 
-	it("shows only one storage-targets title and keeps the create action visible", async () => {
+	it("shows only one storage-targets title and keeps the grouped create actions visible", async () => {
 		const auth = useAuthStore()
 
 		auth.setSession({
@@ -258,7 +255,8 @@ describe("AppShell", () => {
 
 		expect(screen.getAllByRole("heading", { name: "存储目标" })).toHaveLength(1)
 		expect(screen.getAllByText("按备份类型管理目标路径，并执行连通性测试。")).toHaveLength(1)
-		expect(screen.getByRole("button", { name: "新建目标" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "新建滚动备份目标" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "新建冷备归档目标" })).toBeInTheDocument()
 	})
 
 	it("renders the profile placeholder route for authenticated users", async () => {

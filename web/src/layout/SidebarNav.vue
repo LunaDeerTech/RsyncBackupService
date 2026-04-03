@@ -86,8 +86,8 @@ async function handleLogout(): Promise<void> {
 <template>
 	<nav class="sidebar-nav" aria-label="主导航">
 		<div class="sidebar-nav__brand">
-			<p class="sidebar-nav__brand-eyebrow">BALANCED FLUX</p>
-			<p class="sidebar-nav__brand-title">Rsync Backup</p>
+			<p class="sidebar-nav__brand-title">Rsync Backup Service</p>
+			<p class="sidebar-nav__brand-subtitle">运维备份控制台</p>
 		</div>
 
 		<div class="sidebar-nav__groups">
@@ -133,12 +133,14 @@ async function handleLogout(): Promise<void> {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	min-height: 0;
 	gap: var(--space-5);
 	padding: var(--space-5);
 	border: var(--border-width) solid var(--shell-sidebar-border);
 	border-radius: var(--radius-card);
 	background: var(--shell-sidebar-bg);
 	box-shadow: var(--shell-sidebar-shadow);
+	overflow: hidden;
 	backdrop-filter: blur(18px);
 	-webkit-backdrop-filter: blur(18px);
 }
@@ -148,26 +150,26 @@ async function handleLogout(): Promise<void> {
 	gap: var(--space-1);
 }
 
-.sidebar-nav__brand-eyebrow {
-	margin: 0;
-	color: var(--text-muted);
-	font-size: 0.68rem;
-	font-weight: 700;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
-}
-
 .sidebar-nav__brand-title {
 	margin: 0;
 	color: var(--text-strong);
-	font-size: 1.05rem;
+	font-size: 1.08rem;
 	font-weight: 800;
-	letter-spacing: -0.02em;
+	letter-spacing: -0.03em;
+}
+
+.sidebar-nav__brand-subtitle {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 0.82rem;
+	font-weight: 600;
+	line-height: 1.5;
 }
 
 .sidebar-nav__groups {
 	display: flex;
 	flex: 1;
+	min-height: 0;
 	flex-direction: column;
 	gap: var(--space-5);
 	overflow-y: auto;
@@ -321,12 +323,17 @@ async function handleLogout(): Promise<void> {
 @media (max-width: 960px) {
 	.sidebar-nav {
 		padding: var(--space-4);
+		overflow: visible;
 	}
 
 	.sidebar-nav__links {
 		flex-direction: row;
 		flex-wrap: wrap;
 		gap: var(--space-2);
+	}
+
+	.sidebar-nav__groups {
+		overflow-y: visible;
 	}
 
 	.sidebar-nav__footer {
