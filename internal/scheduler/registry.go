@@ -1,6 +1,11 @@
 package scheduler
 
-import "sync"
+import (
+	"sync"
+	"time"
+
+	"github.com/robfig/cron/v3"
+)
 
 type scheduleMode string
 
@@ -13,6 +18,9 @@ type registration struct {
 	strategyID uint
 	mode       scheduleMode
 	spec       string
+	schedule   cron.Schedule
+	interval   time.Duration
+	nextRunAt  time.Time
 	stop       func()
 	stopped    chan struct{}
 }
@@ -55,6 +63,20 @@ func (r *registry) Get(strategyID uint) (registration, bool) {
 
 	entry, exists := r.registrations[strategyID]
 	return entry, exists
+}
+
+func (r *registry) UpdateNextRun(strategyID uint, nextRunAt time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, exists := r.registrations[strategyID]
+	if !exists {
+		return false
+	}
+
+	entry.nextRunAt = nextRunAt
+	r.registrations[strategyID] = entry
+	return true
 }
 
 func (r *registry) Count() int {

@@ -157,6 +157,8 @@ func (s *ExecutorService) ListBackupRecords(ctx context.Context, req ListBackupR
 		return nil, fmt.Errorf("list backup records: %w", err)
 	}
 
+	s.backfillBackupRecordSizes(ctx, records)
+
 	return records, nil
 }
 
@@ -199,6 +201,71 @@ func (s *ExecutorService) ListRestorableBackups(ctx context.Context, req ListBac
 	}
 
 	return filteredRecords, nil
+}
+
+func (s *ExecutorService) backfillBackupRecordSizes(ctx context.Context, records []model.BackupRecord) {
+	if s == nil || len(records) == 0 {
+		return
+	}
+
+	targets := make(map[uint]model.StorageTarget)
+	backends := make(map[uint]storage.StorageBackend)
+	for index := range records {
+		record := &records[index]
+		if !shouldBackfillBackupRecordSize(*record) {
+			continue
+		}
+
+		target, ok := targets[record.StorageTargetID]
+		if !ok {
+			loadedTarget, err := s.storageTargetRepo.GetByID(ctx, record.StorageTargetID)
+			if err != nil {
+				log.Printf("warning: load storage target %d for backup size backfill: %v", record.StorageTargetID, err)
+				continue
+			}
+			target = loadedTarget
+			targets[record.StorageTargetID] = target
+		}
+
+		backend, ok := backends[record.StorageTargetID]
+		if !ok {
+			loadedBackend, err := buildStorageBackend(ctx, s.sshKeyRepo, target)
+			if err != nil {
+				log.Printf("warning: build storage backend for backup size backfill target %d: %v", record.StorageTargetID, err)
+				continue
+			}
+			backend = loadedBackend
+			backends[record.StorageTargetID] = backend
+		}
+
+		artifactSize, exists, err := backupRecordArtifactSize(ctx, backend, *record, target)
+		if err != nil {
+			log.Printf("warning: backfill backup record size %d: %v", record.ID, err)
+			continue
+		}
+		if !exists || artifactSize <= 0 {
+			continue
+		}
+
+		updates := map[string]any{}
+		if record.TotalSize <= 0 {
+			record.TotalSize = artifactSize
+			updates["total_size"] = artifactSize
+		}
+		if len(updates) == 0 {
+			continue
+		}
+
+		if err := s.db.WithContext(ctx).Model(&model.BackupRecord{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
+			log.Printf("warning: persist backup size backfill %d: %v", record.ID, err)
+		}
+	}
+}
+
+func shouldBackfillBackupRecordSize(record model.BackupRecord) bool {
+	return strings.EqualFold(strings.TrimSpace(record.Status), model.BackupStatusSuccess) &&
+		strings.TrimSpace(record.SnapshotPath) != "" &&
+		record.TotalSize <= 0
 }
 
 func (s *ExecutorService) CheckTargetSpace(ctx context.Context, backend storage.StorageBackend, path string, estimatedSize uint64) error {

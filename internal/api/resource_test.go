@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
@@ -185,6 +186,74 @@ func TestInstanceRoutesEnforcePermissionsAndDeleteVerifyToken(t *testing.T) {
 	router.ServeHTTP(verifiedDeleteResp, verifiedDeleteReq)
 	if verifiedDeleteResp.Code != http.StatusNoContent {
 		t.Fatalf("expected creator delete with verify token to return 204, got %d", verifiedDeleteResp.Code)
+	}
+}
+
+func TestStrategyListIncludesUpcomingRunsPreview(t *testing.T) {
+	router, fixture := newAuthTestRouter(t)
+	accessToken := loginForAccessToken(t, router, "admin", "secret")
+
+	instance := model.BackupInstance{
+		Name:            "preview-instance",
+		SourceType:      "local",
+		SourcePath:      "/srv/preview-source",
+		ExcludePatterns: "[]",
+		Enabled:         true,
+		CreatedBy:       fixture.admin.ID,
+	}
+	if err := fixture.db.Create(&instance).Error; err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+
+	target := model.StorageTarget{
+		Name:     "preview-target",
+		Type:     service.StorageTargetTypeRollingLocal,
+		BasePath: filepath.Join(t.TempDir(), "preview-target"),
+	}
+	if err := fixture.db.Create(&target).Error; err != nil {
+		t.Fatalf("create storage target: %v", err)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/instances/"+strconv.FormatUint(uint64(instance.ID), 10)+"/strategies", bytes.NewBufferString(`{"name":"quarter-hourly","backup_type":"rolling","interval_seconds":900,"retention_days":7,"retention_count":3,"max_execution_seconds":3600,"storage_target_ids":[`+strconv.FormatUint(uint64(target.ID), 10)+`],"enabled":true}`))
+	createReq.Header.Set("Authorization", "Bearer "+accessToken)
+	createReq.Header.Set("Content-Type", "application/json")
+
+	beforeCreate := time.Now().UTC()
+	createResp := httptest.NewRecorder()
+	router.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", createResp.Code)
+	}
+	afterCreate := time.Now().UTC()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/instances/"+strconv.FormatUint(uint64(instance.ID), 10)+"/strategies", nil)
+	listReq.Header.Set("Authorization", "Bearer "+accessToken)
+	listResp := httptest.NewRecorder()
+	router.ServeHTTP(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", listResp.Code)
+	}
+
+	var strategies []struct {
+		ID           uint     `json:"id"`
+		UpcomingRuns []string `json:"upcoming_runs"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&strategies); err != nil {
+		t.Fatalf("decode strategies response: %v", err)
+	}
+	if len(strategies) != 1 {
+		t.Fatalf("expected 1 strategy, got %d", len(strategies))
+	}
+	if len(strategies[0].UpcomingRuns) != 10 {
+		t.Fatalf("expected 10 upcoming runs, got %d", len(strategies[0].UpcomingRuns))
+	}
+
+	firstRun, err := time.Parse(http.TimeFormat, strategies[0].UpcomingRuns[0])
+	if err != nil {
+		t.Fatalf("parse first upcoming run: %v", err)
+	}
+	if firstRun.Before(beforeCreate.Add(14*time.Minute)) || firstRun.After(afterCreate.Add(16*time.Minute)) {
+		t.Fatalf("expected first upcoming run to be about 15 minutes after registration, got %s", firstRun.Format(time.RFC3339))
 	}
 }
 

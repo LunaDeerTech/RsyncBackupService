@@ -93,6 +93,14 @@ describe("StrategiesTab", () => {
 		expect(screen.getByLabelText("策略名称")).toHaveValue("每日增量")
 	})
 
+	it("keeps the create action in the strategy card header", async () => {
+		await renderTab()
+
+		const createButton = screen.getByRole("button", { name: "新建策略" })
+
+		expect(createButton.closest(".app-card__header")).not.toBeNull()
+	})
+
 	it("requires delete confirmation before removing a strategy", async () => {
 		vi.mocked(listStrategies).mockReset()
 		vi.mocked(listStrategies).mockResolvedValueOnce([strategy])

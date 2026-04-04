@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"gorm.io/gorm"
@@ -12,11 +13,21 @@ import (
 type StrategyScheduler interface {
 	RegisterStrategy(strategy model.Strategy, run func(context.Context) error) error
 	RemoveStrategy(strategyID uint) error
+	UpcomingRuns(strategyID uint, limit int, now time.Time) []time.Time
 }
 
 type StrategyScheduleRefresher interface {
 	RefreshStrategy(strategy model.Strategy) error
 	RemoveStrategy(strategyID uint) error
+}
+
+type StrategySchedulePreviewer interface {
+	UpcomingRuns(strategyID uint, limit int, now time.Time) []time.Time
+}
+
+type StrategyScheduleCoordinator interface {
+	StrategyScheduleRefresher
+	StrategySchedulePreviewer
 }
 
 type StrategyRunner func(context.Context, model.Strategy) error
@@ -70,6 +81,14 @@ func (s *SchedulerService) RemoveStrategy(strategyID uint) error {
 	}
 
 	return nil
+}
+
+func (s *SchedulerService) UpcomingRuns(strategyID uint, limit int, now time.Time) []time.Time {
+	if s == nil || s.scheduler == nil {
+		return nil
+	}
+
+	return s.scheduler.UpcomingRuns(strategyID, limit, now)
 }
 
 func BootstrapSchedules(ctx context.Context, db *gorm.DB, refresher StrategyScheduleRefresher) error {

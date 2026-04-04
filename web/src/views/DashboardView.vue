@@ -213,7 +213,7 @@ onMounted(() => {
 			</AppCard>
 		</section>
 
-		<section class="page-two-column">
+		<section class="page-two-column dashboard-view__overview-row">
 			<AppCard title="最近备份" description="按最近完成时间倒序显示。">
 				<AppTimeline v-if="recentBackupItems.length > 0" :items="recentBackupItems" compact />
 				<AppEmpty v-else-if="!isLoading" title="暂无备份记录" compact />
@@ -256,5 +256,9 @@ onMounted(() => {
 	align-items: flex-start;
 	gap: var(--space-3);
 	flex-wrap: wrap;
+}
+
+.dashboard-view__overview-row {
+	align-items: start;
 }
 </style>

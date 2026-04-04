@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/api/middleware"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
@@ -13,6 +14,8 @@ import (
 type StrategyHandler struct {
 	strategyService *service.StrategyService
 }
+
+const strategyUpcomingRunPreviewLimit = 10
 
 type strategyResponse struct {
 	ID                  uint    `json:"id"`
@@ -26,6 +29,7 @@ type strategyResponse struct {
 	ColdVolumeSize      *string `json:"cold_volume_size,omitempty"`
 	MaxExecutionSeconds int     `json:"max_execution_seconds"`
 	StorageTargetIDs    []uint  `json:"storage_target_ids"`
+	UpcomingRuns        []string `json:"upcoming_runs"`
 	Enabled             bool    `json:"enabled"`
 	CreatedAt           string  `json:"created_at"`
 	UpdatedAt           string  `json:"updated_at"`
@@ -52,7 +56,7 @@ func (h *StrategyHandler) ListByInstance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, toStrategyResponses(strategies))
+	c.JSON(http.StatusOK, toStrategyResponses(h.strategyService, strategies, time.Now().UTC()))
 }
 
 func (h *StrategyHandler) Create(c *gin.Context) {
@@ -79,7 +83,7 @@ func (h *StrategyHandler) Create(c *gin.Context) {
 	}
 
 	middleware.SetAuditMetadata(c, middleware.AuditMetadata{Action: "strategies.create", ResourceType: "strategies", ResourceID: strategy.ID, Detail: map[string]any{"instance_id": instanceID}})
-	c.JSON(http.StatusCreated, toStrategyResponse(strategy))
+	c.JSON(http.StatusCreated, toStrategyResponse(h.strategyService, strategy, time.Now().UTC()))
 }
 
 func (h *StrategyHandler) Update(c *gin.Context) {
@@ -105,7 +109,7 @@ func (h *StrategyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, toStrategyResponse(strategy))
+	c.JSON(http.StatusOK, toStrategyResponse(h.strategyService, strategy, time.Now().UTC()))
 }
 
 func (h *StrategyHandler) Delete(c *gin.Context) {
@@ -143,10 +147,21 @@ func (h *StrategyHandler) writeStrategyError(c *gin.Context, err error, fallback
 	}
 }
 
-func toStrategyResponse(strategy model.Strategy) strategyResponse {
+type strategyUpcomingRunProvider interface {
+	UpcomingRuns(strategyID uint, limit int, now time.Time) []time.Time
+}
+
+func toStrategyResponse(previewer strategyUpcomingRunProvider, strategy model.Strategy, now time.Time) strategyResponse {
 	storageTargetIDs := make([]uint, 0, len(strategy.StorageTargets))
 	for _, storageTarget := range strategy.StorageTargets {
 		storageTargetIDs = append(storageTargetIDs, storageTarget.ID)
+	}
+
+	upcomingRuns := make([]string, 0)
+	if previewer != nil {
+		for _, runAt := range previewer.UpcomingRuns(strategy.ID, strategyUpcomingRunPreviewLimit, now) {
+			upcomingRuns = append(upcomingRuns, runAt.UTC().Format(http.TimeFormat))
+		}
 	}
 
 	return strategyResponse{
@@ -161,16 +176,17 @@ func toStrategyResponse(strategy model.Strategy) strategyResponse {
 		ColdVolumeSize:      strategy.ColdVolumeSize,
 		MaxExecutionSeconds: strategy.MaxExecutionSeconds,
 		StorageTargetIDs:    storageTargetIDs,
+		UpcomingRuns:        upcomingRuns,
 		Enabled:             strategy.Enabled,
 		CreatedAt:           strategy.CreatedAt.UTC().Format(http.TimeFormat),
 		UpdatedAt:           strategy.UpdatedAt.UTC().Format(http.TimeFormat),
 	}
 }
 
-func toStrategyResponses(strategies []model.Strategy) []strategyResponse {
+func toStrategyResponses(previewer strategyUpcomingRunProvider, strategies []model.Strategy, now time.Time) []strategyResponse {
 	responses := make([]strategyResponse, 0, len(strategies))
 	for _, strategy := range strategies {
-		responses = append(responses, toStrategyResponse(strategy))
+		responses = append(responses, toStrategyResponse(previewer, strategy, now))
 	}
 
 	return responses

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
@@ -358,6 +359,19 @@ func (s *registerSchedulerSpy) RemoveStrategy(strategyID uint) error {
 	return nil
 }
 
+func (s *registerSchedulerSpy) UpcomingRuns(strategyID uint, limit int, _ time.Time) []time.Time {
+	if limit <= 0 {
+		return nil
+	}
+
+	runs := make([]time.Time, 0, limit)
+	for index := 0; index < limit; index += 1 {
+		runs = append(runs, time.Date(2026, time.April, 4, 12, index, 0, 0, time.UTC))
+	}
+
+	return runs
+}
+
 func (s *schedulerRefresherSpy) RefreshStrategy(strategy model.Strategy) error {
 	s.refreshed = append(s.refreshed, strategy)
 	return nil
@@ -365,5 +379,9 @@ func (s *schedulerRefresherSpy) RefreshStrategy(strategy model.Strategy) error {
 
 func (s *schedulerRefresherSpy) RemoveStrategy(strategyID uint) error {
 	s.removed = append(s.removed, strategyID)
+	return nil
+}
+
+func (s *schedulerRefresherSpy) UpcomingRuns(uint, int, time.Time) []time.Time {
 	return nil
 }

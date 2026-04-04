@@ -27,6 +27,19 @@ func TestParseProgress2Line(t *testing.T) {
 	}
 }
 
+func TestParseProgress2HumanReadableTransferredSizeLine(t *testing.T) {
+	progress, ok := ParseProgress2("12.00K  100%  0.00kB/s  0:00:00 (xfr#1, to-chk=0/3)")
+	if !ok {
+		t.Fatal("expected human-readable progress2 line to parse")
+	}
+	if progress.BytesTransferred != 12*1024 {
+		t.Fatalf("expected transferred bytes %d, got %d", 12*1024, progress.BytesTransferred)
+	}
+	if progress.Percentage != 100 {
+		t.Fatalf("expected percentage 100, got %d", progress.Percentage)
+	}
+}
+
 func TestEstimateRemaining(t *testing.T) {
 	remaining := EstimateRemaining(1000, 400, 200)
 	if remaining != 3*time.Second {

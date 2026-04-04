@@ -10,6 +10,7 @@ import (
 	"github.com/LunaDeerTech/RsyncBackupService/internal/config"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
+	schedulerpkg "github.com/LunaDeerTech/RsyncBackupService/internal/scheduler"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/service"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -168,12 +169,15 @@ func newAuthTestRouter(t *testing.T) (http.Handler, authAPITestFixture) {
 	authService := service.NewAuthService(db, "test-jwt-secret")
 	notificationService := service.NewNotificationService(db)
 	auditService := service.NewAuditService(db)
+	strategyScheduler := schedulerpkg.NewScheduler()
+	t.Cleanup(strategyScheduler.Stop)
 	executorService := service.NewExecutorService(db, cfg, nil, nil, notificationService)
 	instanceService := service.NewInstanceService(db)
 	restoreService := service.NewRestoreService(db, cfg, nil, authService, notificationService)
 	sshKeyService := service.NewSSHKeyService(db, cfg.DataDir)
-	storageTargetService := service.NewStorageTargetService(db)
-	strategyService := service.NewStrategyService(db)
+	schedulerService := service.NewSchedulerService(strategyScheduler, executorService.RunStrategy)
+	storageTargetService := service.NewStorageTargetService(db, schedulerService)
+	strategyService := service.NewStrategyService(db, schedulerService)
 	userService := service.NewUserService(db, authService)
 	permissionService := service.NewPermissionService(db)
 	auditRepo := repository.NewAuditLogRepository(db)

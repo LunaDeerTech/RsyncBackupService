@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -800,6 +801,157 @@ func TestExecutorServiceProgressRecordBytesStayConsistentWithTotalSize(t *testin
 	}
 }
 
+func TestExecutorServiceRunStrategyPersistsTotalSizeFromHumanReadableProgress(t *testing.T) {
+	fixture := newStrategyServiceTestFixture(t)
+	target := createStrategyServiceTestStorageTarget(t, fixture.db, "rolling-target", StorageTargetTypeRollingLocal)
+	strategy := model.Strategy{
+		InstanceID:      fixture.instance.ID,
+		Name:            "hourly-human-readable",
+		BackupType:      BackupTypeRolling,
+		IntervalSeconds: 3600,
+		Enabled:         true,
+		StorageTargets:  []model.StorageTarget{target},
+	}
+	if err := fixture.db.Create(&strategy).Error; err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+
+	service := NewExecutorService(fixture.db, config.Config{DataDir: t.TempDir()}, humanReadableProgressRunner{}, executorpkg.NewTaskManager())
+	if err := service.RunStrategy(context.Background(), strategy); err != nil {
+		t.Fatalf("run strategy: %v", err)
+	}
+
+	var records []model.BackupRecord
+	if err := fixture.db.Order("id ASC").Find(&records).Error; err != nil {
+		t.Fatalf("list backup records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one backup record, got %d", len(records))
+	}
+	if records[0].Status != model.BackupStatusSuccess {
+		t.Fatalf("expected backup record status %q, got %q", model.BackupStatusSuccess, records[0].Status)
+	}
+	if records[0].TotalSize <= 0 {
+		t.Fatalf("expected persisted total size > 0, got %d", records[0].TotalSize)
+	}
+	if records[0].BytesTransferred <= 0 {
+		t.Fatalf("expected persisted bytes transferred > 0, got %d", records[0].BytesTransferred)
+	}
+}
+
+func TestExecutorServiceListBackupRecordsBackfillsMissingSizesFromExistingSnapshot(t *testing.T) {
+	fixture := newStrategyServiceTestFixture(t)
+	target := createStrategyServiceTestStorageTarget(t, fixture.db, "rolling-target", StorageTargetTypeRollingLocal)
+	snapshotPath := filepath.Join(target.BasePath, executorpkg.SnapshotRootDir(fixture.instance), "20260404T010203.000000001Z")
+	createSnapshotDir(t, snapshotPath, time.Now().UTC())
+
+	payload := bytes.Repeat([]byte("x"), 4096)
+	if err := os.WriteFile(filepath.Join(snapshotPath, "payload.bin"), payload, 0o644); err != nil {
+		t.Fatalf("write snapshot payload: %v", err)
+	}
+
+	finishedAt := time.Now().UTC().Add(-time.Minute)
+	record := model.BackupRecord{
+		InstanceID:        fixture.instance.ID,
+		StorageTargetID:   target.ID,
+		BackupType:        BackupTypeRolling,
+		Status:            model.BackupStatusSuccess,
+		TargetLocationKey: storageTargetLocationKey(target),
+		SnapshotPath:      snapshotPath,
+		StartedAt:         finishedAt.Add(-time.Minute),
+		FinishedAt:        &finishedAt,
+	}
+	if err := fixture.db.Create(&record).Error; err != nil {
+		t.Fatalf("create backup record: %v", err)
+	}
+
+	service := NewExecutorService(fixture.db, config.Config{DataDir: t.TempDir()}, nil, executorpkg.NewTaskManager())
+	records, err := service.ListBackupRecords(context.Background(), ListBackupRecordsRequest{InstanceID: fixture.instance.ID})
+	if err != nil {
+		t.Fatalf("list backup records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one backup record, got %d", len(records))
+	}
+	if records[0].TotalSize != int64(len(payload)) {
+		t.Fatalf("expected backfilled total size %d, got %d", len(payload), records[0].TotalSize)
+	}
+	if records[0].BytesTransferred != 0 {
+		t.Fatalf("expected bytes transferred to remain 0 for legacy rolling record, got %d", records[0].BytesTransferred)
+	}
+
+	var persisted model.BackupRecord
+	if err := fixture.db.First(&persisted, record.ID).Error; err != nil {
+		t.Fatalf("reload backup record: %v", err)
+	}
+	if persisted.TotalSize != int64(len(payload)) {
+		t.Fatalf("expected persisted total size %d, got %d", len(payload), persisted.TotalSize)
+	}
+	if persisted.BytesTransferred != 0 {
+		t.Fatalf("expected persisted bytes transferred to remain 0, got %d", persisted.BytesTransferred)
+	}
+}
+
+func TestExecutorServiceListBackupRecordsBackfillsMissingTotalSizeFromSplitColdArchive(t *testing.T) {
+	fixture := newStrategyServiceTestFixture(t)
+	target := createStrategyServiceTestStorageTarget(t, fixture.db, "cold-target", StorageTargetTypeColdLocal)
+	archivePath := filepath.Join(target.BasePath, executorpkg.SnapshotRootDir(fixture.instance), "20260404T010203.000000001Z.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+		t.Fatalf("create archive dir: %v", err)
+	}
+	firstPart := bytes.Repeat([]byte("a"), 1024)
+	secondPart := bytes.Repeat([]byte("b"), 512)
+	if err := os.WriteFile(archivePath+".part_aa", firstPart, 0o644); err != nil {
+		t.Fatalf("write first archive part: %v", err)
+	}
+	if err := os.WriteFile(archivePath+".part_ab", secondPart, 0o644); err != nil {
+		t.Fatalf("write second archive part: %v", err)
+	}
+
+	finishedAt := time.Now().UTC().Add(-time.Minute)
+	record := model.BackupRecord{
+		InstanceID:        fixture.instance.ID,
+		StorageTargetID:   target.ID,
+		BackupType:        BackupTypeCold,
+		Status:            model.BackupStatusSuccess,
+		TargetLocationKey: storageTargetLocationKey(target),
+		SnapshotPath:      archivePath,
+		VolumeCount:       2,
+		StartedAt:         finishedAt.Add(-time.Minute),
+		FinishedAt:        &finishedAt,
+	}
+	if err := fixture.db.Create(&record).Error; err != nil {
+		t.Fatalf("create cold backup record: %v", err)
+	}
+
+	service := NewExecutorService(fixture.db, config.Config{DataDir: t.TempDir()}, nil, executorpkg.NewTaskManager())
+	records, err := service.ListBackupRecords(context.Background(), ListBackupRecordsRequest{InstanceID: fixture.instance.ID})
+	if err != nil {
+		t.Fatalf("list backup records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one backup record, got %d", len(records))
+	}
+	expectedTotalSize := int64(len(firstPart) + len(secondPart))
+	if records[0].TotalSize != expectedTotalSize {
+		t.Fatalf("expected backfilled cold total size %d, got %d", expectedTotalSize, records[0].TotalSize)
+	}
+	if records[0].BytesTransferred != 0 {
+		t.Fatalf("expected cold bytes transferred to remain 0, got %d", records[0].BytesTransferred)
+	}
+
+	var persisted model.BackupRecord
+	if err := fixture.db.First(&persisted, record.ID).Error; err != nil {
+		t.Fatalf("reload cold backup record: %v", err)
+	}
+	if persisted.TotalSize != expectedTotalSize {
+		t.Fatalf("expected persisted cold total size %d, got %d", expectedTotalSize, persisted.TotalSize)
+	}
+	if persisted.BytesTransferred != 0 {
+		t.Fatalf("expected persisted cold bytes transferred to remain 0, got %d", persisted.BytesTransferred)
+	}
+}
+
 func TestRetentionServiceCleanupIgnoresFailedSnapshots(t *testing.T) {
 	fixture := newStrategyServiceTestFixture(t)
 	target := createStrategyServiceTestStorageTarget(t, fixture.db, "rolling-target", StorageTargetTypeRollingLocal)
@@ -888,6 +1040,15 @@ type successfulRunner struct{}
 func (successfulRunner) Run(_ context.Context, _ executorpkg.CommandSpec, onStdout func(string)) error {
 	if onStdout != nil {
 		onStdout("1,024  100%  1.00MB/s  0:00:01")
+	}
+	return nil
+}
+
+type humanReadableProgressRunner struct{}
+
+func (humanReadableProgressRunner) Run(_ context.Context, _ executorpkg.CommandSpec, onStdout func(string)) error {
+	if onStdout != nil {
+		onStdout("12.00K  100%  0.00kB/s  0:00:00 (xfr#1, to-chk=0/3)")
 	}
 	return nil
 }

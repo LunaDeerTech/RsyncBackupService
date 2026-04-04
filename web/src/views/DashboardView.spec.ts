@@ -23,8 +23,28 @@ describe("DashboardView", () => {
 			success_count: 7,
 			failed_count: 1,
 			running_tasks: [],
-			recent_backups: [],
-			storage_overview: [],
+			recent_backups: [
+				{
+					id: 9,
+					instance_id: 1,
+					instance_name: "web-01",
+					storage_target_id: 4,
+					backup_type: "rolling",
+					status: "success",
+					started_at: "Wed, 02 Apr 2026 08:00:00 GMT",
+					finished_at: "Wed, 02 Apr 2026 08:02:00 GMT",
+				},
+			],
+			storage_overview: [
+				{
+					storage_target_id: 4,
+					storage_target_name: "archive-primary",
+					storage_target_type: "rolling_local",
+					available_bytes: 2048,
+					backup_count: 3,
+					last_backup_at: "Wed, 02 Apr 2026 08:02:00 GMT",
+				},
+			],
 		})
 		vi.mocked(getSystemStatus).mockResolvedValue({
 			version: "0.1.0",
@@ -56,5 +76,19 @@ describe("DashboardView", () => {
 		expect(screen.getByText("DASHBOARD")).toBeInTheDocument()
 		expect(screen.getByRole("heading", { name: "系统概览" })).toBeInTheDocument()
 		expect(screen.getByText("监控备份健康、运行任务与容量风险。")).toBeInTheDocument()
+	})
+
+	it("uses a non-stretch row for recent backups and storage overview", async () => {
+		render(DashboardView)
+
+		await waitFor(() => {
+			expect(screen.getByRole("heading", { name: "最近备份" })).toBeInTheDocument()
+			expect(screen.getByRole("heading", { name: "存储空间概览" })).toBeInTheDocument()
+		})
+
+		const overviewRow = screen.getByRole("heading", { name: "最近备份" }).closest(".page-two-column")
+
+		expect(overviewRow).not.toBeNull()
+		expect(overviewRow).toHaveClass("dashboard-view__overview-row")
 	})
 })

@@ -214,11 +214,17 @@ onMounted(() => {
 		<AppNotification v-if="errorMessage" title="策略加载失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="策略已保存" tone="success" :description="successMessage" />
 
-		<div class="page-action-row--wrap page-actions-end">
-			<AppButton @click="openCreateModal">新建策略</AppButton>
-		</div>
+		<AppCard>
+			<template #header>
+				<div class="strategies-tab__card-header">
+					<div class="strategies-tab__card-heading">
+						<h2 class="strategies-tab__card-title">策略列表</h2>
+						<p class="strategies-tab__card-description">每个策略绑定备份类型、调度和目标集合。</p>
+					</div>
+					<AppButton @click="openCreateModal">新建策略</AppButton>
+				</div>
+			</template>
 
-		<AppCard title="策略列表" description="每个策略绑定备份类型、调度和目标集合。">
 			<AppTable
 				:rows="strategies"
 				:columns="[
@@ -355,7 +361,34 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-actions-end {
-	justify-content: flex-end;
+.strategies-tab__card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+}
+
+.strategies-tab__card-heading {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.strategies-tab__card-title,
+.strategies-tab__card-description {
+	margin: 0;
+}
+
+.strategies-tab__card-title {
+	color: var(--text-strong);
+	font-size: 1.08rem;
+	line-height: 1.15;
+	letter-spacing: -0.03em;
+}
+
+.strategies-tab__card-description {
+	color: var(--text-muted);
+	font-size: 0.92rem;
+	line-height: 1.6;
 }
 </style>

@@ -25,6 +25,47 @@ export function formatDateTime(value?: string | null): string {
 	}).format(date)
 }
 
+export function formatRemainingTime(value?: string | null, nowValue: number | Date = Date.now()): string {
+	if (!value) {
+		return "时间未知"
+	}
+
+	const target = new Date(value)
+	if (Number.isNaN(target.getTime())) {
+		return "时间未知"
+	}
+
+	const now = typeof nowValue === "number" ? nowValue : nowValue.getTime()
+	const diffMs = target.getTime() - now
+	if (diffMs <= 0) {
+		return "即将启动"
+	}
+
+	let remainingSeconds = Math.ceil(diffMs / 1000)
+	const days = Math.floor(remainingSeconds / 86400)
+	remainingSeconds -= days * 86400
+	const hours = Math.floor(remainingSeconds / 3600)
+	remainingSeconds -= hours * 3600
+	const minutes = Math.floor(remainingSeconds / 60)
+	const seconds = remainingSeconds - minutes * 60
+
+	const parts: string[] = []
+	if (days > 0) {
+		parts.push(`${days} 天`)
+	}
+	if (hours > 0) {
+		parts.push(`${hours} 小时`)
+	}
+	if (minutes > 0) {
+		parts.push(`${minutes} 分钟`)
+	}
+	if (parts.length === 0) {
+		parts.push(`${seconds} 秒`)
+	}
+
+	return parts.slice(0, 2).join(" ")
+}
+
 export function formatBytes(bytes?: number): string {
 	if (!bytes || bytes <= 0) {
 		return "0 B"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 
 import { ApiError } from "../../api/client"
 import { listBackups } from "../../api/backups"
@@ -15,6 +15,7 @@ import {
 	formatBackupType,
 	formatBytes,
 	formatDateTime,
+	formatRemainingTime,
 	formatSource,
 	formatStatusLabel,
 	statusTone,
@@ -33,6 +34,9 @@ const recentBackups = ref<BackupRecord[]>([])
 const runningTasks = ref<RunningTaskStatus[]>([])
 const isLoading = ref(true)
 const runningTasksMessage = ref("")
+const now = ref(Date.now())
+
+let clockTimer: ReturnType<typeof setInterval> | null = null
 
 const activeStrategyCount = computed(() => props.strategies.filter((strategy) => strategy.enabled).length)
 const totalBackupCount = computed(() => recentBackups.value.length)
@@ -67,6 +71,23 @@ const timelineItems = computed(() =>
 			tone: statusTone(record.status),
 		}
 	}),
+)
+const scheduledItems = computed(() =>
+	props.strategies
+		.flatMap((strategy) =>
+			(strategy.upcoming_runs ?? []).map((runAt, index) => ({
+				id: `${strategy.id}-${index}-${runAt}`,
+				title: `${strategy.name} · ${formatBackupType(strategy.backup_type)}`,
+				description: `剩余 ${formatRemainingTime(runAt, now.value)}`,
+				timestamp: formatDateTime(runAt),
+				sortValue: Date.parse(runAt),
+			})),
+		)
+		.filter((item) => !Number.isNaN(item.sortValue))
+		.filter((item) => item.sortValue > now.value)
+		.sort((left, right) => left.sortValue - right.sortValue)
+		.slice(0, 5)
+		.map(({ sortValue: _sortValue, ...item }) => item),
 )
 
 async function loadData(): Promise<void> {
@@ -106,6 +127,19 @@ watch(
 	},
 	{ immediate: true },
 )
+
+onMounted(() => {
+	clockTimer = setInterval(() => {
+		now.value = Date.now()
+	}, 1000)
+})
+
+onBeforeUnmount(() => {
+	if (clockTimer !== null) {
+		clearInterval(clockTimer)
+		clockTimer = null
+	}
+})
 </script>
 
 <template>
@@ -188,10 +222,22 @@ watch(
 			</AppCard>
 		</section>
 
-		<AppCard title="最近活动" description="最近 10 条备份记录，按完成时间倒序。">
-			<AppTimeline v-if="timelineItems.length > 0" :items="timelineItems" compact />
-			<AppEmpty v-else-if="!isLoading" title="暂无备份记录" compact />
-		</AppCard>
+		<section class="page-two-column overview-tab__activity-row">
+			<AppCard title="计划备份" description="按时间顺序展示未来 5 次计划中的备份启动。">
+				<AppTimeline v-if="scheduledItems.length > 0" :items="scheduledItems" compact />
+				<AppEmpty
+					v-else
+					title="暂无计划中的备份"
+					description="启用滚动备份策略后，这里会显示接下来 5 次计划运行。"
+					compact
+				/>
+			</AppCard>
+
+			<AppCard title="最近活动" description="最近 10 条备份记录，按完成时间倒序。">
+				<AppTimeline v-if="timelineItems.length > 0" :items="timelineItems" compact />
+				<AppEmpty v-else-if="!isLoading" title="暂无备份记录" compact />
+			</AppCard>
+		</section>
 	</section>
 </template>
 
@@ -217,5 +263,9 @@ watch(
 	justify-content: space-between;
 	align-items: center;
 	gap: var(--space-3);
+}
+
+.overview-tab__activity-row {
+	align-items: start;
 }
 </style>

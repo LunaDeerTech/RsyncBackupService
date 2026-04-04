@@ -20,31 +20,27 @@ type ProgressSnapshot struct {
 	EstimatedRemaining    time.Duration
 }
 
-var progress2Pattern = regexp.MustCompile(`^\s*([0-9][0-9,]*)\s+([0-9]{1,3})%\s+([0-9]*\.?[0-9]+)([A-Za-z/]+)\s+([0-9:]+)(?:\s+.*)?$`)
+var progressTokenPattern = regexp.MustCompile(`^([0-9][0-9,]*(?:\.[0-9]+)?)([A-Za-z/]*)$`)
 
 func ParseProgress2(line string) (ProgressSnapshot, bool) {
-	matches := progress2Pattern.FindStringSubmatch(strings.TrimSpace(line))
-	if matches == nil {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) < 4 {
 		return ProgressSnapshot{}, false
 	}
 
-	transferred, err := strconv.ParseUint(strings.ReplaceAll(matches[1], ",", ""), 10, 64)
+	transferred, err := parseProgressTransferred(fields[0])
 	if err != nil {
 		return ProgressSnapshot{}, false
 	}
-	percentage, err := strconv.Atoi(matches[2])
+	percentage, err := strconv.Atoi(strings.TrimSuffix(fields[1], "%"))
 	if err != nil {
 		return ProgressSnapshot{}, false
 	}
-	speedValue, err := strconv.ParseFloat(matches[3], 64)
+	bytesPerSecond, err := parseProgressSpeed(fields[2])
 	if err != nil {
 		return ProgressSnapshot{}, false
 	}
-	speedMultiplier, ok := progressUnitMultiplier(matches[4])
-	if !ok {
-		return ProgressSnapshot{}, false
-	}
-	elapsed, err := parseProgressElapsed(matches[5])
+	elapsed, err := parseProgressElapsed(fields[3])
 	if err != nil {
 		return ProgressSnapshot{}, false
 	}
@@ -52,9 +48,51 @@ func ParseProgress2(line string) (ProgressSnapshot, bool) {
 	return ProgressSnapshot{
 		BytesTransferred: transferred,
 		Percentage:       percentage,
-		BytesPerSecond:   speedValue * speedMultiplier,
+		BytesPerSecond:   bytesPerSecond,
 		Elapsed:          elapsed,
 	}, true
+}
+
+func parseProgressTransferred(value string) (uint64, error) {
+	amount, unit, err := parseProgressAmount(value)
+	if err != nil {
+		return 0, err
+	}
+
+	multiplier, ok := progressSizeMultiplier(unit)
+	if !ok {
+		return 0, fmt.Errorf("invalid progress size unit %q", unit)
+	}
+
+	return uint64(amount*multiplier + 0.5), nil
+}
+
+func parseProgressSpeed(value string) (float64, error) {
+	amount, unit, err := parseProgressAmount(value)
+	if err != nil {
+		return 0, err
+	}
+
+	multiplier, ok := progressUnitMultiplier(unit)
+	if !ok {
+		return 0, fmt.Errorf("invalid progress speed unit %q", unit)
+	}
+
+	return amount * multiplier, nil
+}
+
+func parseProgressAmount(value string) (float64, string, error) {
+	matches := progressTokenPattern.FindStringSubmatch(strings.TrimSpace(value))
+	if matches == nil {
+		return 0, "", fmt.Errorf("invalid progress token %q", value)
+	}
+
+	amount, err := strconv.ParseFloat(strings.ReplaceAll(matches[1], ",", ""), 64)
+	if err != nil {
+		return 0, "", err
+	}
+
+	return amount, matches[2], nil
 }
 
 func EstimateRemaining(totalSize, transferred uint64, avgBytesPerSecond float64) time.Duration {
@@ -128,6 +166,23 @@ func progressUnitMultiplier(unit string) (float64, bool) {
 	case "GB/S":
 		return 1024 * 1024 * 1024, true
 	case "TB/S":
+		return 1024 * 1024 * 1024 * 1024, true
+	default:
+		return 0, false
+	}
+}
+
+func progressSizeMultiplier(unit string) (float64, bool) {
+	switch strings.ToUpper(strings.TrimSpace(unit)) {
+	case "", "B":
+		return 1, true
+	case "K", "KB":
+		return 1024, true
+	case "M", "MB":
+		return 1024 * 1024, true
+	case "G", "GB":
+		return 1024 * 1024 * 1024, true
+	case "T", "TB":
 		return 1024 * 1024 * 1024 * 1024, true
 	default:
 		return 0, false

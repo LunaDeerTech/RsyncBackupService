@@ -165,11 +165,17 @@ watch(
 		<AppNotification v-if="errorMessage" title="恢复页面加载失败" tone="danger" :description="errorMessage" />
 		<AppNotification v-if="successMessage" title="恢复任务已创建" tone="success" :description="successMessage" />
 
-		<div class="page-action-row--wrap page-actions-end">
-			<AppButton size="sm" variant="danger" :disabled="snapshots.length === 0" @click="openRestoreModal">发起恢复</AppButton>
-		</div>
+		<AppCard>
+			<template #header>
+				<div class="restore-tab__card-header">
+					<div class="restore-tab__card-heading">
+						<h2 class="restore-tab__card-title">恢复记录</h2>
+						<p class="restore-tab__card-description">显示当前实例的恢复任务记录。</p>
+					</div>
+					<AppButton size="sm" variant="danger" :disabled="snapshots.length === 0" @click="openRestoreModal">发起恢复</AppButton>
+				</div>
+			</template>
 
-		<AppCard title="恢复记录" description="显示当前实例的恢复任务记录。">
 			<AppTable
 				:rows="restoreRecords"
 				:columns="[
@@ -264,7 +270,34 @@ watch(
 </template>
 
 <style scoped>
-.page-actions-end {
-	justify-content: flex-end;
+.restore-tab__card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+}
+
+.restore-tab__card-heading {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.restore-tab__card-title,
+.restore-tab__card-description {
+	margin: 0;
+}
+
+.restore-tab__card-title {
+	color: var(--text-strong);
+	font-size: 1.08rem;
+	line-height: 1.15;
+	letter-spacing: -0.03em;
+}
+
+.restore-tab__card-description {
+	color: var(--text-muted);
+	font-size: 0.92rem;
+	line-height: 1.6;
 }
 </style>

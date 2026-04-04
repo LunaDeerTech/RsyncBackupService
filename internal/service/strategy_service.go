@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/LunaDeerTech/RsyncBackupService/internal/model"
 	"github.com/LunaDeerTech/RsyncBackupService/internal/repository"
@@ -52,11 +53,11 @@ type StrategyService struct {
 	strategyRepo      repository.StrategyRepository
 	storageTargetRepo repository.StorageTargetRepository
 	permissionService *PermissionService
-	schedulerService  StrategyScheduleRefresher
+	schedulerService  StrategyScheduleCoordinator
 }
 
-func NewStrategyService(db *gorm.DB, schedulerServices ...StrategyScheduleRefresher) *StrategyService {
-	var schedulerService StrategyScheduleRefresher
+func NewStrategyService(db *gorm.DB, schedulerServices ...StrategyScheduleCoordinator) *StrategyService {
+	var schedulerService StrategyScheduleCoordinator
 	if len(schedulerServices) > 0 {
 		schedulerService = schedulerServices[0]
 	}
@@ -127,6 +128,14 @@ func (s *StrategyService) ListByInstance(ctx context.Context, actor AuthIdentity
 	}
 
 	return s.strategyRepo.ListByInstanceID(ctx, instanceID)
+}
+
+func (s *StrategyService) UpcomingRuns(strategyID uint, limit int, now time.Time) []time.Time {
+	if s == nil || s.schedulerService == nil {
+		return nil
+	}
+
+	return s.schedulerService.UpcomingRuns(strategyID, limit, now)
 }
 
 func (s *StrategyService) Create(ctx context.Context, actor AuthIdentity, instanceID uint, req CreateStrategyRequest) (model.Strategy, error) {

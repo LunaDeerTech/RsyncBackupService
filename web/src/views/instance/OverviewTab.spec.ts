@@ -41,6 +41,10 @@ const strategies = [
 		cold_volume_size: null,
 		max_execution_seconds: 3600,
 		storage_target_ids: [4],
+		upcoming_runs: [
+			"Sat, 04 Apr 2026 12:15:00 GMT",
+			"Sat, 04 Apr 2026 13:00:00 GMT",
+		],
 		enabled: true,
 		created_at: "Wed, 02 Apr 2026 08:00:00 GMT",
 		updated_at: "Wed, 02 Apr 2026 08:30:00 GMT",
@@ -57,6 +61,7 @@ const strategies = [
 		cold_volume_size: "1G",
 		max_execution_seconds: 7200,
 		storage_target_ids: [5],
+		upcoming_runs: [],
 		enabled: false,
 		created_at: "Wed, 02 Apr 2026 08:00:00 GMT",
 		updated_at: "Wed, 02 Apr 2026 08:30:00 GMT",
@@ -65,8 +70,14 @@ const strategies = [
 
 describe("OverviewTab", () => {
 	beforeEach(() => {
+		vi.useFakeTimers()
+		vi.setSystemTime(new Date("2026-04-04T12:00:00Z"))
 		vi.mocked(listBackups).mockReset()
 		vi.mocked(listRunningTasks).mockReset()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
 	})
 
 	it("renders KPI cards, filtered running tasks, and recent activity from live data", async () => {
@@ -152,6 +163,52 @@ describe("OverviewTab", () => {
 		expect(screen.getByText(/失败：SSH timeout/)).toBeInTheDocument()
 		expect(screen.getByText("滚动备份 · 每日增量 → 目标 #4")).toBeInTheDocument()
 		expect(screen.getByText("中继模式")).toBeInTheDocument()
+		expect(screen.getByText("计划备份")).toBeInTheDocument()
+		expect(screen.getByText(/剩余 15 分钟/)).toBeInTheDocument()
+		const scheduleAndActivityRow = screen.getByText("计划备份").closest(".page-two-column")
+		expect(scheduleAndActivityRow).not.toBeNull()
+		expect(scheduleAndActivityRow).toHaveClass("overview-tab__activity-row")
+		expect(scheduleAndActivityRow as HTMLElement).toContainElement(screen.getByText("最近活动"))
+	})
+
+	it("drops elapsed planned runs and keeps the next five future backups visible", async () => {
+		vi.mocked(listBackups).mockResolvedValue([])
+		vi.mocked(listRunningTasks).mockResolvedValue([])
+
+		render(OverviewTab, {
+			props: {
+				instance,
+				strategies: [
+					{
+						...strategies[0],
+						upcoming_runs: [
+							"Sat, 04 Apr 2026 12:01:00 GMT",
+							"Sat, 04 Apr 2026 12:02:00 GMT",
+							"Sat, 04 Apr 2026 12:03:00 GMT",
+							"Sat, 04 Apr 2026 12:04:00 GMT",
+							"Sat, 04 Apr 2026 12:05:00 GMT",
+							"Sat, 04 Apr 2026 12:06:00 GMT",
+							"Sat, 04 Apr 2026 12:07:00 GMT",
+						],
+					},
+				],
+				canViewRunningTasks: true,
+				relayMode: false,
+			},
+		})
+
+		await waitFor(() => {
+			expect(screen.getByText("计划备份")).toBeInTheDocument()
+			expect(screen.getAllByRole("listitem")).toHaveLength(5)
+		})
+
+		vi.setSystemTime(new Date("2026-04-04T12:02:30Z"))
+		await vi.advanceTimersByTimeAsync(1000)
+
+		await waitFor(() => {
+			expect(screen.getAllByRole("listitem")).toHaveLength(5)
+		})
+		expect(screen.queryByText("剩余 即将启动")).not.toBeInTheDocument()
 	})
 
 	it("shows empty states when there are no running tasks or backup records", async () => {

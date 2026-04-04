@@ -132,4 +132,36 @@ describe("RestoreTab", () => {
 			expect(screen.getByText("/srv/www")).toBeInTheDocument()
 		})
 	})
+
+	it("keeps the restore action in the restore-record card header", async () => {
+		render(RestoreTab, {
+			props: {
+				instanceId: 1,
+				instance: {
+					id: 1,
+					name: "web-01",
+					source_type: "remote",
+					source_host: "192.0.2.10",
+					source_port: 22,
+					source_user: "backup",
+					source_ssh_key_id: 2,
+					source_path: "/srv/www",
+					exclude_patterns: [],
+					enabled: true,
+					created_by: 1,
+					created_at: "Wed, 02 Apr 2026 08:00:00 GMT",
+					updated_at: "Wed, 02 Apr 2026 08:00:00 GMT",
+				},
+			},
+		})
+
+		await waitFor(() => {
+			expect(listSnapshots).toHaveBeenCalledWith(1)
+			expect(screen.getByRole("button", { name: "发起恢复" })).toBeInTheDocument()
+		})
+
+		const restoreButton = screen.getByRole("button", { name: "发起恢复" })
+
+		expect(restoreButton.closest(".app-card__header")).not.toBeNull()
+	})
 })

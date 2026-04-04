@@ -90,6 +90,7 @@ export interface StrategySummary {
 	cold_volume_size?: string | null
 	max_execution_seconds: number
 	storage_target_ids: number[]
+	upcoming_runs?: string[]
 	enabled: boolean
 	created_at: string
 	updated_at: string

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
 import { ApiError } from "../api/client"
@@ -30,6 +30,13 @@ const storageTargetsRestricted = ref(false)
 const errorMessage = ref("")
 const isLoading = ref(true)
 const activeTab = ref("overview")
+
+const maxStrategyPreviewRefreshDelay = 2_147_483_647
+const strategyPreviewRefreshRetryDelay = 30_000
+
+let strategyPreviewRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let strategyPreviewRefreshDisposed = false
+let loadDetailRequestId = 0
 
 const instanceId = computed(() => Number.parseInt(String(route.params.id ?? "0"), 10) || 0)
 const isAdmin = computed(() => auth.currentUser?.is_admin === true)
@@ -83,15 +90,105 @@ const relayModeHint = computed(() => {
 	return "该实例的源端与部分目标端都位于远程主机。恢复与滚动同步会经过本机缓存目录，请确认磁盘空间与网络带宽。"
 })
 
+const nextStrategyPreviewRunAt = computed(() => {
+	const now = Date.now()
+	let nextRunAt: number | null = null
+
+	for (const strategy of strategies.value) {
+		for (const runAt of strategy.upcoming_runs ?? []) {
+			const timestamp = Date.parse(runAt)
+			if (Number.isNaN(timestamp) || timestamp <= now) {
+				continue
+			}
+
+			if (nextRunAt === null || timestamp < nextRunAt) {
+				nextRunAt = timestamp
+			}
+		}
+	}
+
+	return nextRunAt
+})
+
+function clearStrategyPreviewRefreshTimer(): void {
+	if (strategyPreviewRefreshTimer !== null) {
+		clearTimeout(strategyPreviewRefreshTimer)
+		strategyPreviewRefreshTimer = null
+	}
+}
+
+async function refreshStrategiesPreview(): Promise<boolean> {
+	const requestedInstanceId = instanceId.value
+
+	try {
+		const nextStrategies = await listStrategies(requestedInstanceId)
+		if (strategyPreviewRefreshDisposed || requestedInstanceId !== instanceId.value) {
+			return false
+		}
+
+		strategies.value = nextStrategies
+		return true
+	} catch {
+		return false
+	}
+}
+
+function scheduleStrategyPreviewRefresh(retryDelay?: number): void {
+	if (strategyPreviewRefreshDisposed || isLoading.value || instance.value?.id !== instanceId.value) {
+		return
+	}
+
+	clearStrategyPreviewRefreshTimer()
+	if (retryDelay !== undefined) {
+		strategyPreviewRefreshTimer = setTimeout(() => {
+			scheduleStrategyPreviewRefresh()
+		}, retryDelay)
+		return
+	}
+
+	if (nextStrategyPreviewRunAt.value === null) {
+		return
+	}
+
+	const delay = Math.max(nextStrategyPreviewRunAt.value - Date.now() + 1000, 1000)
+	strategyPreviewRefreshTimer = setTimeout(() => {
+		if (strategyPreviewRefreshDisposed) {
+			return
+		}
+
+		if (delay > maxStrategyPreviewRefreshDelay) {
+			scheduleStrategyPreviewRefresh()
+			return
+		}
+
+		void refreshStrategiesPreview().then((didRefresh) => {
+			if (strategyPreviewRefreshDisposed) {
+				return
+			}
+
+			scheduleStrategyPreviewRefresh(didRefresh ? undefined : strategyPreviewRefreshRetryDelay)
+		})
+	}, Math.min(delay, maxStrategyPreviewRefreshDelay))
+}
+
 async function loadDetail(): Promise<void> {
+	const requestedInstanceId = instanceId.value
+	const requestId = loadDetailRequestId + 1
+	loadDetailRequestId = requestId
+
 	errorMessage.value = ""
 	isLoading.value = true
+	if (instance.value?.id !== requestedInstanceId) {
+		instance.value = null
+		strategies.value = []
+		storageTargets.value = []
+	}
 
 	try {
 		storageTargetsRestricted.value = false
 		const [instanceItem, strategyItems, storageTargetItems] = await Promise.all([
-			getInstanceDetail(instanceId.value),
-			listStrategies(instanceId.value),
+			getInstanceDetail(requestedInstanceId),
+			listStrategies(requestedInstanceId),
 			listStorageTargets().catch((error: unknown) => {
 				if (error instanceof ApiError && error.status === 403) {
 					storageTargetsRestricted.value = true
@@ -102,12 +199,36 @@ async function loadDetail(): Promise<void> {
 			}),
 		])
 
+		if (
+			strategyPreviewRefreshDisposed ||
+			requestId !== loadDetailRequestId ||
+			requestedInstanceId !== instanceId.value
+		) {
+			return
+		}
+
 		instance.value = instanceItem
 		strategies.value = strategyItems
 		storageTargets.value = storageTargetItems
 	} catch (error) {
+		if (
+			strategyPreviewRefreshDisposed ||
+			requestId !== loadDetailRequestId ||
+			requestedInstanceId !== instanceId.value
+		) {
+			return
+		}
+
 		errorMessage.value = error instanceof ApiError ? error.message : "加载实例详情失败。"
 	} finally {
+		if (
+			strategyPreviewRefreshDisposed ||
+			requestId !== loadDetailRequestId ||
+			requestedInstanceId !== instanceId.value
+		) {
+			return
+		}
+
 		isLoading.value = false
 	}
 }
@@ -121,7 +242,12 @@ onMounted(() => {
 })
 
 watch(instanceId, () => {
+	clearStrategyPreviewRefreshTimer()
 	void loadDetail()
+})
+
+watch([strategies, instanceId, isLoading, () => instance.value?.id ?? 0], () => {
+	scheduleStrategyPreviewRefresh()
 })
 
 watch(
@@ -133,6 +259,11 @@ watch(
 	},
 	{ immediate: true },
 )
+
+onBeforeUnmount(() => {
+	strategyPreviewRefreshDisposed = true
+	clearStrategyPreviewRefreshTimer()
+})
 </script>
 
 <template>
