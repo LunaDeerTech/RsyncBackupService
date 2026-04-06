@@ -1,0 +1,88 @@
+package store
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"testing"
+)
+
+func TestNewAndMigrateCreatesSchema(t *testing.T) {
+	dataDir := t.TempDir()
+
+	db, err := New(dataDir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate() second run error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dataDir, "rbs.db")); err != nil {
+		t.Fatalf("database file missing: %v", err)
+	}
+
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode;").Scan(&journalMode); err != nil {
+		t.Fatalf("journal mode query error = %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal mode = %q, want %q", journalMode, "wal")
+	}
+
+	expectedTables := []string{
+		"audit_logs",
+		"backup_targets",
+		"backups",
+		"instance_permissions",
+		"instances",
+		"notification_subscriptions",
+		"policies",
+		"remote_configs",
+		"risk_events",
+		"system_configs",
+		"tasks",
+		"users",
+	}
+
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		t.Fatalf("list tables error = %v", err)
+	}
+	defer rows.Close()
+
+	var actualTables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			t.Fatalf("scan table name error = %v", err)
+		}
+		actualTables = append(actualTables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tables error = %v", err)
+	}
+
+	sort.Strings(actualTables)
+	if len(actualTables) != len(expectedTables) {
+		t.Fatalf("table count = %d, want %d (%v)", len(actualTables), len(expectedTables), actualTables)
+	}
+	for index, expected := range expectedTables {
+		if actualTables[index] != expected {
+			t.Fatalf("table[%d] = %q, want %q", index, actualTables[index], expected)
+		}
+	}
+
+	var schemaVersion string
+	if err := db.QueryRow(`SELECT value FROM system_configs WHERE key = 'schema_version'`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("query schema version error = %v", err)
+	}
+	if schemaVersion != "1" {
+		t.Fatalf("schema version = %q, want %q", schemaVersion, "1")
+	}
+}

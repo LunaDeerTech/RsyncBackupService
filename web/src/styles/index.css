@@ -1,0 +1,58 @@
+@config '../../tailwind.config.ts';
+@import 'tailwindcss';
+@import './tokens.css';
+
+@layer base {
+  :root {
+    font-family: 'IBM Plex Sans', 'Noto Sans SC', 'PingFang SC', 'Segoe UI', sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #app {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background:
+      radial-gradient(circle at top left, rgba(99, 217, 255, 0.22), transparent 28%),
+      radial-gradient(circle at 80% 10%, rgba(126, 242, 212, 0.16), transparent 24%),
+      linear-gradient(180deg, var(--bg-subtle) 0%, var(--bg-canvas) 100%);
+    color: var(--text-primary);
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 1.25rem;
+  }
+}

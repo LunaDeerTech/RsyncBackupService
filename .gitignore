@@ -3,5 +3,6 @@
 .env
 bin/
 data/
-web/dist/
+web/dist/*
+!web/dist/.gitkeep
 web/node_modules/
