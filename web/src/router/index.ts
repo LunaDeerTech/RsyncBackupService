@@ -62,7 +62,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'system',
         name: 'system-config',
-        component: () => import('../pages/ComingSoonPage.vue'),
+        component: () => import('../pages/system/SystemConfigPage.vue'),
         meta: {
           requiresAdmin: true,
           title: '系统配置',
