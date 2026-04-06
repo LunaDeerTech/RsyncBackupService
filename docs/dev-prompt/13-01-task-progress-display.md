@@ -2,7 +2,7 @@
 
 ## 前序任务简报
 
-系统全部功能页面基本完成：仪表盘、实例管理、备份目标、远程配置、用户管理、风险事件、个人中心、SMTP 配置。后端任务 API（`GET /api/v1/tasks/:id`）返回任务的 `progress`、`current_step`、`estimated_end`。备份/恢复执行过程中通过 progressCb 实时更新 task 记录。
+系统全部功能页面基本完成：仪表盘、实例管理、备份目标、系统配置（远程配置/用户管理/SMTP 配置）、风险事件、个人中心。后端任务 API（`GET /api/v1/tasks/:id`）返回任务的 `progress`、`current_step`、`estimated_end`。备份/恢复执行过程中通过 progressCb 实时更新 task 记录。
 
 ## 当前任务目标
 

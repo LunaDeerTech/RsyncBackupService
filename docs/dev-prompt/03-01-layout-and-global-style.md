@@ -19,9 +19,7 @@
     - 仪表盘（admin 可见）→ `/dashboard`
     - 实例列表 → `/instances`
     - 备份目标（admin 可见）→ `/targets`
-    - 远程配置（admin 可见）→ `/system/remotes`
-    - 用户管理（admin 可见）→ `/system/users`
-    - SMTP 配置（admin 可见）→ `/system/smtp`
+    - 系统配置（admin 可见）→ `/system`（内含远程配置/用户管理/SMTP 配置三个 Tab 页）
     - 风险事件（admin 可见）→ `/system/risks`
   - 底部：个人中心入口 + 登出按钮
   - 当前路由高亮对应菜单项

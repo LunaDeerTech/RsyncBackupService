@@ -10,9 +10,9 @@
 
 ## 实现指导
 
-### 1. SMTP 配置页面（`/system/smtp`）
+### 1. SMTP 配置页面（系统配置 `/system` 的 SMTP Tab）
 
-- 路由：`/system/smtp`，admin 权限
+- 路由：`/system`（SMTP 配置 Tab），admin 权限
 - 页面组件：`pages/system/SmtpConfigPage.vue`
 
 **API 模块**：

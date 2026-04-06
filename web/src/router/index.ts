@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import AppLayout from '../layouts/AppLayout.vue'
 import DashboardPage from '../pages/DashboardPage.vue'
 import InstancesPage from '../pages/InstancesPage.vue'
 import LoginPage from '../pages/LoginPage.vue'
@@ -28,21 +29,63 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/dashboard',
-    name: 'dashboard',
-    component: DashboardPage,
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-    },
-  },
-  {
-    path: '/instances',
-    name: 'instances',
-    component: InstancesPage,
-    meta: {
-      requiresAuth: true,
-    },
+    path: '/',
+    component: AppLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: DashboardPage,
+        meta: {
+          requiresAdmin: true,
+          title: '仪表盘',
+        },
+      },
+      {
+        path: 'instances',
+        name: 'instances',
+        component: InstancesPage,
+        meta: {
+          title: '实例列表',
+        },
+      },
+      {
+        path: 'targets',
+        name: 'targets',
+        component: () => import('../pages/ComingSoonPage.vue'),
+        meta: {
+          requiresAdmin: true,
+          title: '备份目标',
+        },
+      },
+      {
+        path: 'system',
+        name: 'system-config',
+        component: () => import('../pages/ComingSoonPage.vue'),
+        meta: {
+          requiresAdmin: true,
+          title: '系统配置',
+        },
+      },
+      {
+        path: 'system/risks',
+        name: 'system-risks',
+        component: () => import('../pages/ComingSoonPage.vue'),
+        meta: {
+          requiresAdmin: true,
+          title: '风险事件',
+        },
+      },
+      {
+        path: 'profile',
+        name: 'profile',
+        component: () => import('../pages/ComingSoonPage.vue'),
+        meta: {
+          title: '个人中心',
+        },
+      },
+    ],
   },
 ]
 

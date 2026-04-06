@@ -793,9 +793,7 @@ web/
 | `/instances` | 实例列表 | 已认证 |
 | `/instances/:id` | 实例详情（tab 切换） | 已认证+实例权限 |
 | `/targets` | 备份目标 | admin |
-| `/system/remotes` | 远程配置 | admin |
-| `/system/users` | 用户管理 | admin |
-| `/system/smtp` | SMTP 配置 | admin |
+| `/system` | 系统配置（远程配置/用户管理/SMTP 配置 Tab 页） | admin |
 | `/system/risks` | 风险事件 | admin |
 | `/profile` | 个人中心 | 已认证 |
 

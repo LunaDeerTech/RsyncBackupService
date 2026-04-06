@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import AppLayout from '../layouts/AppLayout.vue'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
@@ -8,7 +7,6 @@ const { user } = storeToRefs(authStore)
 </script>
 
 <template>
-  <AppLayout>
     <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
       <section class="relative overflow-hidden rounded-[32px] border border-outline bg-surface-base/92 p-7 shadow-panel backdrop-blur md:p-8">
         <div class="absolute inset-x-6 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--primary-500),transparent)]"></div>
@@ -51,5 +49,4 @@ const { user } = storeToRefs(authStore)
         </div>
       </aside>
     </div>
-  </AppLayout>
 </template>

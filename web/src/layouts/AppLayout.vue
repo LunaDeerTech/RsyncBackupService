@@ -1,96 +1,171 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  LayoutDashboard,
+  Server,
+  HardDrive,
+  Settings,
+  ShieldAlert,
+  UserCircle,
+  LogOut,
+  Menu,
+  X,
+} from 'lucide-vue-next'
 import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
-const { isAdmin, isAuthenticated, user } = storeToRefs(authStore)
+const { isAdmin, user } = storeToRefs(authStore)
 const route = useRoute()
 const router = useRouter()
 
-const primaryNavigation = computed(() => {
-  const items = [
-    { label: 'Dashboard', path: '/dashboard', adminOnly: true },
-    { label: 'Instances', path: '/instances', adminOnly: false },
-  ]
+const drawerOpen = ref(false)
 
+interface NavItem {
+  label: string
+  path: string
+  icon: typeof LayoutDashboard
+  adminOnly: boolean
+}
+
+const navItems = computed<NavItem[]>(() => {
+  const items: NavItem[] = [
+    { label: '仪表盘', path: '/dashboard', icon: LayoutDashboard, adminOnly: true },
+    { label: '实例列表', path: '/instances', icon: Server, adminOnly: false },
+    { label: '备份目标', path: '/targets', icon: HardDrive, adminOnly: true },
+    { label: '系统配置', path: '/system', icon: Settings, adminOnly: true },
+    { label: '风险事件', path: '/system/risks', icon: ShieldAlert, adminOnly: true },
+  ]
   return items.filter((item) => !item.adminOnly || isAdmin.value)
 })
 
+function isActive(path: string): boolean {
+  return route.path === path || route.path.startsWith(path + '/')
+}
+
+function navigateTo(path: string) {
+  router.push(path)
+  drawerOpen.value = false
+}
+
 async function handleLogout() {
   authStore.logout()
+  drawerOpen.value = false
   await router.replace('/login')
 }
+
+// Close drawer on route change
+watch(() => route.path, () => {
+  drawerOpen.value = false
+})
 </script>
 
 <template>
-  <div class="relative min-h-screen overflow-hidden bg-surface-canvas text-content-primary">
-    <div class="pointer-events-none absolute inset-0">
-      <div class="absolute left-[8%] top-[-9rem] h-72 w-72 rounded-full bg-primary-300/30 blur-3xl"></div>
-      <div class="absolute right-[4%] top-[18%] h-80 w-80 rounded-full bg-emerald-300/20 blur-3xl"></div>
-      <div class="absolute bottom-[-12rem] left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-sky-300/20 blur-3xl"></div>
-    </div>
+  <div class="min-h-screen bg-surface-canvas text-content-primary">
+    <!-- Mobile top bar -->
+    <header class="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-outline bg-surface-base/95 px-4 backdrop-blur lg:hidden">
+      <button
+        type="button"
+        class="inline-flex h-9 w-9 items-center justify-center rounded-md text-content-secondary transition hover:bg-surface-sunken hover:text-content-primary"
+        @click="drawerOpen = !drawerOpen"
+      >
+        <Menu v-if="!drawerOpen" :size="20" />
+        <X v-else :size="20" />
+      </button>
+      <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,var(--primary-500),var(--accent-mint-400))] font-mono text-xs font-bold text-slate-950">RBS</span>
+      <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+      <div class="ml-auto">
+        <ThemeToggle compact />
+      </div>
+    </header>
 
-    <div class="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 sm:px-6 lg:px-8">
-      <header class="flex flex-col gap-5 rounded-[32px] border border-outline bg-surface-base/80 px-6 py-5 shadow-panel backdrop-blur lg:flex-row lg:items-center lg:justify-between">
-        <div class="space-y-2">
-          <div class="inline-flex items-center gap-3">
-            <span class="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,var(--primary-500),#7EF2D4)] font-mono text-sm font-bold text-slate-950 shadow-glow">RBS</span>
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.36em] text-content-muted">Frontend bootstrap</p>
-              <h1 class="text-xl font-semibold text-content-primary">Rsync Backup Service</h1>
-            </div>
-          </div>
-          <p class="max-w-2xl text-sm leading-6 text-content-secondary">
-            Vue 3, TypeScript, Tailwind, Pinia and Axios are wired up as the initial shell for the admin console.
-          </p>
-        </div>
+    <!-- Mobile drawer overlay -->
+    <Transition name="fade">
+      <div
+        v-if="drawerOpen"
+        class="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm lg:hidden"
+        @click="drawerOpen = false"
+      />
+    </Transition>
 
-        <div class="flex flex-col gap-3 lg:items-end">
-          <nav v-if="isAuthenticated" class="flex flex-wrap justify-end gap-2">
-            <RouterLink
-              v-for="item in primaryNavigation"
-              :key="item.path"
-              :to="item.path"
-              class="rounded-full border px-4 py-2 text-sm font-medium transition"
-              :class="route.path === item.path
-                ? 'border-primary-500 bg-primary-500/10 text-primary-600'
-                : 'border-outline-subtle bg-surface-raised text-content-secondary hover:border-primary-500 hover:text-primary-600'"
-            >
-              {{ item.label }}
-            </RouterLink>
-          </nav>
+    <!-- Sidebar / Drawer -->
+    <aside
+      class="fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-outline bg-surface-base transition-transform duration-300 lg:z-30 lg:translate-x-0"
+      :class="drawerOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <!-- Sidebar header -->
+      <div class="flex h-14 items-center gap-3 border-b border-outline px-5">
+        <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,var(--primary-500),var(--accent-mint-400))] font-mono text-xs font-bold text-slate-950">RBS</span>
+        <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+      </div>
 
-          <div class="flex flex-wrap items-center justify-end gap-3">
-            <div v-if="user" class="rounded-full border border-outline-subtle bg-surface-raised px-4 py-2 text-sm text-content-secondary">
-              <span class="font-semibold text-content-primary">{{ user.name }}</span>
-              <span class="mx-2 text-content-muted">/</span>
-              <span class="uppercase tracking-[0.16em] text-content-muted">{{ user.role }}</span>
-            </div>
-
+      <!-- Navigation -->
+      <nav class="flex-1 overflow-y-auto px-3 py-4">
+        <ul class="space-y-1">
+          <li v-for="item in navItems" :key="item.path">
             <button
-              v-if="isAuthenticated"
               type="button"
-              class="inline-flex items-center rounded-full border border-outline bg-surface-base px-4 py-2 text-sm font-medium text-content-primary transition hover:border-error-500 hover:text-error-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40"
-              @click="handleLogout"
+              class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition"
+              :class="isActive(item.path)
+                ? 'bg-primary-500/10 text-primary-600'
+                : 'text-content-secondary hover:bg-surface-sunken hover:text-content-primary'"
+              @click="navigateTo(item.path)"
             >
-              Sign Out
+              <component :is="item.icon" :size="18" class="shrink-0" />
+              <span>{{ item.label }}</span>
             </button>
+          </li>
+        </ul>
+      </nav>
 
-            <div class="hidden rounded-full border border-outline-subtle bg-surface-raised px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-content-muted sm:block">
-              data-theme driven tokens
-            </div>
+      <!-- Sidebar footer -->
+      <div class="border-t border-outline px-3 py-3 space-y-1">
+        <button
+          type="button"
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-content-secondary transition hover:bg-surface-sunken hover:text-content-primary"
+          @click="navigateTo('/profile')"
+        >
+          <UserCircle :size="18" class="shrink-0" />
+          <span class="truncate">{{ user?.name ?? '个人中心' }}</span>
+        </button>
+        <button
+          type="button"
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-content-secondary transition hover:bg-surface-sunken hover:text-error-500"
+          @click="handleLogout"
+        >
+          <LogOut :size="18" class="shrink-0" />
+          <span>登出</span>
+        </button>
+      </div>
+    </aside>
 
-            <ThemeToggle />
-          </div>
-        </div>
+    <!-- Main content area -->
+    <div class="lg:pl-60">
+      <!-- Desktop top bar -->
+      <header class="sticky top-0 z-20 hidden h-14 items-center justify-between border-b border-outline bg-surface-base/95 px-6 backdrop-blur lg:flex">
+        <h1 class="text-lg font-semibold text-content-primary">
+          {{ route.meta.title ?? '' }}
+        </h1>
+        <ThemeToggle />
       </header>
 
-      <main class="flex-1 py-8">
-        <slot />
+      <!-- Page content -->
+      <main class="min-h-[calc(100vh-3.5rem)] px-4 py-6 pt-20 sm:px-6 lg:px-8 lg:pt-6">
+        <router-view />
       </main>
     </div>
   </div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-normal);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>
