@@ -1,5 +1,28 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import { useAuthStore } from '../stores/auth'
+
+const authStore = useAuthStore()
+const { isAdmin, isAuthenticated, user } = storeToRefs(authStore)
+const route = useRoute()
+const router = useRouter()
+
+const primaryNavigation = computed(() => {
+  const items = [
+    { label: 'Dashboard', path: '/dashboard', adminOnly: true },
+    { label: 'Instances', path: '/instances', adminOnly: false },
+  ]
+
+  return items.filter((item) => !item.adminOnly || isAdmin.value)
+})
+
+async function handleLogout() {
+  authStore.logout()
+  await router.replace('/login')
+}
 </script>
 
 <template>
@@ -25,11 +48,43 @@ import ThemeToggle from '../components/ThemeToggle.vue'
           </p>
         </div>
 
-        <div class="flex items-center gap-3">
-          <div class="hidden rounded-full border border-outline-subtle bg-surface-raised px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-content-muted sm:block">
-            data-theme driven tokens
+        <div class="flex flex-col gap-3 lg:items-end">
+          <nav v-if="isAuthenticated" class="flex flex-wrap justify-end gap-2">
+            <RouterLink
+              v-for="item in primaryNavigation"
+              :key="item.path"
+              :to="item.path"
+              class="rounded-full border px-4 py-2 text-sm font-medium transition"
+              :class="route.path === item.path
+                ? 'border-primary-500 bg-primary-500/10 text-primary-600'
+                : 'border-outline-subtle bg-surface-raised text-content-secondary hover:border-primary-500 hover:text-primary-600'"
+            >
+              {{ item.label }}
+            </RouterLink>
+          </nav>
+
+          <div class="flex flex-wrap items-center justify-end gap-3">
+            <div v-if="user" class="rounded-full border border-outline-subtle bg-surface-raised px-4 py-2 text-sm text-content-secondary">
+              <span class="font-semibold text-content-primary">{{ user.name }}</span>
+              <span class="mx-2 text-content-muted">/</span>
+              <span class="uppercase tracking-[0.16em] text-content-muted">{{ user.role }}</span>
+            </div>
+
+            <button
+              v-if="isAuthenticated"
+              type="button"
+              class="inline-flex items-center rounded-full border border-outline bg-surface-base px-4 py-2 text-sm font-medium text-content-primary transition hover:border-error-500 hover:text-error-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40"
+              @click="handleLogout"
+            >
+              Sign Out
+            </button>
+
+            <div class="hidden rounded-full border border-outline-subtle bg-surface-raised px-4 py-2 text-xs font-medium uppercase tracking-[0.24em] text-content-muted sm:block">
+              data-theme driven tokens
+            </div>
+
+            <ThemeToggle />
           </div>
-          <ThemeToggle />
         </div>
       </header>
 

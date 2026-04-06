@@ -45,6 +45,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	routerOptions := make([]handler.RouterOption, 0, 1)
+	routerOptions = append(routerOptions, handler.WithJWTSecret(cfg.JWTSecret))
 	switch {
 	case cfg.DevMode:
 		logger.Info("embedded frontend disabled in development mode")
