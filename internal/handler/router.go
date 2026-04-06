@@ -3,11 +3,13 @@ package handler
 import (
 	"bytes"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/notify"
+	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
 
@@ -17,6 +19,7 @@ type Handler struct {
 	passwordSender    notify.PasswordSender
 	passwordGenerator func() (string, error)
 	loginLimiter      *loginRateLimiter
+	remoteConfigs     *service.RemoteConfigService
 }
 
 type RouterOption func(*routerOptions)
@@ -27,6 +30,8 @@ type routerOptions struct {
 	passwordSender    notify.PasswordSender
 	passwordGenerator func() (string, error)
 	loginLimiter      *loginRateLimiter
+	dataDir           string
+	remoteConfigs     *service.RemoteConfigService
 }
 
 func WithFrontend(frontend http.Handler) RouterOption {
@@ -38,6 +43,12 @@ func WithFrontend(frontend http.Handler) RouterOption {
 func WithJWTSecret(secret string) RouterOption {
 	return func(options *routerOptions) {
 		options.jwtSecret = secret
+	}
+}
+
+func WithDataDir(dataDir string) RouterOption {
+	return func(options *routerOptions) {
+		options.dataDir = dataDir
 	}
 }
 
@@ -59,6 +70,12 @@ func withLoginLimiter(limiter *loginRateLimiter) RouterOption {
 	}
 }
 
+func withRemoteConfigService(remoteConfigs *service.RemoteConfigService) RouterOption {
+	return func(options *routerOptions) {
+		options.remoteConfigs = remoteConfigs
+	}
+}
+
 func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	resolved := routerOptions{}
 	for _, option := range options {
@@ -73,6 +90,12 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.loginLimiter == nil {
 		resolved.loginLimiter = newLoginRateLimiter(time.Now)
 	}
+	if strings.TrimSpace(resolved.dataDir) == "" {
+		resolved.dataDir = filepath.Join(".", "data")
+	}
+	if resolved.remoteConfigs == nil {
+		resolved.remoteConfigs = service.NewRemoteConfigService(db, resolved.dataDir, nil)
+	}
 
 	handler := &Handler{
 		db:                db,
@@ -80,6 +103,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		passwordSender:    resolved.passwordSender,
 		passwordGenerator: resolved.passwordGenerator,
 		loginLimiter:      resolved.loginLimiter,
+		remoteConfigs:     resolved.remoteConfigs,
 	}
 
 	mux := http.NewServeMux()
@@ -92,6 +116,16 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("POST /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateUser))))
 	mux.Handle("PUT /api/v1/users/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateUser))))
 	mux.Handle("DELETE /api/v1/users/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteUser))))
+	mux.Handle("GET /api/v1/remotes", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListRemoteConfigs))))
+	mux.Handle("POST /api/v1/remotes", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateRemoteConfig))))
+	mux.Handle("PUT /api/v1/remotes/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateRemoteConfig))))
+	mux.Handle("DELETE /api/v1/remotes/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteRemoteConfig))))
+	mux.Handle("POST /api/v1/remotes/{id}/test", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TestRemoteConfig))))
+	mux.Handle("GET /api/v1/targets", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListBackupTargets))))
+	mux.Handle("POST /api/v1/targets", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateBackupTarget))))
+	mux.Handle("PUT /api/v1/targets/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateBackupTarget))))
+	mux.Handle("DELETE /api/v1/targets/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteBackupTarget))))
+	mux.Handle("POST /api/v1/targets/{id}/health-check", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CheckBackupTargetHealth))))
 	mux.Handle("GET /api/v1/users/me", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUser))))
 	mux.Handle("PUT /api/v1/users/me/password", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserPassword))))
 	mux.Handle("PUT /api/v1/users/me/profile", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserProfile))))

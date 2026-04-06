@@ -27,6 +27,14 @@ func Error(w http.ResponseWriter, status int, code int, message string) {
 	})
 }
 
+func ErrorWithData(w http.ResponseWriter, status int, code int, message string, data interface{}) {
+	writeResponse(w, status, Response{
+		Code:    code,
+		Message: message,
+		Data:    data,
+	})
+}
+
 func writeResponse(w http.ResponseWriter, status int, response Response) {
 	payload, err := json.Marshal(response)
 	if err != nil {

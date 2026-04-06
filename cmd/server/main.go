@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"rsync-backup-service/internal/config"
+	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/handler"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/store"
@@ -44,8 +48,15 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	healthChecker := engine.NewHealthChecker(db)
+	healthChecker.StartSchedule(serverCtx)
+
 	routerOptions := make([]handler.RouterOption, 0, 1)
 	routerOptions = append(routerOptions, handler.WithJWTSecret(cfg.JWTSecret))
+	routerOptions = append(routerOptions, handler.WithDataDir(cfg.DataDir))
 	switch {
 	case cfg.DevMode:
 		logger.Info("embedded frontend disabled in development mode")
@@ -68,6 +79,17 @@ func main() {
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	go func() {
+		<-serverCtx.Done()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("http server shutdown failed", "error", err)
+		}
+	}()
 
 	logger.Info("RBS backend startup completed",
 		"addr", server.Addr,
