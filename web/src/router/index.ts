@@ -53,7 +53,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'targets',
         name: 'targets',
-        component: () => import('../pages/ComingSoonPage.vue'),
+        component: () => import('../pages/targets/BackupTargetPage.vue'),
         meta: {
           requiresAdmin: true,
           title: '备份目标',
