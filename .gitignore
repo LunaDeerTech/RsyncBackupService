@@ -1,0 +1,7 @@
+.superpowers/
+.worktrees/
+.env
+bin/
+data/
+web/dist/
+web/node_modules/
