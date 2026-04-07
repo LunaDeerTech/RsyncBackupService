@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
@@ -140,6 +141,12 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to deliver password")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionUserCreate, map[string]any{
+		"created_user_id": user.ID,
+		"email":           user.Email,
+		"name":            user.Name,
+		"role":            user.Role,
+	})
 
 	JSON(w, http.StatusCreated, toUserResponse(*user))
 }
@@ -200,6 +207,12 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to update user")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionUserUpdate, map[string]any{
+		"updated_user_id": user.ID,
+		"email":           user.Email,
+		"name":            user.Name,
+		"role":            user.Role,
+	})
 
 	JSON(w, http.StatusOK, toUserResponse(*user))
 }
@@ -254,6 +267,12 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to delete user")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionUserDelete, map[string]any{
+		"deleted_user_id": user.ID,
+		"deleted_email":   user.Email,
+		"deleted_name":    user.Name,
+		"deleted_role":    user.Role,
+	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "user deleted"})
 }

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
@@ -217,14 +218,14 @@ func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := &model.Task{
-		InstanceID:  instance.ID,
-		BackupID:    &backup.ID,
-		Type:        "restore",
-		RestoreType: restoreType,
-		TargetPath:  targetPath,
-		Status:      "queued",
-		Progress:    0,
-		CurrentStep: "queued",
+		InstanceID:   instance.ID,
+		BackupID:     &backup.ID,
+		Type:         "restore",
+		RestoreType:  restoreType,
+		TargetPath:   targetPath,
+		Status:       "queued",
+		Progress:     0,
+		CurrentStep:  "queued",
 		ErrorMessage: "",
 	}
 	if err := h.db.CreateTask(task); err != nil {
@@ -238,6 +239,14 @@ func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to enqueue restore task")
 		return
 	}
+	h.writeCurrentUserAudit(r, instance.ID, audit.ActionRestoreTrigger, map[string]any{
+		"task_id":      task.ID,
+		"backup_id":    backup.ID,
+		"policy_id":    policy.ID,
+		"backup_type":  backup.Type,
+		"restore_type": restoreType,
+		"target_path":  targetPath,
+	})
 
 	JSON(w, http.StatusCreated, map[string]any{"task": task})
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/notify"
@@ -24,6 +25,7 @@ type Handler struct {
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
 	downloadTokens    *DownloadTokenManager
+	audit             *audit.Logger
 }
 
 type RouterOption func(*routerOptions)
@@ -118,6 +120,8 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.downloadTokens == nil {
 		resolved.downloadTokens = NewDownloadTokenManager()
 	}
+	auditLogger := audit.NewLogger(db)
+	resolved.remoteConfigs.SetAuditLogger(auditLogger)
 
 	handler := &Handler{
 		db:                db,
@@ -129,6 +133,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		taskQueue:         resolved.taskQueue,
 		scheduler:         resolved.scheduler,
 		downloadTokens:    resolved.downloadTokens,
+		audit:             auditLogger,
 	}
 
 	mux := http.NewServeMux()
@@ -137,6 +142,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", handler.Login)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handler.Refresh)
 	authenticated := middleware.Auth(resolved.jwtSecret)
+	mux.Handle("GET /api/v1/audit-logs", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListAuditLogs))))
 	mux.Handle("GET /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListUsers))))
 	mux.Handle("POST /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateUser))))
 	mux.Handle("PUT /api/v1/users/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateUser))))
@@ -154,6 +160,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("GET /api/v1/instances", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.ListInstances))))
 	mux.Handle("POST /api/v1/instances", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateInstance))))
 	mux.Handle("GET /api/v1/instances/{id}", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetInstance)))))
+	mux.Handle("GET /api/v1/instances/{id}/audit-logs", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListInstanceAuditLogs)))))
 	mux.Handle("PUT /api/v1/instances/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateInstance))))
 	mux.Handle("DELETE /api/v1/instances/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteInstance))))
 	mux.Handle("GET /api/v1/instances/{id}/stats", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetInstanceStats)))))

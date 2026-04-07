@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"rsync-backup-service/internal/audit"
+	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/store"
 )
@@ -54,6 +57,7 @@ type RemoteConfigService struct {
 	db        *store.DB
 	keyDir    string
 	sshTester SSHTester
+	audit     *audit.Logger
 }
 
 func NewRemoteConfigService(db *store.DB, dataDir string, sshTester SSHTester) *RemoteConfigService {
@@ -72,7 +76,14 @@ func NewRemoteConfigService(db *store.DB, dataDir string, sshTester SSHTester) *
 	}
 }
 
-func (s *RemoteConfigService) CreateRemoteConfig(_ context.Context, input RemoteConfigInput, privateKeyPEM []byte) (*model.RemoteConfig, error) {
+func (s *RemoteConfigService) SetAuditLogger(logger *audit.Logger) {
+	if s == nil {
+		return
+	}
+	s.audit = logger
+}
+
+func (s *RemoteConfigService) CreateRemoteConfig(ctx context.Context, input RemoteConfigInput, privateKeyPEM []byte) (*model.RemoteConfig, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrRemoteConfigUnavailable
 	}
@@ -99,11 +110,20 @@ func (s *RemoteConfigService) CreateRemoteConfig(_ context.Context, input Remote
 		_ = s.deleteManagedPrivateKey(remote.PrivateKeyPath)
 		return nil, err
 	}
+	s.writeAudit(ctx, audit.ActionRemoteCreate, map[string]any{
+		"remote_id":      remote.ID,
+		"name":           remote.Name,
+		"type":           remote.Type,
+		"host":           remote.Host,
+		"port":           remote.Port,
+		"username":       remote.Username,
+		"cloud_provider": remote.CloudProvider,
+	})
 
 	return remote, nil
 }
 
-func (s *RemoteConfigService) UpdateRemoteConfig(_ context.Context, id int64, input RemoteConfigInput, privateKeyPEM []byte, replacePrivateKey bool) (*model.RemoteConfig, error) {
+func (s *RemoteConfigService) UpdateRemoteConfig(ctx context.Context, id int64, input RemoteConfigInput, privateKeyPEM []byte, replacePrivateKey bool) (*model.RemoteConfig, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrRemoteConfigUnavailable
 	}
@@ -162,11 +182,20 @@ func (s *RemoteConfigService) UpdateRemoteConfig(_ context.Context, id int64, in
 	if deleteCurrentKey {
 		_ = s.deleteManagedPrivateKey(current.PrivateKeyPath)
 	}
+	s.writeAudit(ctx, audit.ActionRemoteUpdate, map[string]any{
+		"remote_id":      updated.ID,
+		"name":           updated.Name,
+		"type":           updated.Type,
+		"host":           updated.Host,
+		"port":           updated.Port,
+		"username":       updated.Username,
+		"cloud_provider": updated.CloudProvider,
+	})
 
 	return updated, nil
 }
 
-func (s *RemoteConfigService) DeleteRemoteConfig(_ context.Context, id int64) error {
+func (s *RemoteConfigService) DeleteRemoteConfig(ctx context.Context, id int64) error {
 	if s == nil || s.db == nil {
 		return ErrRemoteConfigUnavailable
 	}
@@ -191,8 +220,29 @@ func (s *RemoteConfigService) DeleteRemoteConfig(_ context.Context, id int64) er
 	if err := s.deleteManagedPrivateKey(remote.PrivateKeyPath); err != nil {
 		return err
 	}
+	s.writeAudit(ctx, audit.ActionRemoteDelete, map[string]any{
+		"deleted_remote_id": remote.ID,
+		"name":              remote.Name,
+		"type":              remote.Type,
+		"host":              remote.Host,
+		"port":              remote.Port,
+		"username":          remote.Username,
+	})
 
 	return nil
+}
+
+func (s *RemoteConfigService) writeAudit(ctx context.Context, action string, detail any) {
+	if s == nil || s.audit == nil {
+		return
+	}
+	userID := int64(0)
+	if claims := middleware.GetUser(ctx); claims != nil {
+		userID = claims.UserID
+	}
+	if err := s.audit.LogAction(ctx, 0, userID, action, detail); err != nil {
+		slog.Error("write remote config audit log failed", "action", action, "user_id", userID, "error", err)
+	}
 }
 
 func (s *RemoteConfigService) TestRemoteConfigConnection(ctx context.Context, id int64) error {

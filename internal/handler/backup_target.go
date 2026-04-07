@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/store"
@@ -100,6 +101,14 @@ func (h *Handler) CreateBackupTarget(w http.ResponseWriter, r *http.Request) {
 		writeBackupTargetError(w, err, "failed to create backup target")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionTargetCreate, map[string]any{
+		"target_id":        target.ID,
+		"name":             target.Name,
+		"backup_type":      target.BackupType,
+		"storage_type":     target.StorageType,
+		"storage_path":     target.StoragePath,
+		"remote_config_id": target.RemoteConfigID,
+	})
 
 	JSON(w, http.StatusCreated, target)
 }
@@ -150,6 +159,14 @@ func (h *Handler) UpdateBackupTarget(w http.ResponseWriter, r *http.Request) {
 		writeBackupTargetError(w, err, "failed to update backup target")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionTargetUpdate, map[string]any{
+		"target_id":        current.ID,
+		"name":             current.Name,
+		"backup_type":      current.BackupType,
+		"storage_type":     current.StorageType,
+		"storage_path":     current.StoragePath,
+		"remote_config_id": current.RemoteConfigID,
+	})
 
 	JSON(w, http.StatusOK, current)
 }
@@ -175,11 +192,22 @@ func (h *Handler) DeleteBackupTarget(w http.ResponseWriter, r *http.Request) {
 		ErrorWithData(w, http.StatusBadRequest, authErrorInvalidRequest, "backup target is in use", copyBackupTargetUsage(usage))
 		return
 	}
+	target, err := h.db.GetBackupTargetByID(targetID)
+	if err != nil {
+		writeBackupTargetError(w, err, "failed to query backup target")
+		return
+	}
 
 	if err := h.db.DeleteBackupTarget(targetID); err != nil {
 		writeBackupTargetError(w, err, "failed to delete backup target")
 		return
 	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionTargetDelete, map[string]any{
+		"deleted_target_id": target.ID,
+		"name":              target.Name,
+		"backup_type":       target.BackupType,
+		"storage_type":      target.StorageType,
+	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "backup target deleted"})
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
@@ -164,6 +165,18 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 	if policy.Enabled && h.scheduler != nil {
 		h.scheduler.ReloadPolicy(policy.ID)
 	}
+	h.writeCurrentUserAudit(r, policy.InstanceID, audit.ActionPolicyCreate, map[string]any{
+		"policy_id":       policy.ID,
+		"instance_id":     policy.InstanceID,
+		"name":            policy.Name,
+		"type":            policy.Type,
+		"target_id":       policy.TargetID,
+		"schedule_type":   policy.ScheduleType,
+		"schedule_value":  policy.ScheduleValue,
+		"enabled":         policy.Enabled,
+		"retention_type":  policy.RetentionType,
+		"retention_value": policy.RetentionValue,
+	})
 
 	JSON(w, http.StatusCreated, buildPolicyResponse(*policy, model.PolicyExecutionSummary{}))
 }
@@ -223,6 +236,18 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if h.scheduler != nil {
 		h.scheduler.ReloadPolicy(current.ID)
 	}
+	h.writeCurrentUserAudit(r, current.InstanceID, audit.ActionPolicyUpdate, map[string]any{
+		"policy_id":       current.ID,
+		"instance_id":     current.InstanceID,
+		"name":            current.Name,
+		"type":            current.Type,
+		"target_id":       current.TargetID,
+		"schedule_type":   current.ScheduleType,
+		"schedule_value":  current.ScheduleValue,
+		"enabled":         current.Enabled,
+		"retention_type":  current.RetentionType,
+		"retention_value": current.RetentionValue,
+	})
 
 	summary, err := h.loadPolicySummary(instanceID, current.ID)
 	if err != nil {
@@ -250,7 +275,8 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.getPolicyForInstance(instanceID, policyID); err != nil {
+	policy, err := h.getPolicyForInstance(instanceID, policyID)
+	if err != nil {
 		writePolicyError(w, err, "failed to query policy")
 		return
 	}
@@ -262,6 +288,13 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	if h.scheduler != nil {
 		h.scheduler.RemovePolicy(policyID)
 	}
+	h.writeCurrentUserAudit(r, instanceID, audit.ActionPolicyDelete, map[string]any{
+		"deleted_policy_id": policy.ID,
+		"instance_id":       policy.InstanceID,
+		"name":              policy.Name,
+		"type":              policy.Type,
+		"target_id":         policy.TargetID,
+	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "policy deleted"})
 }
@@ -320,6 +353,13 @@ func (h *Handler) TriggerPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	h.writeCurrentUserAudit(r, instanceID, audit.ActionBackupTrigger, map[string]any{
+		"backup_id":      backup.ID,
+		"task_id":        task.ID,
+		"policy_id":      policy.ID,
+		"type":           policy.Type,
+		"trigger_source": backup.TriggerSource,
+	})
 
 	JSON(w, http.StatusCreated, map[string]any{"backup": backup, "task": task})
 }

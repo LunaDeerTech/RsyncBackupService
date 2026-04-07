@@ -260,7 +260,6 @@ func (db *DB) DeleteInstance(id int64) error {
 	defer tx.Rollback()
 
 	statements := []string{
-		`DELETE FROM audit_logs WHERE instance_id = ?`,
 		`DELETE FROM notification_subscriptions WHERE instance_id = ?`,
 		`DELETE FROM instance_permissions WHERE instance_id = ?`,
 		`DELETE FROM tasks WHERE instance_id = ?`,

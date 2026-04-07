@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
 )
@@ -143,6 +144,13 @@ func (h *Handler) CreateInstance(w http.ResponseWriter, r *http.Request) {
 		writeInstanceError(w, err, "failed to create instance")
 		return
 	}
+	h.writeCurrentUserAudit(r, instance.ID, audit.ActionInstanceCreate, map[string]any{
+		"instance_id":      instance.ID,
+		"name":             instance.Name,
+		"source_type":      instance.SourceType,
+		"source_path":      instance.SourcePath,
+		"remote_config_id": instance.RemoteConfigID,
+	})
 
 	JSON(w, http.StatusCreated, instance)
 }
@@ -223,6 +231,13 @@ func (h *Handler) UpdateInstance(w http.ResponseWriter, r *http.Request) {
 		writeInstanceError(w, err, "failed to update instance")
 		return
 	}
+	h.writeCurrentUserAudit(r, current.ID, audit.ActionInstanceUpdate, map[string]any{
+		"instance_id":      current.ID,
+		"name":             current.Name,
+		"source_type":      current.SourceType,
+		"source_path":      current.SourcePath,
+		"remote_config_id": current.RemoteConfigID,
+	})
 
 	JSON(w, http.StatusOK, current)
 }
@@ -248,6 +263,12 @@ func (h *Handler) DeleteInstance(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "only idle instances can be deleted")
 		return
 	}
+	h.writeCurrentUserAudit(r, instance.ID, audit.ActionInstanceDelete, map[string]any{
+		"deleted_instance_id": instance.ID,
+		"name":                instance.Name,
+		"source_type":         instance.SourceType,
+		"source_path":         instance.SourcePath,
+	})
 
 	if err := h.db.DeleteInstance(instanceID); err != nil {
 		writeInstanceError(w, err, "failed to delete instance")

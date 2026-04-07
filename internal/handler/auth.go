@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
 )
@@ -131,6 +132,13 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to deliver password")
 		return
 	}
+	h.writeAuditLog(r.Context(), 0, user.ID, audit.ActionUserCreate, map[string]any{
+		"created_user_id": user.ID,
+		"email":           user.Email,
+		"name":            user.Name,
+		"role":            user.Role,
+		"source":          "register",
+	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "请查收邮件获取密码"})
 }

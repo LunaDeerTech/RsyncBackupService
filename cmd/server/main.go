@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/config"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/handler"
@@ -66,6 +67,7 @@ func main() {
 		db,
 		retentionCleaner,
 	)
+	workerPool.SetAuditLogger(audit.NewLogger(db))
 	if err := taskQueue.Recover(); err != nil {
 		log.Fatalf("recover task queue: %v", err)
 	}

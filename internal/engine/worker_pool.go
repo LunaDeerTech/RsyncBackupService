@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/store"
 )
@@ -23,13 +24,14 @@ type restoreTaskExecutor interface {
 }
 
 type WorkerPool struct {
-	workers int
-	queue   *TaskQueue
-	rolling backupTaskExecutor
-	cold    backupTaskExecutor
-	restore restoreTaskExecutor
-	db      *store.DB
+	workers   int
+	queue     *TaskQueue
+	rolling   backupTaskExecutor
+	cold      backupTaskExecutor
+	restore   restoreTaskExecutor
+	db        *store.DB
 	retention *RetentionCleaner
+	audit     *audit.Logger
 }
 
 func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB, retention *RetentionCleaner) *WorkerPool {
@@ -51,14 +53,21 @@ func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor
 	}
 
 	return &WorkerPool{
-		workers: workers,
-		queue:   queue,
-		rolling: rolling,
-		cold:    cold,
-		restore: restore,
-		db:      db,
+		workers:   workers,
+		queue:     queue,
+		rolling:   rolling,
+		cold:      cold,
+		restore:   restore,
+		db:        db,
 		retention: retention,
 	}
+}
+
+func (wp *WorkerPool) SetAuditLogger(logger *audit.Logger) {
+	if wp == nil {
+		return
+	}
+	wp.audit = logger
 }
 
 func (wp *WorkerPool) Start(ctx context.Context) {
@@ -187,6 +196,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
+		wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 		return runErr
 	}
 	if wp.retention != nil && taskUsesManagedBackup(loadedTask) {
@@ -194,6 +204,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 			slog.Error("retention cleanup after backup failed", "task_id", loadedTask.ID, "policy_id", policy.ID, "error", err)
 		}
 	}
+	wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 
 	return nil
 }
@@ -256,8 +267,116 @@ func (wp *WorkerPool) failTask(task *model.Task, backup *model.Backup, runErr er
 	if persistErr != nil {
 		return errors.Join(runErr, persistErr)
 	}
+	wp.writeExecutionAudit(context.Background(), task, backup, nil)
 
 	return runErr
+}
+
+func (wp *WorkerPool) writeExecutionAudit(ctx context.Context, task *model.Task, backup *model.Backup, policy *model.Policy) {
+	if wp == nil || wp.audit == nil || wp.db == nil || task == nil {
+		return
+	}
+
+	loadedTask, err := wp.db.GetTaskByID(task.ID)
+	if err != nil {
+		slog.Error("load task for audit failed", "task_id", task.ID, "error", err)
+		return
+	}
+
+	switch normalizeTaskType(loadedTask.Type, policy) {
+	case "restore":
+		wp.writeRestoreAudit(ctx, loadedTask, backup)
+	case "rolling", "cold", "backup":
+		wp.writeBackupAudit(ctx, loadedTask, backup, policy)
+	}
+}
+
+func (wp *WorkerPool) writeBackupAudit(ctx context.Context, task *model.Task, fallbackBackup *model.Backup, fallbackPolicy *model.Policy) {
+	if task == nil || task.BackupID == nil {
+		return
+	}
+	backup, err := wp.db.GetBackupByID(*task.BackupID)
+	if err != nil {
+		slog.Error("load backup for audit failed", "task_id", task.ID, "backup_id", *task.BackupID, "error", err)
+		return
+	}
+	policyID := backup.PolicyID
+	if policyID == 0 && fallbackPolicy != nil {
+		policyID = fallbackPolicy.ID
+	}
+
+	var action string
+	switch backup.Status {
+	case "success":
+		action = audit.ActionBackupComplete
+	case "failed":
+		action = audit.ActionBackupFail
+	default:
+		return
+	}
+
+	detail := map[string]any{
+		"backup_id":        backup.ID,
+		"policy_id":        policyID,
+		"type":             backup.Type,
+		"trigger_source":   backup.TriggerSource,
+		"duration_seconds": backup.DurationSeconds,
+	}
+	if strings.TrimSpace(backup.ErrorMessage) != "" {
+		detail["error_message"] = backup.ErrorMessage
+	}
+	if err := wp.audit.LogAction(ctx, backup.InstanceID, 0, action, detail); err != nil {
+		slog.Error("write backup audit log failed", "task_id", task.ID, "backup_id", backup.ID, "action", action, "error", err)
+	}
+
+	if fallbackBackup != nil {
+		*fallbackBackup = *backup
+	}
+}
+
+func (wp *WorkerPool) writeRestoreAudit(ctx context.Context, task *model.Task, backup *model.Backup) {
+	if task == nil {
+		return
+	}
+
+	var action string
+	switch task.Status {
+	case "success":
+		action = audit.ActionRestoreComplete
+	case "failed":
+		action = audit.ActionRestoreFail
+	default:
+		return
+	}
+
+	policyID := int64(0)
+	backupID := int64(0)
+	backupType := ""
+	if backup != nil {
+		policyID = backup.PolicyID
+		backupID = backup.ID
+		backupType = backup.Type
+	}
+	durationSeconds := int64(0)
+	if task.StartedAt != nil && task.CompletedAt != nil {
+		durationSeconds = elapsedSeconds(task.StartedAt, task.CompletedAt.UTC())
+	}
+
+	detail := map[string]any{
+		"task_id":          task.ID,
+		"backup_id":        backupID,
+		"policy_id":        policyID,
+		"backup_type":      backupType,
+		"restore_type":     task.RestoreType,
+		"target_path":      task.TargetPath,
+		"duration_seconds": durationSeconds,
+	}
+	if strings.TrimSpace(task.ErrorMessage) != "" {
+		detail["error_message"] = task.ErrorMessage
+	}
+	if err := wp.audit.LogAction(ctx, task.InstanceID, 0, action, detail); err != nil {
+		slog.Error("write restore audit log failed", "task_id", task.ID, "action", action, "error", err)
+	}
 }
 
 func normalizeTaskType(taskType string, policy *model.Policy) string {
