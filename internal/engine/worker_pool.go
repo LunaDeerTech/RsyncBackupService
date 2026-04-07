@@ -24,9 +24,10 @@ type WorkerPool struct {
 	rolling backupTaskExecutor
 	cold    backupTaskExecutor
 	db      *store.DB
+	retention *RetentionCleaner
 }
 
-func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB) *WorkerPool {
+func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB, retention *RetentionCleaner) *WorkerPool {
 	if workers <= 0 {
 		workers = 1
 	}
@@ -46,6 +47,7 @@ func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor
 		rolling: rolling,
 		cold:    cold,
 		db:      db,
+		retention: retention,
 	}
 }
 
@@ -146,12 +148,13 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		}
 	}()
 
+	var runErr error
 	switch loadedTask.Type {
 	case "rolling":
 		if wp.rolling == nil {
 			return wp.failTask(loadedTask, backup, fmt.Errorf("rolling executor is unavailable"))
 		}
-		return wp.rolling.Execute(runCtx, loadedTask, policy, instance, target, nil)
+		runErr = wp.rolling.Execute(runCtx, loadedTask, policy, instance, target, nil)
 	case "cold":
 		if wp.cold == nil {
 			return wp.failTask(loadedTask, backup, fmt.Errorf("cold executor is unavailable"))
@@ -159,10 +162,20 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		if policy.Encryption {
 			runCtx = WithColdBackupEncryptionKey(runCtx, wp.queue.coldEncryptionKey(loadedTask.ID))
 		}
-		return wp.cold.Execute(runCtx, loadedTask, policy, instance, target, nil)
+		runErr = wp.cold.Execute(runCtx, loadedTask, policy, instance, target, nil)
 	default:
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
+	if runErr != nil {
+		return runErr
+	}
+	if wp.retention != nil {
+		if err := wp.retention.CleanByPolicy(runCtx, policy); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("retention cleanup after backup failed", "task_id", loadedTask.ID, "policy_id", policy.ID, "error", err)
+		}
+	}
+
+	return nil
 }
 
 func (wp *WorkerPool) loadTaskContext(task *model.Task) (*model.Backup, *model.Policy, *model.Instance, *model.BackupTarget, error) {

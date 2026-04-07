@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"rsync-backup-service/internal/model"
 )
@@ -322,6 +323,129 @@ func (db *DB) GetLatestSuccessfulBackup(instanceID, policyID int64) (*model.Back
 	}
 
 	return backup, nil
+}
+
+func (db *DB) GetLatestSuccessfulBackupExcluding(instanceID, policyID, excludeBackupID int64) (*model.Backup, error) {
+	backup, err := scanBackup(db.QueryRow(
+		`SELECT `+backupColumns+`
+		 FROM backups
+		 WHERE instance_id = ? AND policy_id = ? AND status = 'success' AND id != ?
+		 ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+		 LIMIT 1`,
+		instanceID,
+		policyID,
+		excludeBackupID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get latest successful backup for instance %d policy %d excluding %d: %w", instanceID, policyID, excludeBackupID, err)
+	}
+
+	return backup, nil
+}
+
+func (db *DB) ListExpiredBackups(policyID int64, before time.Time) ([]model.Backup, error) {
+	rows, err := db.Query(
+		`SELECT `+backupColumns+`
+		 FROM backups
+		 WHERE policy_id = ?
+		   AND status = 'success'
+		   AND completed_at IS NOT NULL
+		   AND completed_at < ?
+		   AND id NOT IN (
+			SELECT latest.id
+			FROM backups latest
+			WHERE latest.policy_id = ? AND latest.status = 'success'
+			ORDER BY COALESCE(latest.completed_at, latest.started_at, latest.created_at) DESC, latest.id DESC
+			LIMIT 1
+		   )
+		 ORDER BY completed_at ASC, id ASC`,
+		policyID,
+		before.UTC(),
+		policyID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list expired backups for policy %d before %s: %w", policyID, before.UTC().Format(time.RFC3339), err)
+	}
+	defer rows.Close()
+
+	backups := make([]model.Backup, 0)
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan expired backup for policy %d: %w", policyID, err)
+		}
+		backups = append(backups, *backup)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired backups for policy %d: %w", policyID, err)
+	}
+
+	return backups, nil
+}
+
+func (db *DB) ListExcessBackups(policyID int64, keepCount int) ([]model.Backup, error) {
+	if keepCount < 1 {
+		keepCount = 1
+	}
+
+	rows, err := db.Query(
+		`SELECT `+backupColumns+`
+		 FROM (
+			SELECT `+backupColumns+`
+			FROM backups
+			WHERE policy_id = ? AND status = 'success'
+			ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+			LIMIT -1 OFFSET ?
+		 ) excess
+		 ORDER BY COALESCE(completed_at, started_at, created_at) ASC, id ASC`,
+		policyID,
+		keepCount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list excess backups for policy %d keep %d: %w", policyID, keepCount, err)
+	}
+	defer rows.Close()
+
+	backups := make([]model.Backup, 0)
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan excess backup for policy %d: %w", policyID, err)
+		}
+		backups = append(backups, *backup)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate excess backups for policy %d: %w", policyID, err)
+	}
+
+	return backups, nil
+}
+
+func (db *DB) DeleteBackup(id int64) error {
+	result, err := db.Exec(`DELETE FROM backups WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete backup %d: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read delete result for backup %d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("delete backup %d: %w", id, sql.ErrNoRows)
+	}
+
+	return nil
+}
+
+func (db *DB) DeleteTaskByBackupID(backupID int64) error {
+	if _, err := db.Exec(`DELETE FROM tasks WHERE backup_id = ?`, backupID); err != nil {
+		return fmt.Errorf("delete tasks for backup %d: %w", backupID, err)
+	}
+
+	return nil
 }
 
 func (db *DB) GetLatestCompletedBackupByPolicyAndSource(policyID int64, triggerSource string) (*model.Backup, error) {

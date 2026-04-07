@@ -53,6 +53,7 @@ func main() {
 
 	healthChecker := engine.NewHealthChecker(db)
 	healthChecker.StartSchedule(serverCtx)
+	retentionCleaner := engine.NewRetentionCleaner(db, cfg.DataDir)
 
 	taskQueue := engine.NewTaskQueue(cfg.WorkerPoolSize*4, db)
 	scheduler := engine.NewScheduler(db, taskQueue)
@@ -63,6 +64,7 @@ func main() {
 		engine.NewRollingBackupExecutor(nil, db),
 		engine.NewColdBackupExecutor(nil, db, cfg.DataDir),
 		db,
+		retentionCleaner,
 	)
 	if err := taskQueue.Recover(); err != nil {
 		log.Fatalf("recover task queue: %v", err)
@@ -71,6 +73,7 @@ func main() {
 	if err := scheduler.Start(serverCtx); err != nil {
 		log.Fatalf("start scheduler: %v", err)
 	}
+	retentionCleaner.StartSchedule(serverCtx)
 
 	routerOptions := make([]handler.RouterOption, 0, 1)
 	routerOptions = append(routerOptions, handler.WithJWTSecret(cfg.JWTSecret))
