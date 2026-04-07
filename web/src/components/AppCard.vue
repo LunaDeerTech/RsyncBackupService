@@ -29,6 +29,12 @@ withDefaults(
   background: var(--surface-raised);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transform-origin: center;
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    border-color var(--transition-fast);
 }
 .app-card__header {
   padding: 16px var(--card-padding);
@@ -42,5 +48,13 @@ withDefaults(
 }
 .app-card__body {
   padding: var(--card-padding);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-card:hover {
+    transform: perspective(960px) translate3d(0, 0, 1px);
+    box-shadow: var(--shadow-md);
+    border-color: color-mix(in srgb, var(--primary-500) 14%, var(--border-default));
+  }
 }
 </style>
