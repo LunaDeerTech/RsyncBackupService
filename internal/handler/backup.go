@@ -282,6 +282,14 @@ func (h *Handler) GenerateBackupDownloadURL(w http.ResponseWriter, r *http.Reque
 	}
 
 	token := h.downloadTokens.Generate(backup.ID, backup.SnapshotPath)
+
+	h.writeCurrentUserAudit(r, instanceID, audit.ActionBackupDownload, map[string]any{
+		"backup_id":   backup.ID,
+		"policy_id":   backup.PolicyID,
+		"type":        backup.Type,
+		"instance_id": instanceID,
+	})
+
 	JSON(w, http.StatusOK, map[string]any{
 		"url": "/api/v1/download/" + token,
 	})

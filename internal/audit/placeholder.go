@@ -32,6 +32,7 @@ const (
 	ActionRemoteCreate       = "remote.create"
 	ActionRemoteUpdate       = "remote.update"
 	ActionRemoteDelete       = "remote.delete"
+	ActionBackupDownload     = "backup.download"
 	ActionSystemConfigUpdate = "system.config.update"
 )
 
