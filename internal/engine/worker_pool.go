@@ -18,11 +18,16 @@ type backupTaskExecutor interface {
 	Execute(context.Context, *model.Task, *model.Policy, *model.Instance, *model.BackupTarget, func(ProgressInfo)) error
 }
 
+type restoreTaskExecutor interface {
+	Execute(context.Context, *model.Task, *model.Backup, *RestoreRequest, func(ProgressInfo)) error
+}
+
 type WorkerPool struct {
 	workers int
 	queue   *TaskQueue
 	rolling backupTaskExecutor
 	cold    backupTaskExecutor
+	restore restoreTaskExecutor
 	db      *store.DB
 	retention *RetentionCleaner
 }
@@ -40,12 +45,17 @@ func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor
 	if cold == nil && db != nil {
 		cold = NewColdBackupExecutor(nil, db, resolveRollingDataDir())
 	}
+	restore := restoreTaskExecutor(nil)
+	if db != nil {
+		restore = NewRestoreExecutor(nil, db, resolveRollingDataDir())
+	}
 
 	return &WorkerPool{
 		workers: workers,
 		queue:   queue,
 		rolling: rolling,
 		cold:    cold,
+		restore: restore,
 		db:      db,
 		retention: retention,
 	}
@@ -163,13 +173,23 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 			runCtx = WithColdBackupEncryptionKey(runCtx, wp.queue.coldEncryptionKey(loadedTask.ID))
 		}
 		runErr = wp.cold.Execute(runCtx, loadedTask, policy, instance, target, nil)
+	case "restore":
+		if wp.restore == nil {
+			return wp.failTask(loadedTask, backup, fmt.Errorf("restore executor is unavailable"))
+		}
+		restoreReq := &RestoreRequest{
+			RestoreType:   loadedTask.RestoreType,
+			TargetPath:    loadedTask.TargetPath,
+			EncryptionKey: wp.queue.restoreEncryptionKey(loadedTask.ID),
+		}
+		runErr = wp.restore.Execute(runCtx, loadedTask, backup, restoreReq, nil)
 	default:
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
 		return runErr
 	}
-	if wp.retention != nil {
+	if wp.retention != nil && taskUsesManagedBackup(loadedTask) {
 		if err := wp.retention.CleanByPolicy(runCtx, policy); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("retention cleanup after backup failed", "task_id", loadedTask.ID, "policy_id", policy.ID, "error", err)
 		}
@@ -214,7 +234,7 @@ func (wp *WorkerPool) failTask(task *model.Task, backup *model.Backup, runErr er
 	trimmed := strings.TrimSpace(runErr.Error())
 	var persistErr error
 
-	if backup != nil {
+	if backup != nil && taskUsesManagedBackup(task) {
 		backup.Status = "failed"
 		backup.CompletedAt = &completedAt
 		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
@@ -246,4 +266,17 @@ func normalizeTaskType(taskType string, policy *model.Policy) string {
 		return strings.ToLower(strings.TrimSpace(policy.Type))
 	}
 	return trimmed
+}
+
+func taskUsesManagedBackup(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+
+	switch normalizeTaskType(task.Type, nil) {
+	case "rolling", "cold", "backup":
+		return true
+	default:
+		return false
+	}
 }

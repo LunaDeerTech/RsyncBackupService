@@ -7,6 +7,8 @@ type Task struct {
 	InstanceID   int64      `json:"instance_id"`
 	BackupID     *int64     `json:"backup_id,omitempty"`
 	Type         string     `json:"type"`
+	RestoreType  string     `json:"restore_type,omitempty"`
+	TargetPath   string     `json:"target_path,omitempty"`
 	Status       string     `json:"status"`
 	Progress     int        `json:"progress"`
 	CurrentStep  string     `json:"current_step"`

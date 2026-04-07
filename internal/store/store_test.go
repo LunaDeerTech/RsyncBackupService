@@ -82,7 +82,7 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 	if err := db.QueryRow(`SELECT value FROM system_configs WHERE key = 'schema_version'`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("query schema version error = %v", err)
 	}
-	if schemaVersion != "1" {
-		t.Fatalf("schema version = %q, want %q", schemaVersion, "1")
+	if schemaVersion != "3" {
+		t.Fatalf("schema version = %q, want %q", schemaVersion, "3")
 	}
 }

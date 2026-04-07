@@ -11,7 +11,7 @@ import (
 
 const (
 	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retention_type, retention_value, created_at, updated_at`
-	taskColumns   = `id, instance_id, backup_id, type, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
+	taskColumns   = `id, instance_id, backup_id, type, restore_type, target_path, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
 )
 
 type policyScanner interface {
@@ -535,11 +535,13 @@ func (db *DB) CreateTask(task *model.Task) error {
 	}
 
 	result, err := db.Exec(
-		`INSERT INTO tasks (instance_id, backup_id, type, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO tasks (instance_id, backup_id, type, restore_type, target_path, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		task.InstanceID,
 		task.BackupID,
 		task.Type,
+		task.RestoreType,
+		task.TargetPath,
 		task.Status,
 		task.Progress,
 		task.CurrentStep,
@@ -582,11 +584,13 @@ func (db *DB) UpdateTask(task *model.Task) error {
 
 	result, err := db.Exec(
 		`UPDATE tasks
-		 SET instance_id = ?, backup_id = ?, type = ?, status = ?, progress = ?, current_step = ?, started_at = ?, completed_at = ?, estimated_end = ?, error_message = ?
+		 SET instance_id = ?, backup_id = ?, type = ?, restore_type = ?, target_path = ?, status = ?, progress = ?, current_step = ?, started_at = ?, completed_at = ?, estimated_end = ?, error_message = ?
 		 WHERE id = ?`,
 		task.InstanceID,
 		task.BackupID,
 		task.Type,
+		task.RestoreType,
+		task.TargetPath,
 		task.Status,
 		task.Progress,
 		task.CurrentStep,
@@ -761,11 +765,13 @@ func (db *DB) CreatePendingPolicyRunWithSource(policy *model.Policy, triggerSour
 	}
 
 	taskResult, err := tx.Exec(
-		`INSERT INTO tasks (instance_id, backup_id, type, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO tasks (instance_id, backup_id, type, restore_type, target_path, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		backupID,
 		policy.Type,
+		"",
+		"",
 		"queued",
 		0,
 		"queued",
@@ -861,6 +867,8 @@ func scanTask(scanner taskScanner) (*model.Task, error) {
 	var (
 		task         model.Task
 		backupID     sql.NullInt64
+		restoreType  string
+		targetPath   string
 		startedAt    sql.NullString
 		completedAt  sql.NullString
 		estimatedEnd sql.NullString
@@ -872,6 +880,8 @@ func scanTask(scanner taskScanner) (*model.Task, error) {
 		&task.InstanceID,
 		&backupID,
 		&task.Type,
+		&restoreType,
+		&targetPath,
 		&task.Status,
 		&task.Progress,
 		&task.CurrentStep,
@@ -891,6 +901,8 @@ func scanTask(scanner taskScanner) (*model.Task, error) {
 	if backupID.Valid {
 		task.BackupID = &backupID.Int64
 	}
+	task.RestoreType = restoreType
+	task.TargetPath = targetPath
 	if startedAt.Valid {
 		parsed, err := parseSQLiteTime(startedAt.String)
 		if err != nil {

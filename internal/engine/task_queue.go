@@ -25,6 +25,7 @@ type TaskQueue struct {
 	running   map[int64]runningTaskState
 	scheduled map[int64]struct{}
 	coldKeys  map[int64]string
+	restoreKeys map[int64]string
 	scheduler *Scheduler
 }
 
@@ -39,6 +40,7 @@ func NewTaskQueue(bufferSize int, db *store.DB) *TaskQueue {
 		running:   make(map[int64]runningTaskState),
 		scheduled: make(map[int64]struct{}),
 		coldKeys:  make(map[int64]string),
+		restoreKeys: make(map[int64]string),
 	}
 }
 
@@ -210,7 +212,7 @@ func (q *TaskQueue) Recover() error {
 			return err
 		}
 
-		if task.BackupID != nil {
+		if task.BackupID != nil && taskUsesManagedBackup(&task) {
 			backup, err := q.db.GetBackupByID(*task.BackupID)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
@@ -270,6 +272,23 @@ func (q *TaskQueue) SetColdEncryptionKey(taskID int64, key string) {
 	q.coldKeys[taskID] = trimmed
 }
 
+func (q *TaskQueue) SetRestoreEncryptionKey(taskID int64, key string) {
+	if q == nil || taskID <= 0 {
+		return
+	}
+
+	trimmed := strings.TrimSpace(key)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if trimmed == "" {
+		delete(q.restoreKeys, taskID)
+		return
+	}
+
+	q.restoreKeys[taskID] = trimmed
+}
+
 func (q *TaskQueue) coldEncryptionKey(taskID int64) string {
 	if q == nil || taskID <= 0 {
 		return ""
@@ -281,6 +300,17 @@ func (q *TaskQueue) coldEncryptionKey(taskID int64) string {
 	return q.coldKeys[taskID]
 }
 
+func (q *TaskQueue) restoreEncryptionKey(taskID int64) string {
+	if q == nil || taskID <= 0 {
+		return ""
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.restoreKeys[taskID]
+}
+
 func (q *TaskQueue) clearTaskRuntimeData(taskID int64) {
 	if q == nil || taskID <= 0 {
 		return
@@ -288,6 +318,7 @@ func (q *TaskQueue) clearTaskRuntimeData(taskID int64) {
 
 	q.mu.Lock()
 	delete(q.coldKeys, taskID)
+	delete(q.restoreKeys, taskID)
 	delete(q.scheduled, taskID)
 	q.mu.Unlock()
 }
@@ -366,7 +397,7 @@ func (q *TaskQueue) cancelQueuedTask(task *model.Task) error {
 		return err
 	}
 
-	if task.BackupID != nil {
+	if task.BackupID != nil && taskUsesManagedBackup(task) {
 		backup, err := q.db.GetBackupByID(*task.BackupID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err

@@ -41,6 +41,7 @@ type RsyncConfig struct {
 	DestType     string
 	DestRemote   *model.RemoteConfig
 	LinkDestPath string
+	DisableDelete bool
 	ExtraArgs    []string
 }
 
@@ -86,7 +87,11 @@ func BuildRsyncArgs(cfg RsyncConfig) []string {
 		return nil
 	}
 
-	args := []string{"-avz", "--delete", "--stats", "--info=progress2"}
+	args := []string{"-avz"}
+	if !cfg.DisableDelete {
+		args = append(args, "--delete")
+	}
+	args = append(args, "--stats", "--info=progress2")
 
 	if sshArg, ok := buildSSHArg(cfg); ok {
 		args = append(args, sshArg)

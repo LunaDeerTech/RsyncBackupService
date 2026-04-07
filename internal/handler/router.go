@@ -23,6 +23,7 @@ type Handler struct {
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	downloadTokens    *DownloadTokenManager
 }
 
 type RouterOption func(*routerOptions)
@@ -37,6 +38,7 @@ type routerOptions struct {
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	downloadTokens    *DownloadTokenManager
 }
 
 func WithFrontend(frontend http.Handler) RouterOption {
@@ -113,6 +115,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.remoteConfigs == nil {
 		resolved.remoteConfigs = service.NewRemoteConfigService(db, resolved.dataDir, nil)
 	}
+	if resolved.downloadTokens == nil {
+		resolved.downloadTokens = NewDownloadTokenManager()
+	}
 
 	handler := &Handler{
 		db:                db,
@@ -123,6 +128,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		remoteConfigs:     resolved.remoteConfigs,
 		taskQueue:         resolved.taskQueue,
 		scheduler:         resolved.scheduler,
+		downloadTokens:    resolved.downloadTokens,
 	}
 
 	mux := http.NewServeMux()
@@ -156,6 +162,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("PUT /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdatePolicy))))
 	mux.Handle("DELETE /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeletePolicy))))
 	mux.Handle("POST /api/v1/instances/{id}/policies/{pid}/trigger", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TriggerPolicy))))
+	mux.Handle("POST /api/v1/instances/{id}/backups/{bid}/restore", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.RestoreBackup))))
+	mux.Handle("GET /api/v1/instances/{id}/backups/{bid}/download", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GenerateBackupDownloadURL)))))
+	mux.HandleFunc("GET /api/v1/download/{token}", handler.DownloadBackupByToken)
 	mux.Handle("GET /api/v1/tasks", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListTasks))))
 	mux.Handle("GET /api/v1/tasks/{id}", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetTask))))
 	mux.Handle("POST /api/v1/tasks/{id}/cancel", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CancelTask))))
