@@ -162,6 +162,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("PUT /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdatePolicy))))
 	mux.Handle("DELETE /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeletePolicy))))
 	mux.Handle("POST /api/v1/instances/{id}/policies/{pid}/trigger", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TriggerPolicy))))
+	mux.Handle("GET /api/v1/instances/{id}/backups", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListBackups)))))
 	mux.Handle("POST /api/v1/instances/{id}/backups/{bid}/restore", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.RestoreBackup))))
 	mux.Handle("GET /api/v1/instances/{id}/backups/{bid}/download", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GenerateBackupDownloadURL)))))
 	mux.HandleFunc("GET /api/v1/download/{token}", handler.DownloadBackupByToken)
@@ -206,6 +207,9 @@ func withAPIErrors(next http.Handler) http.Handler {
 }
 
 func isAPIPath(path string) bool {
+	if strings.HasPrefix(path, "/api/v1/download/") {
+		return false
+	}
 	return path == "/api" || strings.HasPrefix(path, "/api/")
 }
 

@@ -109,6 +109,40 @@ func (m *DownloadTokenManager) Revoke(token string) {
 	m.mu.Unlock()
 }
 
+func (h *Handler) ListBackups(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+		return
+	}
+
+	instanceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "invalid instance id")
+		return
+	}
+
+	pagination := ParsePagination(r)
+	total, err := h.db.CountBackupsByInstance(instanceID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to count backups")
+		return
+	}
+
+	backups, err := h.db.ListBackupsByInstance(instanceID, pagination.PageSize, (pagination.Page-1)*pagination.PageSize)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to list backups")
+		return
+	}
+
+	JSON(w, http.StatusOK, PaginatedResponse{
+		Items:      backups,
+		Total:      int64(total),
+		Page:       pagination.Page,
+		PageSize:   pagination.PageSize,
+		TotalPages: totalPages(int64(total), pagination.PageSize),
+	})
+}
+
 func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")

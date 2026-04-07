@@ -18,5 +18,5 @@ export function deletePolicy(instanceId: number, policyId: number) {
 }
 
 export function triggerPolicy(instanceId: number, policyId: number) {
-  return apiClient.post<void>(`/instances/${instanceId}/policies/${policyId}/trigger`)
+  return apiClient.post<void>(`/instances/${instanceId}/policies/${policyId}/trigger`, {})
 }

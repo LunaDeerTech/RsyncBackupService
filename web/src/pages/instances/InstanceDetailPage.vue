@@ -3,6 +3,8 @@ import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getInstance, getInstanceStats, updateInstance, updateInstancePermissions } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
+import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
+import type { RestoreRequest } from '../../api/backups'
 import { listTargets } from '../../api/targets'
 import { listRemotes } from '../../api/remotes'
 import { listUsers } from '../../api/users'
@@ -12,7 +14,7 @@ import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
 import { formatBytes } from '../../utils/format'
 import { formatRelativeTime } from '../../utils/time'
-import { formatScheduleValue, parseIntervalInput } from '../../utils/schedule'
+import { formatScheduleValue } from '../../utils/schedule'
 import type { Instance, InstanceStats, Backup, UpdateInstanceRequest, PermissionItem } from '../../types/instance'
 import type { Policy, CreatePolicyRequest, UpdatePolicyRequest } from '../../types/policy'
 import type { BackupTarget } from '../../types/target'
@@ -34,7 +36,7 @@ import AppEmpty from '../../components/AppEmpty.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
-  Database, CheckCircle, HardDrive, Shield,
+  Database, CheckCircle, HardDrive, Shield, Download, RotateCcw,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -73,12 +75,30 @@ const policyEditingId = ref<number | null>(null)
 const policySubmitting = ref(false)
 const targets = ref<BackupTarget[]>([])
 
+const intervalUnitOptions = [
+  { label: '秒', value: 'seconds' },
+  { label: '分钟', value: 'minutes' },
+  { label: '小时', value: 'hours' },
+  { label: '天', value: 'days' },
+]
+
+const scheduleOptions = [
+  { label: '固定间隔', value: 'interval' },
+  { label: '每天凌晨2点', value: '0 2 * * *' },
+  { label: '每天凌晨4点', value: '0 4 * * *' },
+  { label: '每周一凌晨3点', value: '0 3 * * 1' },
+  { label: '每月1号凌晨2点', value: '0 2 1 * *' },
+  { label: '自定义 Cron', value: 'cron_custom' },
+]
+
 const policyForm = reactive({
   name: '',
   type: 'rolling' as 'rolling' | 'cold',
   target_id: undefined as number | undefined,
-  schedule_type: 'interval' as 'interval' | 'cron',
+  schedule_mode: 'interval' as string,
   schedule_input: '',
+  interval_value: undefined as number | undefined,
+  interval_unit: 'hours' as string,
   enabled: true,
   compression: false,
   encryption: false,
@@ -103,6 +123,37 @@ const recentBackups = computed<Backup[]>(() => {
   if (!stats.value?.last_backup) return []
   return [stats.value.last_backup]
 })
+
+// ── Backup data (full list) ──
+const backups = ref<Backup[]>([])
+const backupLoading = ref(false)
+const backupPage = ref(1)
+const backupTotal = ref(0)
+const backupPageSize = 20
+const backupDetailTarget = ref<Backup | null>(null)
+const backupDetailVisible = ref(false)
+
+// ── Restore modal ──
+const restoreModalVisible = ref(false)
+const restoreSubmitting = ref(false)
+const restoreBackupTarget = ref<Record<string, unknown> | null>(null)
+const restoreError = ref('')
+const restoreForm = reactive({
+  restore_type: 'source' as 'source' | 'custom',
+  target_path: '',
+  instance_name: '',
+  password: '',
+  encryption_key: '',
+})
+const restoreFormErrors = reactive({
+  target_path: '',
+  instance_name: '',
+  password: '',
+  encryption_key: '',
+})
+
+// ── Download state ──
+const downloadingBackupId = ref<number | null>(null)
 
 // ── Audit (placeholder) ──
 const auditColumns: TableColumn[] = [
@@ -132,10 +183,7 @@ const policyTypeOptions = [
   { label: '冷备份', value: 'cold' },
 ]
 
-const scheduleTypeOptions = [
-  { label: '间隔', value: 'interval' },
-  { label: 'Cron', value: 'cron' },
-]
+// scheduleOptions defined above with intervalUnitOptions
 
 const retentionTypeOptions = [
   { label: '按时间（天）', value: 'time' },
@@ -169,22 +217,21 @@ const policyColumns: TableColumn[] = [
   { key: 'actions', title: '操作', width: '140px' },
 ]
 
-const backupColumns: TableColumn[] = [
-  { key: 'completed_at', title: '完成时间' },
-  { key: 'type', title: '类型' },
-  { key: 'status', title: '状态' },
-  { key: 'backup_size_bytes', title: '备份大小' },
-  { key: 'actual_size_bytes', title: '数据原始大小' },
-  { key: 'duration_seconds', title: '持续时间' },
-  { key: 'actions', title: '操作', width: '140px' },
-]
-
 const backupStatusVariant: Record<string, 'success' | 'error' | 'info' | 'warning' | 'default'> = {
   success: 'success',
   failed: 'error',
   running: 'info',
   pending: 'warning',
 }
+
+const backupColumns: TableColumn[] = [
+  { key: 'completed_at', title: '完成时间' },
+  { key: 'type', title: '类型' },
+  { key: 'backup_size_bytes', title: '备份大小' },
+  { key: 'actual_size_bytes', title: '数据原始大小' },
+  { key: 'duration_seconds', title: '持续时间' },
+  { key: 'actions', title: '操作', width: '200px' },
+]
 
 const backupStatusLabel: Record<string, string> = {
   success: '成功',
@@ -269,6 +316,7 @@ onMounted(async () => {
 watch(activeTab, (tab) => {
   if (tab === 'overview') fetchStats()
   if (tab === 'policies') fetchPolicies()
+  if (tab === 'backups') { fetchBackups(); fetchPolicies() }
   if (tab === 'settings' && instance.value) {
     settingsForm.name = instance.value.name
     settingsForm.source_type = instance.value.source_type
@@ -303,8 +351,10 @@ function resetPolicyForm() {
   policyForm.name = ''
   policyForm.type = 'rolling'
   policyForm.target_id = undefined
-  policyForm.schedule_type = 'interval'
+  policyForm.schedule_mode = 'interval'
   policyForm.schedule_input = ''
+  policyForm.interval_value = undefined
+  policyForm.interval_unit = 'hours'
   policyForm.enabled = true
   policyForm.compression = false
   policyForm.encryption = false
@@ -330,8 +380,35 @@ function openEditPolicy(row: Record<string, unknown>) {
   policyForm.name = row.name as string
   policyForm.type = row.type as 'rolling' | 'cold'
   policyForm.target_id = row.target_id as number
-  policyForm.schedule_type = row.schedule_type as 'interval' | 'cron'
-  policyForm.schedule_input = row.schedule_value as string
+  const scheduleType = row.schedule_type as string
+  const scheduleValue = row.schedule_value as string
+  if (scheduleType === 'interval') {
+    policyForm.schedule_mode = 'interval'
+    const secs = parseInt(scheduleValue, 10)
+    if (!isNaN(secs) && secs > 0) {
+      if (secs >= 86400 && secs % 86400 === 0) {
+        policyForm.interval_value = secs / 86400
+        policyForm.interval_unit = 'days'
+      } else if (secs >= 3600 && secs % 3600 === 0) {
+        policyForm.interval_value = secs / 3600
+        policyForm.interval_unit = 'hours'
+      } else if (secs >= 60 && secs % 60 === 0) {
+        policyForm.interval_value = secs / 60
+        policyForm.interval_unit = 'minutes'
+      } else {
+        policyForm.interval_value = secs
+        policyForm.interval_unit = 'seconds'
+      }
+    }
+  } else {
+    const preset = scheduleOptions.find(p => p.value !== 'interval' && p.value !== 'cron_custom' && p.value === scheduleValue)
+    if (preset) {
+      policyForm.schedule_mode = preset.value
+    } else {
+      policyForm.schedule_mode = 'cron_custom'
+      policyForm.schedule_input = scheduleValue
+    }
+  }
   policyForm.enabled = row.enabled as boolean
   policyForm.compression = row.compression as boolean
   policyForm.encryption = row.encryption as boolean
@@ -369,13 +446,14 @@ function validatePolicyForm(): boolean {
     policyErrors.target_id = '请选择目标'
     valid = false
   }
-  if (!policyForm.schedule_input.trim()) {
-    policyErrors.schedule_input = '请输入调度值'
-    valid = false
-  } else if (policyForm.schedule_type === 'interval') {
-    const seconds = parseIntervalInput(policyForm.schedule_input)
-    if (isNaN(seconds) || seconds <= 0) {
-      policyErrors.schedule_input = '请输入有效的间隔值，如"6小时"、"30分钟"、"3600"'
+  if (policyForm.schedule_mode === 'interval') {
+    if (!policyForm.interval_value || policyForm.interval_value <= 0) {
+      policyErrors.schedule_input = '请输入有效的间隔值'
+      valid = false
+    }
+  } else if (policyForm.schedule_mode === 'cron_custom') {
+    if (!policyForm.schedule_input.trim()) {
+      policyErrors.schedule_input = '请输入 Cron 表达式'
       valid = false
     }
   }
@@ -399,16 +477,26 @@ async function handlePolicySubmit() {
 
   policySubmitting.value = true
   try {
-    let scheduleValue = policyForm.schedule_input.trim()
-    if (policyForm.schedule_type === 'interval') {
-      scheduleValue = String(parseIntervalInput(policyForm.schedule_input))
+    let scheduleType: 'interval' | 'cron'
+    let scheduleValue: string
+    if (policyForm.schedule_mode === 'interval') {
+      scheduleType = 'interval'
+      const unitMultiplier: Record<string, number> = { seconds: 1, minutes: 60, hours: 3600, days: 86400 }
+      const multiplier = unitMultiplier[policyForm.interval_unit] ?? 1
+      scheduleValue = String((policyForm.interval_value ?? 0) * multiplier)
+    } else if (policyForm.schedule_mode === 'cron_custom') {
+      scheduleType = 'cron'
+      scheduleValue = policyForm.schedule_input.trim()
+    } else {
+      scheduleType = 'cron'
+      scheduleValue = policyForm.schedule_mode
     }
 
     const data: CreatePolicyRequest = {
       name: policyForm.name.trim(),
       type: policyForm.type,
       target_id: policyForm.target_id!,
-      schedule_type: policyForm.schedule_type,
+      schedule_type: scheduleType,
       schedule_value: scheduleValue,
       enabled: policyForm.enabled,
       compression: policyForm.compression,
@@ -498,6 +586,129 @@ async function handleTogglePolicy(row: Record<string, unknown>, enabled: boolean
   }
 }
 
+// ── Fetch backups ──
+async function fetchBackups() {
+  backupLoading.value = true
+  try {
+    const res = await listBackups(instanceId.value, { page: backupPage.value, page_size: backupPageSize })
+    backups.value = res.items ?? []
+    backupTotal.value = res.total ?? 0
+  } catch {
+    toast.error('加载备份列表失败')
+  } finally {
+    backupLoading.value = false
+  }
+}
+
+// ── Backup detail modal ──
+function openBackupDetail(row: Record<string, unknown>) {
+  backupDetailTarget.value = row as unknown as Backup
+  backupDetailVisible.value = true
+}
+
+// ── Check if backup is encrypted cold ──
+function isEncryptedCold(row: Record<string, unknown>): boolean {
+  if (row.type !== 'cold') return false
+  const policy = policies.value.find((p) => p.id === (row.policy_id as number))
+  return !!policy?.encryption
+}
+
+// ── Restore ──
+function openRestoreModal(row: Record<string, unknown>) {
+  restoreBackupTarget.value = row
+  restoreForm.restore_type = 'source'
+  restoreForm.target_path = ''
+  restoreForm.instance_name = ''
+  restoreForm.password = ''
+  restoreForm.encryption_key = ''
+  restoreError.value = ''
+  Object.keys(restoreFormErrors).forEach((k) => (restoreFormErrors as Record<string, string>)[k] = '')
+  restoreModalVisible.value = true
+}
+
+const restoreSubmitDisabled = computed(() => {
+  if (!instance.value) return true
+  return restoreForm.instance_name !== instance.value.name
+})
+
+function validateRestoreForm(): boolean {
+  let valid = true
+  Object.keys(restoreFormErrors).forEach((k) => (restoreFormErrors as Record<string, string>)[k] = '')
+
+  if (restoreForm.restore_type === 'custom' && !restoreForm.target_path.trim()) {
+    restoreFormErrors.target_path = '目标路径不能为空'
+    valid = false
+  }
+  if (!restoreForm.instance_name.trim()) {
+    restoreFormErrors.instance_name = '请输入实例名称'
+    valid = false
+  }
+  if (!restoreForm.password.trim()) {
+    restoreFormErrors.password = '请输入密码'
+    valid = false
+  }
+  if (restoreBackupTarget.value && isEncryptedCold(restoreBackupTarget.value) && !restoreForm.encryption_key.trim()) {
+    restoreFormErrors.encryption_key = '加密备份需要提供密钥'
+    valid = false
+  }
+  return valid
+}
+
+async function handleRestoreSubmit() {
+  if (!validateRestoreForm()) return
+  if (restoreSubmitDisabled.value) return
+  if (!restoreBackupTarget.value) return
+
+  restoreSubmitting.value = true
+  restoreError.value = ''
+  try {
+    const data: RestoreRequest = {
+      restore_type: restoreForm.restore_type,
+      instance_name: restoreForm.instance_name,
+      password: restoreForm.password,
+    }
+    if (restoreForm.restore_type === 'custom') {
+      data.target_path = restoreForm.target_path.trim()
+    }
+    if (isEncryptedCold(restoreBackupTarget.value)) {
+      data.encryption_key = restoreForm.encryption_key
+    }
+    await restoreBackup(instanceId.value, restoreBackupTarget.value.id as number, data)
+    toast.success('恢复任务已创建')
+    restoreModalVisible.value = false
+    activeTab.value = 'overview'
+    fetchStats()
+  } catch (e) {
+    if (e instanceof ApiBusinessError) {
+      restoreError.value = e.message
+    } else {
+      restoreError.value = '恢复操作失败'
+    }
+  } finally {
+    restoreSubmitting.value = false
+  }
+}
+
+// ── Download ──
+async function handleDownload(row: Record<string, unknown>) {
+  downloadingBackupId.value = row.id as number
+  try {
+    const res = await downloadBackup(instanceId.value, row.id as number)
+    const url = res.url
+    const a = document.createElement('a')
+    a.href = url
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } catch (e) {
+    if (e instanceof ApiBusinessError) toast.error(e.message)
+    else toast.error('获取下载链接失败')
+  } finally {
+    downloadingBackupId.value = null
+  }
+}
+
 // ── Settings ──
 function validateSettings(): boolean {
   let valid = true
@@ -574,11 +785,6 @@ const permissionOptions = [
   { label: '只读', value: 'readonly' },
 ]
 
-const schedulePlaceholder = computed(() =>
-  policyForm.schedule_type === 'interval'
-    ? '如 6小时、30分钟 或秒数'
-    : 'Cron 表达式，如 0 2 * * *',
-)
 </script>
 
 <template>
@@ -762,7 +968,7 @@ const schedulePlaceholder = computed(() =>
         <template #tab-backups>
           <div class="tab-content">
             <div class="tab-table">
-              <AppTable :columns="backupColumns" :data="(recentBackups as unknown as Record<string, unknown>[])" :loading="false">
+              <AppTable :columns="backupColumns" :data="(backups as unknown as Record<string, unknown>[])" :loading="backupLoading">
                 <template #cell-completed_at="{ row }">
                   {{ row.completed_at ? formatRelativeTime(row.completed_at as string) : '--' }}
                 </template>
@@ -771,12 +977,6 @@ const schedulePlaceholder = computed(() =>
                   <span class="policy-type-badge" :class="`policy-type-badge--${row.type}`">
                     {{ policyTypeLabel[row.type as string] ?? row.type }}
                   </span>
-                </template>
-
-                <template #cell-status="{ row }">
-                  <AppBadge :variant="backupStatusVariant[row.status as string] ?? 'default'">
-                    {{ backupStatusLabel[row.status as string] ?? row.status }}
-                  </AppBadge>
                 </template>
 
                 <template #cell-backup_size_bytes="{ row }">
@@ -793,20 +993,52 @@ const schedulePlaceholder = computed(() =>
 
                 <template #cell-actions="{ row }">
                   <div class="actions-cell">
-                    <AppButton variant="ghost" size="sm" @click="toast.info('功能开发中')">
+                    <AppButton variant="ghost" size="sm" @click="openBackupDetail(row)">
+                      详情
+                    </AppButton>
+                    <AppButton
+                      v-if="authStore.isAdmin"
+                      variant="ghost"
+                      size="sm"
+                      @click="openRestoreModal(row)"
+                    >
+                      <RotateCcw :size="14" style="margin-right: 2px" />
                       恢复
                     </AppButton>
                     <AppButton
                       v-if="row.type === 'cold'"
                       variant="ghost"
                       size="sm"
-                      @click="toast.info('功能开发中')"
+                      :loading="downloadingBackupId === (row.id as number)"
+                      @click="handleDownload(row)"
                     >
+                      <Download :size="14" style="margin-right: 2px" />
                       下载
                     </AppButton>
                   </div>
                 </template>
               </AppTable>
+            </div>
+
+            <!-- Pagination -->
+            <div v-if="backupTotal > backupPageSize" class="backup-pagination">
+              <AppButton
+                variant="outline"
+                size="sm"
+                :disabled="backupPage <= 1"
+                @click="backupPage--; fetchBackups()"
+              >
+                上一页
+              </AppButton>
+              <span class="text-muted">第 {{ backupPage }} 页 / 共 {{ Math.ceil(backupTotal / backupPageSize) }} 页</span>
+              <AppButton
+                variant="outline"
+                size="sm"
+                :disabled="backupPage >= Math.ceil(backupTotal / backupPageSize)"
+                @click="backupPage++; fetchBackups()"
+              >
+                下一页
+              </AppButton>
             </div>
           </div>
         </template>
@@ -901,15 +1133,21 @@ const schedulePlaceholder = computed(() =>
             <AppSelect v-model="policyForm.target_id" :options="filteredTargetOptions" placeholder="请选择备份目标" />
           </AppFormItem>
 
-          <AppFormItem label="调度类型" :required="true">
-            <AppSelect v-model="policyForm.schedule_type" :options="scheduleTypeOptions" />
+          <AppFormItem label="调度周期" :required="true">
+            <AppSelect v-model="policyForm.schedule_mode" :options="scheduleOptions" />
           </AppFormItem>
 
-          <AppFormItem label="调度值" :required="true" :error="policyErrors.schedule_input">
-            <AppInput
-              v-model="policyForm.schedule_input"
-              :placeholder="schedulePlaceholder"
-            />
+          <!-- Interval input: number + unit -->
+          <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true" :error="policyErrors.schedule_input">
+            <div class="schedule-interval-row">
+              <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
+              <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
+            </div>
+          </AppFormItem>
+
+          <!-- Custom cron input -->
+          <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true" :error="policyErrors.schedule_input">
+            <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
           </AppFormItem>
 
           <AppFormItem label="保留策略" :required="true">
@@ -956,6 +1194,140 @@ const schedulePlaceholder = computed(() =>
           <AppButton variant="outline" size="md" @click="policyModalVisible = false">取消</AppButton>
           <AppButton variant="primary" size="md" :loading="policySubmitting" @click="handlePolicySubmit">
             {{ policyEditing ? '保存' : '创建' }}
+          </AppButton>
+        </div>
+      </template>
+    </AppModal>
+
+    <!-- Backup Detail Modal -->
+    <AppModal v-model:visible="backupDetailVisible" title="备份详情" width="560px">
+      <template v-if="backupDetailTarget">
+        <div class="backup-detail__grid">
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">类型</span>
+            <span class="backup-detail__value">
+              <span class="policy-type-badge" :class="`policy-type-badge--${backupDetailTarget.type}`">
+                {{ policyTypeLabel[backupDetailTarget.type] ?? backupDetailTarget.type }}
+              </span>
+            </span>
+          </div>
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">状态</span>
+            <span class="backup-detail__value">
+              <AppBadge :variant="backupStatusVariant[backupDetailTarget.status] ?? 'default'">
+                {{ backupStatusLabel[backupDetailTarget.status] ?? backupDetailTarget.status }}
+              </AppBadge>
+            </span>
+          </div>
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">开始时间</span>
+            <span class="backup-detail__value">{{ backupDetailTarget.started_at ?? '--' }}</span>
+          </div>
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">完成时间</span>
+            <span class="backup-detail__value">{{ backupDetailTarget.completed_at ?? '--' }}</span>
+          </div>
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">备份大小</span>
+            <span class="backup-detail__value">{{ formatBytes(backupDetailTarget.backup_size_bytes) }}</span>
+          </div>
+          <div class="backup-detail__item">
+            <span class="backup-detail__label">数据原始大小</span>
+            <span class="backup-detail__value">{{ formatBytes(backupDetailTarget.actual_size_bytes) }}</span>
+          </div>
+          <div class="backup-detail__item backup-detail__item--wide">
+            <span class="backup-detail__label">快照路径</span>
+            <span class="backup-detail__value">{{ backupDetailTarget.snapshot_path || '--' }}</span>
+          </div>
+          <div v-if="backupDetailTarget.rsync_stats" class="backup-detail__item backup-detail__item--wide">
+            <span class="backup-detail__label">Rsync 统计</span>
+            <pre class="backup-detail__pre">{{ backupDetailTarget.rsync_stats }}</pre>
+          </div>
+          <div v-if="backupDetailTarget.error_message" class="backup-detail__item backup-detail__item--wide">
+            <span class="backup-detail__label">失败原因</span>
+            <span class="backup-detail__value backup-detail__value--error">{{ backupDetailTarget.error_message }}</span>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <div class="modal-footer">
+          <AppButton variant="outline" size="md" @click="backupDetailVisible = false">关闭</AppButton>
+        </div>
+      </template>
+    </AppModal>
+
+    <!-- Restore Confirm Modal -->
+    <AppModal v-model:visible="restoreModalVisible" title="恢复备份" width="520px">
+      <form @submit.prevent="handleRestoreSubmit">
+        <AppFormGroup>
+          <!-- Restore type -->
+          <AppFormItem label="恢复类型" :required="true">
+            <div class="restore-type-group">
+              <label class="restore-type-option">
+                <input type="radio" v-model="restoreForm.restore_type" value="source" />
+                <span>恢复到原始位置</span>
+              </label>
+              <label class="restore-type-option">
+                <input type="radio" v-model="restoreForm.restore_type" value="custom" />
+                <span>恢复到指定位置</span>
+              </label>
+            </div>
+          </AppFormItem>
+
+          <!-- Warning for source restore -->
+          <div v-if="restoreForm.restore_type === 'source'" class="restore-warning">
+            ⚠ 将覆盖源路径的现有数据
+          </div>
+
+          <!-- Target path -->
+          <AppFormItem
+            v-if="restoreForm.restore_type === 'custom'"
+            label="目标路径"
+            :required="true"
+            :error="restoreFormErrors.target_path"
+          >
+            <AppInput v-model="restoreForm.target_path" placeholder="如 /data/restore/" />
+          </AppFormItem>
+
+          <!-- Encryption key (for encrypted cold backups) -->
+          <AppFormItem
+            v-if="restoreBackupTarget && isEncryptedCold(restoreBackupTarget)"
+            label="加密密钥"
+            :required="true"
+            :error="restoreFormErrors.encryption_key"
+          >
+            <AppInput v-model="restoreForm.encryption_key" type="password" placeholder="输入备份加密时使用的密钥" />
+          </AppFormItem>
+
+          <!-- Danger confirmation area -->
+          <div class="restore-danger-zone">
+            <p class="restore-danger-zone__hint">
+              请输入实例名称 <code>{{ instance?.name }}</code> 和您的账号密码以确认恢复操作
+            </p>
+            <AppFormItem label="实例名称" :required="true" :error="restoreFormErrors.instance_name">
+              <AppInput v-model="restoreForm.instance_name" :placeholder="`请输入：${instance?.name}`" />
+            </AppFormItem>
+            <AppFormItem label="当前密码" :required="true" :error="restoreFormErrors.password">
+              <AppInput v-model="restoreForm.password" type="password" placeholder="输入您的登录密码" />
+            </AppFormItem>
+          </div>
+
+          <!-- Error message -->
+          <div v-if="restoreError" class="restore-error">{{ restoreError }}</div>
+        </AppFormGroup>
+      </form>
+
+      <template #footer>
+        <div class="modal-footer">
+          <AppButton variant="outline" size="md" @click="restoreModalVisible = false">取消</AppButton>
+          <AppButton
+            variant="danger"
+            size="md"
+            :loading="restoreSubmitting"
+            :disabled="restoreSubmitDisabled"
+            @click="handleRestoreSubmit"
+          >
+            确认恢复
           </AppButton>
         </div>
       </template>
@@ -1170,5 +1542,120 @@ const schedulePlaceholder = computed(() =>
   padding: 8px 0 4px;
   border-top: 1px solid var(--border-default);
   margin-top: 4px;
+}
+.schedule-interval-row {
+  display: flex;
+  gap: 8px;
+}
+.schedule-interval-row > :first-child {
+  flex: 1;
+}
+.schedule-interval-row > :last-child {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+/* Backup detail */
+.backup-detail__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+}
+.backup-detail__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.backup-detail__item--wide {
+  grid-column: 1 / -1;
+}
+.backup-detail__label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.backup-detail__value {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.backup-detail__value--error {
+  color: var(--error-500);
+}
+.backup-detail__pre {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-secondary);
+  background: var(--surface-default);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+.backup-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+/* Restore modal */
+.restore-type-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.restore-type-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.restore-type-option input[type="radio"] {
+  accent-color: var(--primary-500);
+}
+.restore-warning {
+  background: color-mix(in srgb, var(--warning-500) 10%, transparent);
+  color: var(--warning-500);
+  border: 1px solid color-mix(in srgb, var(--warning-500) 25%, transparent);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.restore-danger-zone {
+  background: color-mix(in srgb, var(--error-500) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-500) 20%, transparent);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.restore-danger-zone__hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+.restore-danger-zone__hint code {
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+.restore-error {
+  color: var(--error-500);
+  font-size: 13px;
+  background: color-mix(in srgb, var(--error-500) 8%, transparent);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
 }
 </style>

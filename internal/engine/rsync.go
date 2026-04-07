@@ -171,9 +171,12 @@ func (e *RsyncExecutor) Execute(ctx context.Context, cfg RsyncConfig, progressCb
 		}
 	}()
 
+	// Per Go docs: all reads from StdoutPipe/StderrPipe must complete
+	// before calling cmd.Wait(), otherwise Wait closes the pipes early.
+	wg.Wait()
+
 	waitErr := cmd.Wait()
 	close(processDone)
-	wg.Wait()
 
 	result := &RsyncResult{
 		ExitCode: exitCodeFromProcessState(cmd),

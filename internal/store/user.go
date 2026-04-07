@@ -263,6 +263,7 @@ func scanUser(scanner userScanner) (*model.User, error) {
 func parseSQLiteTime(raw string) (time.Time, error) {
 	layouts := []string{
 		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999 +0000 UTC",
 		"2006-01-02 15:04:05.999999999",
 		"2006-01-02 15:04:05",
 		time.RFC3339Nano,

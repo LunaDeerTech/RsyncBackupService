@@ -9,3 +9,19 @@ export function listBackups(instanceId: number, params?: { page?: number; page_s
 export function getBackup(instanceId: number, backupId: number) {
   return apiClient.get<Backup>(`/instances/${instanceId}/backups/${backupId}`)
 }
+
+export interface RestoreRequest {
+  restore_type: 'source' | 'custom'
+  target_path?: string
+  instance_name: string
+  password: string
+  encryption_key?: string
+}
+
+export function restoreBackup(instanceId: number, backupId: number, data: RestoreRequest) {
+  return apiClient.post<void>(`/instances/${instanceId}/backups/${backupId}/restore`, data)
+}
+
+export function downloadBackup(instanceId: number, backupId: number) {
+  return apiClient.get<{ url: string }>(`/instances/${instanceId}/backups/${backupId}/download`)
+}

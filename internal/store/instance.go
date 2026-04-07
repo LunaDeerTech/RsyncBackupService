@@ -392,6 +392,43 @@ func (db *DB) GetLastBackup(instanceID int64) (*model.Backup, error) {
 	return backup, nil
 }
 
+func (db *DB) ListBackupsByInstance(instanceID int64, limit, offset int) ([]model.Backup, error) {
+	rows, err := db.Query(
+		`SELECT `+backupColumns+`
+		 FROM backups
+		 WHERE instance_id = ? AND status = 'success'
+		 ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+		 LIMIT ? OFFSET ?`,
+		instanceID, limit, offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list backups for instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	var backups []model.Backup
+	for rows.Next() {
+		b, err := scanBackup(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan backup row: %w", err)
+		}
+		backups = append(backups, *b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate backup rows: %w", err)
+	}
+	return backups, nil
+}
+
+func (db *DB) CountBackupsByInstance(instanceID int64) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM backups WHERE instance_id = ? AND status = 'success'`, instanceID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count backups for instance %d: %w", instanceID, err)
+	}
+	return count, nil
+}
+
 func scanInstance(scanner instanceScanner) (*model.Instance, error) {
 	var (
 		instance       model.Instance
