@@ -303,6 +303,67 @@ func (db *DB) GetBackupByID(id int64) (*model.Backup, error) {
 	return backup, nil
 }
 
+func (db *DB) GetLatestSuccessfulBackup(instanceID, policyID int64) (*model.Backup, error) {
+	backup, err := scanBackup(db.QueryRow(
+		`SELECT `+backupColumns+`
+		 FROM backups
+		 WHERE instance_id = ? AND policy_id = ? AND status = 'success'
+		 ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+		 LIMIT 1`,
+		instanceID,
+		policyID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get latest successful backup for instance %d policy %d: %w", instanceID, policyID, err)
+	}
+
+	return backup, nil
+}
+
+func (db *DB) UpdateBackup(backup *model.Backup) error {
+	if backup == nil {
+		return fmt.Errorf("backup is nil")
+	}
+
+	result, err := db.Exec(
+		`UPDATE backups
+		 SET instance_id = ?, policy_id = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?
+		 WHERE id = ?`,
+		backup.InstanceID,
+		backup.PolicyID,
+		backup.Type,
+		backup.Status,
+		backup.SnapshotPath,
+		backup.BackupSizeBytes,
+		backup.ActualSizeBytes,
+		backup.StartedAt,
+		backup.CompletedAt,
+		backup.DurationSeconds,
+		backup.ErrorMessage,
+		backup.RsyncStats,
+		backup.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update backup %d: %w", backup.ID, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read update result for backup %d: %w", backup.ID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("update backup %d: %w", backup.ID, sql.ErrNoRows)
+	}
+
+	updated, err := db.GetBackupByID(backup.ID)
+	if err != nil {
+		return fmt.Errorf("load updated backup %d: %w", backup.ID, err)
+	}
+
+	*backup = *updated
+	return nil
+}
+
 func (db *DB) CreateTask(task *model.Task) error {
 	if task == nil {
 		return fmt.Errorf("task is nil")
@@ -347,6 +408,48 @@ func (db *DB) GetTaskByID(id int64) (*model.Task, error) {
 	}
 
 	return task, nil
+}
+
+func (db *DB) UpdateTask(task *model.Task) error {
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+
+	result, err := db.Exec(
+		`UPDATE tasks
+		 SET instance_id = ?, backup_id = ?, type = ?, status = ?, progress = ?, current_step = ?, started_at = ?, completed_at = ?, estimated_end = ?, error_message = ?
+		 WHERE id = ?`,
+		task.InstanceID,
+		task.BackupID,
+		task.Type,
+		task.Status,
+		task.Progress,
+		task.CurrentStep,
+		task.StartedAt,
+		task.CompletedAt,
+		task.EstimatedEnd,
+		task.ErrorMessage,
+		task.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update task %d: %w", task.ID, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read update result for task %d: %w", task.ID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("update task %d: %w", task.ID, sql.ErrNoRows)
+	}
+
+	updated, err := db.GetTaskByID(task.ID)
+	if err != nil {
+		return fmt.Errorf("load updated task %d: %w", task.ID, err)
+	}
+
+	*task = *updated
+	return nil
 }
 
 func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *model.Task, error) {
