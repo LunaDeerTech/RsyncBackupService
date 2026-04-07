@@ -34,6 +34,9 @@ const (
 	ActionRemoteDelete       = "remote.delete"
 	ActionBackupDownload     = "backup.download"
 	ActionSystemConfigUpdate = "system.config.update"
+	ActionRiskCreate         = "risk.create"
+	ActionRiskEscalate       = "risk.escalate"
+	ActionRiskResolve        = "risk.resolve"
 )
 
 type Logger struct {

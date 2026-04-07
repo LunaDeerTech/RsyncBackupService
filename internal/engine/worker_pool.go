@@ -34,6 +34,7 @@ type WorkerPool struct {
 	retention        *RetentionCleaner
 	audit            *audit.Logger
 	disasterRecovery *service.DisasterRecoveryService
+	riskDetector     *RiskDetector
 }
 
 func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB, retention *RetentionCleaner) *WorkerPool {
@@ -77,6 +78,13 @@ func (wp *WorkerPool) SetDisasterRecoveryService(disasterRecovery *service.Disas
 		return
 	}
 	wp.disasterRecovery = disasterRecovery
+}
+
+func (wp *WorkerPool) SetRiskDetector(riskDetector *RiskDetector) {
+	if wp == nil {
+		return
+	}
+	wp.riskDetector = riskDetector
 }
 
 func (wp *WorkerPool) Start(ctx context.Context) {
@@ -207,6 +215,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 	}
 	if runErr != nil {
 		wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
+		wp.handleRiskAfterFailure(runCtx, loadedTask, backup)
 		return runErr
 	}
 	if wp.retention != nil && taskUsesManagedBackup(loadedTask) {
@@ -215,6 +224,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		}
 	}
 	wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
+	wp.handleRiskAfterSuccess(runCtx, loadedTask, backup)
 
 	return nil
 }
@@ -278,6 +288,7 @@ func (wp *WorkerPool) failTask(task *model.Task, backup *model.Backup, runErr er
 		return errors.Join(runErr, persistErr)
 	}
 	wp.writeExecutionAudit(context.Background(), task, backup, nil)
+	wp.handleRiskAfterFailure(context.Background(), task, backup)
 
 	return runErr
 }
@@ -415,4 +426,30 @@ func (wp *WorkerPool) invalidateDisasterRecovery(task *model.Task) {
 		return
 	}
 	wp.disasterRecovery.Invalidate(task.InstanceID)
+}
+
+func (wp *WorkerPool) handleRiskAfterSuccess(ctx context.Context, task *model.Task, backup *model.Backup) {
+	if wp == nil || wp.riskDetector == nil || task == nil || backup == nil || !taskUsesManagedBackup(task) {
+		return
+	}
+	if err := wp.riskDetector.OnBackupSuccess(ctx, task.InstanceID, backup.PolicyID); err != nil {
+		slog.Error("backup success risk detection failed", "task_id", task.ID, "instance_id", task.InstanceID, "policy_id", backup.PolicyID, "error", err)
+	}
+}
+
+func (wp *WorkerPool) handleRiskAfterFailure(ctx context.Context, task *model.Task, backup *model.Backup) {
+	if wp == nil || wp.riskDetector == nil || task == nil {
+		return
+	}
+	if backup != nil && taskUsesManagedBackup(task) {
+		if err := wp.riskDetector.OnBackupFailed(ctx, task.InstanceID, backup.PolicyID); err != nil {
+			slog.Error("backup failure risk detection failed", "task_id", task.ID, "instance_id", task.InstanceID, "policy_id", backup.PolicyID, "error", err)
+		}
+		return
+	}
+	if normalizeTaskType(task.Type, nil) == "restore" {
+		if err := wp.riskDetector.OnRestoreFailed(ctx, task.InstanceID); err != nil {
+			slog.Error("restore failure risk detection failed", "task_id", task.ID, "instance_id", task.InstanceID, "error", err)
+		}
+	}
 }

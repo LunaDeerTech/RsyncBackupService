@@ -13,6 +13,19 @@ export interface InstanceListItem extends Instance {
   last_backup_status?: 'success' | 'failed'
   last_backup_time?: string
   backup_count: number
+  dr_score?: number
+  dr_level?: string
+}
+
+export interface DisasterRecoveryScore {
+  total: number
+  level: 'safe' | 'caution' | 'risk' | 'danger'
+  freshness: number
+  recovery_points: number
+  redundancy: number
+  stability: number
+  deductions: string[]
+  calculated_at: string
 }
 
 export interface CreateInstanceRequest {

@@ -8,6 +8,7 @@ import type {
   CreateInstanceRequest,
   UpdateInstanceRequest,
   PermissionItem,
+  DisasterRecoveryScore,
 } from '../types/instance'
 
 export function listInstances(params?: { page?: number; page_size?: number }) {
@@ -36,4 +37,8 @@ export function deleteInstance(id: number) {
 
 export function updateInstancePermissions(id: number, permissions: PermissionItem[]) {
   return apiClient.put<void>(`/instances/${id}/permissions`, { permissions })
+}
+
+export function getDisasterRecovery(id: number) {
+  return apiClient.get<DisasterRecoveryScore>(`/instances/${id}/disaster-recovery`)
 }

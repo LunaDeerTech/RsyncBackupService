@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -54,6 +55,8 @@ type instanceListItem struct {
 	LastBackupTime   *time.Time `json:"last_backup_time,omitempty"`
 	LastBackupStatus *string    `json:"last_backup_status,omitempty"`
 	BackupCount      int64      `json:"backup_count"`
+	DRScore          *float64   `json:"dr_score,omitempty"`
+	DRLevel          string     `json:"dr_level,omitempty"`
 }
 
 type instanceDetailResponse struct {
@@ -470,6 +473,13 @@ func (h *Handler) buildInstanceListItems(instances []model.Instance) ([]instance
 			lastBackupStatus := stats.LastBackup.Status
 			item.LastBackupStatus = &lastBackupStatus
 			item.LastBackupTime = backupOccurredAt(stats.LastBackup)
+		}
+		if h.disasterRecovery != nil {
+			if score, err := h.disasterRecovery.GetScore(context.Background(), instance.ID); err == nil && score != nil {
+				total := score.Total
+				item.DRScore = &total
+				item.DRLevel = score.Level
+			}
 		}
 		items = append(items, item)
 	}

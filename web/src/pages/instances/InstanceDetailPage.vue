@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getInstance, getInstanceStats, updateInstance, updateInstancePermissions } from '../../api/instances'
+import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
 import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
 import type { RestoreRequest } from '../../api/backups'
@@ -18,7 +18,7 @@ import { formatBytes } from '../../utils/format'
 import { formatRelativeTime } from '../../utils/time'
 import { formatScheduleValue } from '../../utils/schedule'
 import { getActionLabel, actionOptions, formatAuditDetail } from '../../utils/audit'
-import type { Instance, InstanceStats, Backup, UpdateInstanceRequest, PermissionItem } from '../../types/instance'
+import type { Instance, InstanceStats, Backup, UpdateInstanceRequest, PermissionItem, DisasterRecoveryScore } from '../../types/instance'
 import type { Policy, CreatePolicyRequest, UpdatePolicyRequest } from '../../types/policy'
 import type { BackupTarget } from '../../types/target'
 import type { RemoteConfig } from '../../types/remote'
@@ -38,9 +38,11 @@ import AppSwitch from '../../components/AppSwitch.vue'
 import AppEmpty from '../../components/AppEmpty.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import AppPagination from '../../components/AppPagination.vue'
+import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRingColor } from '../../utils/disaster-recovery'
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
   Database, CheckCircle, HardDrive, Shield, Download, RotateCcw,
+  AlertTriangle,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -68,6 +70,7 @@ const activeTab = ref('overview')
 // ── Instance data ──
 const instance = ref<Instance | null>(null)
 const stats = ref<InstanceStats | null>(null)
+const drScore = ref<DisasterRecoveryScore | null>(null)
 const pageLoading = ref(false)
 
 // ── Policy data ──
@@ -276,6 +279,14 @@ async function fetchStats() {
   }
 }
 
+async function fetchDR() {
+  try {
+    drScore.value = await getDisasterRecovery(instanceId.value)
+  } catch {
+    // silent
+  }
+}
+
 async function fetchPolicies() {
   policyLoading.value = true
   try {
@@ -338,6 +349,7 @@ async function fetchAuditLogs() {
 onMounted(async () => {
   await fetchInstance()
   fetchPolicies()
+  fetchDR()
   if (authStore.isAdmin) {
     fetchTargets()
     fetchRemotes()
@@ -347,7 +359,7 @@ onMounted(async () => {
 
 // ── Watch tab changes ──
 watch(activeTab, (tab) => {
-  if (tab === 'overview') fetchStats()
+  if (tab === 'overview') { fetchStats(); fetchDR() }
   if (tab === 'policies') fetchPolicies()
   if (tab === 'backups') { fetchBackups(); fetchPolicies() }
   if (tab === 'audit') fetchAuditLogs()
@@ -894,14 +906,78 @@ const permissionOptions = [
               </AppCard>
               <AppCard>
                 <div class="stat-card">
-                  <Shield :size="20" class="stat-icon stat-icon--muted" />
+                  <Shield :size="20" class="stat-icon" :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }" />
                   <div class="stat-card__content">
-                    <span class="stat-card__value">--</span>
+                    <span class="stat-card__value" :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }">
+                      {{ drScore ? Math.round(drScore.total) : '--' }}
+                    </span>
                     <span class="stat-card__label">容灾率</span>
                   </div>
                 </div>
               </AppCard>
             </div>
+
+            <!-- Disaster Recovery Detail Card -->
+            <AppCard v-if="drScore" title="容灾评估">
+              <div class="dr-card">
+                <div class="dr-card__header">
+                  <!-- Ring chart -->
+                  <div class="dr-ring" :style="{ '--dr-ring-color': getDRLevelRingColor(drScore.level), '--dr-ring-pct': Math.round(drScore.total) }">
+                    <svg viewBox="0 0 36 36" class="dr-ring__svg">
+                      <path class="dr-ring__bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                      <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    </svg>
+                    <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+                  </div>
+                  <div class="dr-card__summary">
+                    <AppBadge :variant="getDRLevelBadgeVariant(drScore.level)">
+                      {{ getDRLevelLabel(drScore.level) }}
+                    </AppBadge>
+                  </div>
+                </div>
+
+                <!-- Sub-scores -->
+                <div class="dr-sub-scores">
+                  <div class="dr-sub-score">
+                    <div class="dr-sub-score__header">
+                      <span class="dr-sub-score__name">备份新鲜度</span>
+                      <span class="dr-sub-score__value">{{ Math.round(drScore.freshness) }}</span>
+                    </div>
+                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.freshness + '%' }" /></div>
+                  </div>
+                  <div class="dr-sub-score">
+                    <div class="dr-sub-score__header">
+                      <span class="dr-sub-score__name">恢复点可用性</span>
+                      <span class="dr-sub-score__value">{{ Math.round(drScore.recovery_points) }}</span>
+                    </div>
+                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.recovery_points + '%' }" /></div>
+                  </div>
+                  <div class="dr-sub-score">
+                    <div class="dr-sub-score__header">
+                      <span class="dr-sub-score__name">冗余与隔离度</span>
+                      <span class="dr-sub-score__value">{{ Math.round(drScore.redundancy) }}</span>
+                    </div>
+                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.redundancy + '%' }" /></div>
+                  </div>
+                  <div class="dr-sub-score">
+                    <div class="dr-sub-score__header">
+                      <span class="dr-sub-score__name">执行稳定性</span>
+                      <span class="dr-sub-score__value">{{ Math.round(drScore.stability) }}</span>
+                    </div>
+                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.stability + '%' }" /></div>
+                  </div>
+                </div>
+
+                <!-- Deductions -->
+                <div v-if="drScore.deductions && drScore.deductions.length > 0" class="dr-deductions">
+                  <div class="dr-deductions__title">扣分原因</div>
+                  <div v-for="(d, i) in drScore.deductions" :key="i" class="dr-deduction-item">
+                    <AlertTriangle :size="14" class="dr-deduction-item__icon" />
+                    <span>{{ d }}</span>
+                  </div>
+                </div>
+              </div>
+            </AppCard>
 
             <!-- Recent backups mini table -->
             <AppCard title="最近备份">
@@ -1546,6 +1622,112 @@ const permissionOptions = [
 }
 .mini-table tr:last-child td {
   border-bottom: none;
+}
+
+/* Disaster Recovery card */
+.dr-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.dr-card__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.dr-card__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dr-ring {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+}
+.dr-ring__svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.dr-ring__bg {
+  fill: none;
+  stroke: var(--border-default);
+  stroke-width: 3;
+}
+.dr-ring__fg {
+  fill: none;
+  stroke: var(--dr-ring-color);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s ease;
+}
+.dr-ring__value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.dr-sub-scores {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+}
+.dr-sub-score__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.dr-sub-score__name {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.dr-sub-score__value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.dr-sub-score__bar {
+  height: 6px;
+  background: var(--surface-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.dr-sub-score__fill {
+  height: 100%;
+  background: var(--primary-500);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.dr-deductions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dr-deductions__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+.dr-deduction-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.dr-deduction-item__icon {
+  flex-shrink: 0;
+  color: var(--warning-500);
+  margin-top: 2px;
 }
 
 /* Policy type badge */

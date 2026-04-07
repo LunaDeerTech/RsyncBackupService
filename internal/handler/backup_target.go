@@ -240,6 +240,14 @@ func (h *Handler) CheckBackupTargetHealth(w http.ResponseWriter, r *http.Request
 		writeBackupTargetError(w, err, "failed to persist backup target health check")
 		return
 	}
+	riskDetector := engine.NewRiskDetector(h.db, nil, h.audit)
+	if h.disasterRecovery != nil {
+		riskDetector = engine.NewRiskDetector(h.db, h.disasterRecovery.Cache(), h.audit)
+	}
+	if err := riskDetector.OnHealthCheckComplete(r.Context(), targetID, status); err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to update backup target risk state")
+		return
+	}
 	if h.disasterRecovery != nil && engine.TargetHealthChanged(target, status, message, total, used) {
 		h.disasterRecovery.InvalidateByTarget(targetID)
 	}

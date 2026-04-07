@@ -152,6 +152,13 @@ func (s *DisasterRecoveryService) Invalidate(instanceID int64) {
 	s.cache.Invalidate(instanceID)
 }
 
+func (s *DisasterRecoveryService) Cache() *DRCache {
+	if s == nil {
+		return nil
+	}
+	return s.cache
+}
+
 func (s *DisasterRecoveryService) InvalidateByTarget(targetID int64) {
 	if s == nil || s.calculator == nil || s.calculator.db == nil || s.cache == nil || targetID <= 0 {
 		return

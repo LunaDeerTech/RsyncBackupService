@@ -21,6 +21,7 @@ import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
 import AppBadge from '../../components/AppBadge.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
+import { getDRLevelColor } from '../../utils/disaster-recovery'
 import { Plus, Eye, Trash2 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -61,6 +62,7 @@ const columns = computed<TableColumn[]>(() => {
     { key: 'name', title: '名称' },
     { key: 'source', title: '数据源' },
     { key: 'status', title: '状态' },
+    { key: 'dr_score', title: '容灾率', width: '100px' },
     { key: 'last_backup_status', title: '上次备份结果' },
     { key: 'last_backup_time', title: '上次备份时间' },
     { key: 'actions', title: '操作', width: '120px' },
@@ -264,6 +266,14 @@ function goToDetail(row: Record<string, unknown>) {
           </AppBadge>
         </template>
 
+        <template #cell-dr_score="{ row }">
+          <span v-if="row.dr_score != null" class="dr-score-cell">
+            <span class="dr-score-dot" :style="{ background: getDRLevelColor(row.dr_level as string) }" />
+            <span>{{ Math.round(row.dr_score as number) }}</span>
+          </span>
+          <span v-else class="text-muted">—</span>
+        </template>
+
         <template #cell-last_backup_status="{ row }">
           <AppBadge
             v-if="row.last_backup_status"
@@ -393,6 +403,18 @@ function goToDetail(row: Record<string, unknown>) {
 }
 .text-error {
   color: var(--error-500);
+}
+.dr-score-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.dr-score-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .modal-footer {
   display: flex;

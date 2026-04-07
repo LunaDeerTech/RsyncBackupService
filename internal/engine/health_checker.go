@@ -26,6 +26,7 @@ type HealthChecker struct {
 	db               *store.DB
 	scheduleInterval time.Duration
 	disasterRecovery *service.DisasterRecoveryService
+	riskDetector     *RiskDetector
 }
 
 func NewHealthChecker(db *store.DB) *HealthChecker {
@@ -40,6 +41,13 @@ func (hc *HealthChecker) SetDisasterRecoveryService(disasterRecovery *service.Di
 		return
 	}
 	hc.disasterRecovery = disasterRecovery
+}
+
+func (hc *HealthChecker) SetRiskDetector(riskDetector *RiskDetector) {
+	if hc == nil {
+		return
+	}
+	hc.riskDetector = riskDetector
 }
 
 func (hc *HealthChecker) CheckTarget(target *model.BackupTarget) (status, message string, total, used *int64, err error) {
@@ -81,8 +89,18 @@ func (hc *HealthChecker) CheckAll() {
 			slog.Error("persist health check result failed", "target_id", target.ID, "error", err)
 			continue
 		}
+		if hc.riskDetector != nil {
+			if err := hc.riskDetector.OnHealthCheckComplete(context.Background(), target.ID, status); err != nil {
+				slog.Error("health check risk detection failed", "target_id", target.ID, "status", status, "error", err)
+			}
+		}
 		if TargetHealthChanged(target, status, message, total, used) && hc.disasterRecovery != nil {
 			hc.disasterRecovery.InvalidateByTarget(target.ID)
+		}
+	}
+	if hc.riskDetector != nil {
+		if err := hc.riskDetector.PeriodicCheck(context.Background()); err != nil {
+			slog.Error("periodic risk scan failed", "error", err)
 		}
 	}
 }

@@ -49,13 +49,16 @@ func main() {
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
 	slog.SetDefault(logger)
+	auditLogger := audit.NewLogger(db)
 	disasterRecovery := service.NewDisasterRecoveryService(db)
+	riskDetector := engine.NewRiskDetector(db, disasterRecovery.Cache(), auditLogger)
 
 	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	healthChecker := engine.NewHealthChecker(db)
 	healthChecker.SetDisasterRecoveryService(disasterRecovery)
+	healthChecker.SetRiskDetector(riskDetector)
 	healthChecker.StartSchedule(serverCtx)
 	retentionCleaner := engine.NewRetentionCleaner(db, cfg.DataDir)
 
@@ -70,8 +73,9 @@ func main() {
 		db,
 		retentionCleaner,
 	)
-	workerPool.SetAuditLogger(audit.NewLogger(db))
+	workerPool.SetAuditLogger(auditLogger)
 	workerPool.SetDisasterRecoveryService(disasterRecovery)
+	workerPool.SetRiskDetector(riskDetector)
 	if err := taskQueue.Recover(); err != nil {
 		log.Fatalf("recover task queue: %v", err)
 	}
