@@ -55,6 +55,8 @@ func main() {
 	healthChecker.StartSchedule(serverCtx)
 
 	taskQueue := engine.NewTaskQueue(cfg.WorkerPoolSize*4, db)
+	scheduler := engine.NewScheduler(db, taskQueue)
+	taskQueue.SetScheduler(scheduler)
 	workerPool := engine.NewWorkerPool(
 		cfg.WorkerPoolSize,
 		taskQueue,
@@ -66,11 +68,15 @@ func main() {
 		log.Fatalf("recover task queue: %v", err)
 	}
 	workerPool.Start(serverCtx)
+	if err := scheduler.Start(serverCtx); err != nil {
+		log.Fatalf("start scheduler: %v", err)
+	}
 
 	routerOptions := make([]handler.RouterOption, 0, 1)
 	routerOptions = append(routerOptions, handler.WithJWTSecret(cfg.JWTSecret))
 	routerOptions = append(routerOptions, handler.WithDataDir(cfg.DataDir))
 	routerOptions = append(routerOptions, handler.WithTaskQueue(taskQueue))
+	routerOptions = append(routerOptions, handler.WithScheduler(scheduler))
 	switch {
 	case cfg.DevMode:
 		logger.Info("embedded frontend disabled in development mode")

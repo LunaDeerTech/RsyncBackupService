@@ -122,6 +122,9 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 	defer wp.queue.OnTaskComplete(loadedTask.InstanceID)
 
 	backup, policy, instance, target, err := wp.loadTaskContext(loadedTask)
+	if backup != nil {
+		defer wp.queue.reloadScheduledPolicy(backup)
+	}
 	if err != nil {
 		return wp.failTask(loadedTask, backup, err)
 	}

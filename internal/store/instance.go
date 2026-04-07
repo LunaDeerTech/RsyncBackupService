@@ -11,7 +11,7 @@ import (
 
 const (
 	instanceColumns = `id, name, source_type, source_path, remote_config_id, status, created_at, updated_at`
-	backupColumns   = `id, instance_id, policy_id, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at`
+	backupColumns   = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at`
 )
 
 type instanceScanner interface {
@@ -443,6 +443,7 @@ func scanBackup(scanner backupScanner) (*model.Backup, error) {
 		&backup.ID,
 		&backup.InstanceID,
 		&backup.PolicyID,
+		&backup.TriggerSource,
 		&backup.Type,
 		&backup.Status,
 		&backup.SnapshotPath,

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"rsync-backup-service/internal/model"
 )
@@ -260,11 +261,14 @@ func (db *DB) CreateBackup(backup *model.Backup) error {
 		return fmt.Errorf("backup is nil")
 	}
 
+	backup.TriggerSource = normalizeBackupTriggerSource(backup.TriggerSource)
+
 	result, err := db.Exec(
-		`INSERT INTO backups (instance_id, policy_id, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		backup.InstanceID,
 		backup.PolicyID,
+		backup.TriggerSource,
 		backup.Type,
 		backup.Status,
 		backup.SnapshotPath,
@@ -320,17 +324,54 @@ func (db *DB) GetLatestSuccessfulBackup(instanceID, policyID int64) (*model.Back
 	return backup, nil
 }
 
+func (db *DB) GetLatestCompletedBackupByPolicyAndSource(policyID int64, triggerSource string) (*model.Backup, error) {
+	backup, err := scanBackup(db.QueryRow(
+		`SELECT `+backupColumns+`
+		 FROM backups
+		 WHERE policy_id = ? AND trigger_source = ? AND completed_at IS NOT NULL
+		 ORDER BY completed_at DESC, id DESC
+		 LIMIT 1`,
+		policyID,
+		normalizeBackupTriggerSource(triggerSource),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get latest completed backup for policy %d source %q: %w", policyID, triggerSource, err)
+	}
+
+	return backup, nil
+}
+
+func (db *DB) HasActivePolicyRunBySource(policyID int64, triggerSource string) (bool, error) {
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM tasks t
+		 INNER JOIN backups b ON b.id = t.backup_id
+		 WHERE b.policy_id = ? AND b.trigger_source = ? AND t.status IN ('queued', 'running')`,
+		policyID,
+		normalizeBackupTriggerSource(triggerSource),
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check active policy run for policy %d source %q: %w", policyID, triggerSource, err)
+	}
+
+	return count > 0, nil
+}
+
 func (db *DB) UpdateBackup(backup *model.Backup) error {
 	if backup == nil {
 		return fmt.Errorf("backup is nil")
 	}
 
+	backup.TriggerSource = normalizeBackupTriggerSource(backup.TriggerSource)
+
 	result, err := db.Exec(
 		`UPDATE backups
-		 SET instance_id = ?, policy_id = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?
+		 SET instance_id = ?, policy_id = ?, trigger_source = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?
 		 WHERE id = ?`,
 		backup.InstanceID,
 		backup.PolicyID,
+		backup.TriggerSource,
 		backup.Type,
 		backup.Status,
 		backup.SnapshotPath,
@@ -548,9 +589,15 @@ func (db *DB) GetQueuedTasksByInstance(instanceID int64) ([]model.Task, error) {
 }
 
 func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *model.Task, error) {
+	return db.CreatePendingPolicyRunWithSource(policy, model.BackupTriggerSourceManual)
+}
+
+func (db *DB) CreatePendingPolicyRunWithSource(policy *model.Policy, triggerSource string) (*model.Backup, *model.Task, error) {
 	if policy == nil {
 		return nil, nil, fmt.Errorf("policy is nil")
 	}
+
+	triggerSource = normalizeBackupTriggerSource(triggerSource)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -559,10 +606,11 @@ func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *mode
 	defer tx.Rollback()
 
 	backupResult, err := tx.Exec(
-		`INSERT INTO backups (instance_id, policy_id, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		policy.ID,
+		triggerSource,
 		policy.Type,
 		"pending",
 		"",
@@ -621,6 +669,15 @@ func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *mode
 	}
 
 	return backup, task, nil
+}
+
+func normalizeBackupTriggerSource(triggerSource string) string {
+	switch strings.ToLower(strings.TrimSpace(triggerSource)) {
+	case model.BackupTriggerSourceScheduled:
+		return model.BackupTriggerSourceScheduled
+	default:
+		return model.BackupTriggerSourceManual
+	}
 }
 
 func scanPolicy(scanner policyScanner) (*model.Policy, error) {

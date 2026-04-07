@@ -25,6 +25,7 @@ type TaskQueue struct {
 	running   map[int64]runningTaskState
 	scheduled map[int64]struct{}
 	coldKeys  map[int64]string
+	scheduler *Scheduler
 }
 
 func NewTaskQueue(bufferSize int, db *store.DB) *TaskQueue {
@@ -242,6 +243,16 @@ func (q *TaskQueue) Recover() error {
 	return nil
 }
 
+func (q *TaskQueue) SetScheduler(scheduler *Scheduler) {
+	if q == nil {
+		return
+	}
+
+	q.mu.Lock()
+	q.scheduler = scheduler
+	q.mu.Unlock()
+}
+
 func (q *TaskQueue) SetColdEncryptionKey(taskID int64, key string) {
 	if q == nil || taskID <= 0 {
 		return
@@ -279,6 +290,22 @@ func (q *TaskQueue) clearTaskRuntimeData(taskID int64) {
 	delete(q.coldKeys, taskID)
 	delete(q.scheduled, taskID)
 	q.mu.Unlock()
+}
+
+func (q *TaskQueue) reloadScheduledPolicy(backup *model.Backup) {
+	if q == nil || backup == nil || backup.PolicyID <= 0 {
+		return
+	}
+	if backup.TriggerSource != model.BackupTriggerSourceScheduled {
+		return
+	}
+
+	q.mu.Lock()
+	scheduler := q.scheduler
+	q.mu.Unlock()
+	if scheduler != nil {
+		scheduler.ReloadPolicy(backup.PolicyID)
+	}
 }
 
 func (q *TaskQueue) beginTask(task *model.Task, cancel context.CancelFunc) (bool, error) {
@@ -352,6 +379,7 @@ func (q *TaskQueue) cancelQueuedTask(task *model.Task) error {
 			if err := q.db.UpdateBackup(backup); err != nil {
 				return err
 			}
+			q.reloadScheduledPolicy(backup)
 		}
 	}
 

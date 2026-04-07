@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 1
+const latestSchemaVersion = 2
 
 type DB struct {
 	*sql.DB
@@ -173,6 +173,12 @@ var migrations = []migration{
 				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 				FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 			)`,
+		},
+	},
+	{
+		version: 2,
+		statements: []string{
+			`ALTER TABLE backups ADD COLUMN trigger_source TEXT NOT NULL DEFAULT 'manual'`,
 		},
 	},
 }

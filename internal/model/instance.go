@@ -2,6 +2,11 @@ package model
 
 import "time"
 
+const (
+	BackupTriggerSourceManual    = "manual"
+	BackupTriggerSourceScheduled = "scheduled"
+)
+
 type Instance struct {
 	ID             int64     `json:"id"`
 	Name           string    `json:"name"`
@@ -17,6 +22,7 @@ type Backup struct {
 	ID              int64      `json:"id"`
 	InstanceID      int64      `json:"instance_id"`
 	PolicyID        int64      `json:"policy_id"`
+	TriggerSource   string     `json:"trigger_source"`
 	Type            string     `json:"type"`
 	Status          string     `json:"status"`
 	SnapshotPath    string     `json:"snapshot_path"`

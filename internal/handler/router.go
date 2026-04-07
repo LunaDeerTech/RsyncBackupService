@@ -22,6 +22,7 @@ type Handler struct {
 	loginLimiter      *loginRateLimiter
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
+	scheduler         *engine.Scheduler
 }
 
 type RouterOption func(*routerOptions)
@@ -35,6 +36,7 @@ type routerOptions struct {
 	dataDir           string
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
+	scheduler         *engine.Scheduler
 }
 
 func WithFrontend(frontend http.Handler) RouterOption {
@@ -58,6 +60,12 @@ func WithDataDir(dataDir string) RouterOption {
 func WithTaskQueue(taskQueue *engine.TaskQueue) RouterOption {
 	return func(options *routerOptions) {
 		options.taskQueue = taskQueue
+	}
+}
+
+func WithScheduler(scheduler *engine.Scheduler) RouterOption {
+	return func(options *routerOptions) {
+		options.scheduler = scheduler
 	}
 }
 
@@ -114,6 +122,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		loginLimiter:      resolved.loginLimiter,
 		remoteConfigs:     resolved.remoteConfigs,
 		taskQueue:         resolved.taskQueue,
+		scheduler:         resolved.scheduler,
 	}
 
 	mux := http.NewServeMux()

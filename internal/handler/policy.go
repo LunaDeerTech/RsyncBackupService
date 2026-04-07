@@ -10,6 +10,7 @@ import (
 	"time"
 
 	authcrypto "rsync-backup-service/internal/crypto"
+	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
 )
 
@@ -160,6 +161,9 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		writePolicyError(w, err, "failed to create policy")
 		return
 	}
+	if policy.Enabled && h.scheduler != nil {
+		h.scheduler.ReloadPolicy(policy.ID)
+	}
 
 	JSON(w, http.StatusCreated, buildPolicyResponse(*policy, model.PolicyExecutionSummary{}))
 }
@@ -216,6 +220,9 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writePolicyError(w, err, "failed to update policy")
 		return
 	}
+	if h.scheduler != nil {
+		h.scheduler.ReloadPolicy(current.ID)
+	}
 
 	summary, err := h.loadPolicySummary(instanceID, current.ID)
 	if err != nil {
@@ -251,6 +258,9 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.DeletePolicy(policyID); err != nil {
 		writePolicyError(w, err, "failed to delete policy")
 		return
+	}
+	if h.scheduler != nil {
+		h.scheduler.RemovePolicy(policyID)
 	}
 
 	JSON(w, http.StatusOK, map[string]string{"message": "policy deleted"})
@@ -523,18 +533,9 @@ func policyIDFromRequest(r *http.Request) (int64, error) {
 }
 
 func validateCronExpression(expression string) error {
-	fields := strings.Fields(strings.TrimSpace(expression))
-	if len(fields) != 5 {
-		return fmt.Errorf("schedule_value must be a standard 5-field cron expression")
+	if _, err := engine.ParseCron(expression); err != nil {
+		return err
 	}
-
-	bounds := [][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 7}}
-	for index, field := range fields {
-		if err := validateCronField(field, bounds[index][0], bounds[index][1]); err != nil {
-			return fmt.Errorf("schedule_value contains an invalid cron field: %w", err)
-		}
-	}
-
 	return nil
 }
 
