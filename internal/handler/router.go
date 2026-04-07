@@ -24,6 +24,7 @@ type Handler struct {
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	disasterRecovery  *service.DisasterRecoveryService
 	downloadTokens    *DownloadTokenManager
 	audit             *audit.Logger
 }
@@ -40,6 +41,7 @@ type routerOptions struct {
 	remoteConfigs     *service.RemoteConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	disasterRecovery  *service.DisasterRecoveryService
 	downloadTokens    *DownloadTokenManager
 }
 
@@ -70,6 +72,12 @@ func WithTaskQueue(taskQueue *engine.TaskQueue) RouterOption {
 func WithScheduler(scheduler *engine.Scheduler) RouterOption {
 	return func(options *routerOptions) {
 		options.scheduler = scheduler
+	}
+}
+
+func WithDisasterRecoveryService(disasterRecovery *service.DisasterRecoveryService) RouterOption {
+	return func(options *routerOptions) {
+		options.disasterRecovery = disasterRecovery
 	}
 }
 
@@ -120,6 +128,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.downloadTokens == nil {
 		resolved.downloadTokens = NewDownloadTokenManager()
 	}
+	if resolved.disasterRecovery == nil {
+		resolved.disasterRecovery = service.NewDisasterRecoveryService(db)
+	}
 	auditLogger := audit.NewLogger(db)
 	resolved.remoteConfigs.SetAuditLogger(auditLogger)
 
@@ -132,6 +143,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		remoteConfigs:     resolved.remoteConfigs,
 		taskQueue:         resolved.taskQueue,
 		scheduler:         resolved.scheduler,
+		disasterRecovery:  resolved.disasterRecovery,
 		downloadTokens:    resolved.downloadTokens,
 		audit:             auditLogger,
 	}
@@ -161,6 +173,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("POST /api/v1/instances", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateInstance))))
 	mux.Handle("GET /api/v1/instances/{id}", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetInstance)))))
 	mux.Handle("GET /api/v1/instances/{id}/audit-logs", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListInstanceAuditLogs)))))
+	mux.Handle("GET /api/v1/instances/{id}/disaster-recovery", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetDisasterRecoveryScore)))))
 	mux.Handle("PUT /api/v1/instances/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateInstance))))
 	mux.Handle("DELETE /api/v1/instances/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteInstance))))
 	mux.Handle("GET /api/v1/instances/{id}/stats", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetInstanceStats)))))

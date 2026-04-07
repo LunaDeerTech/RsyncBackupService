@@ -25,6 +25,7 @@ const defaultHealthCheckInterval = 30 * time.Minute
 type HealthChecker struct {
 	db               *store.DB
 	scheduleInterval time.Duration
+	disasterRecovery *service.DisasterRecoveryService
 }
 
 func NewHealthChecker(db *store.DB) *HealthChecker {
@@ -32,6 +33,13 @@ func NewHealthChecker(db *store.DB) *HealthChecker {
 		db:               db,
 		scheduleInterval: defaultHealthCheckInterval,
 	}
+}
+
+func (hc *HealthChecker) SetDisasterRecoveryService(disasterRecovery *service.DisasterRecoveryService) {
+	if hc == nil {
+		return
+	}
+	hc.disasterRecovery = disasterRecovery
 }
 
 func (hc *HealthChecker) CheckTarget(target *model.BackupTarget) (status, message string, total, used *int64, err error) {
@@ -71,6 +79,10 @@ func (hc *HealthChecker) CheckAll() {
 		}
 		if err := hc.db.UpdateHealthStatus(target.ID, status, message, total, used); err != nil {
 			slog.Error("persist health check result failed", "target_id", target.ID, "error", err)
+			continue
+		}
+		if TargetHealthChanged(target, status, message, total, used) && hc.disasterRecovery != nil {
+			hc.disasterRecovery.InvalidateByTarget(target.ID)
 		}
 	}
 }
@@ -235,4 +247,27 @@ func parseDFBytes(output string) (*int64, *int64, error) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func TargetHealthChanged(target *model.BackupTarget, status, message string, total, used *int64) bool {
+	if target == nil {
+		return false
+	}
+	if target.HealthStatus != status || target.HealthMessage != message {
+		return true
+	}
+	if !sameOptionalInt64(target.TotalCapacityBytes, total) {
+		return true
+	}
+	if !sameOptionalInt64(target.UsedCapacityBytes, used) {
+		return true
+	}
+	return false
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

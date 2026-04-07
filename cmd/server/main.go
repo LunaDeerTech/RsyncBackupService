@@ -16,6 +16,7 @@ import (
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/handler"
 	"rsync-backup-service/internal/middleware"
+	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 	frontend "rsync-backup-service/web"
 )
@@ -48,11 +49,13 @@ func main() {
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
 	slog.SetDefault(logger)
+	disasterRecovery := service.NewDisasterRecoveryService(db)
 
 	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	healthChecker := engine.NewHealthChecker(db)
+	healthChecker.SetDisasterRecoveryService(disasterRecovery)
 	healthChecker.StartSchedule(serverCtx)
 	retentionCleaner := engine.NewRetentionCleaner(db, cfg.DataDir)
 
@@ -68,6 +71,7 @@ func main() {
 		retentionCleaner,
 	)
 	workerPool.SetAuditLogger(audit.NewLogger(db))
+	workerPool.SetDisasterRecoveryService(disasterRecovery)
 	if err := taskQueue.Recover(); err != nil {
 		log.Fatalf("recover task queue: %v", err)
 	}
@@ -82,6 +86,7 @@ func main() {
 	routerOptions = append(routerOptions, handler.WithDataDir(cfg.DataDir))
 	routerOptions = append(routerOptions, handler.WithTaskQueue(taskQueue))
 	routerOptions = append(routerOptions, handler.WithScheduler(scheduler))
+	routerOptions = append(routerOptions, handler.WithDisasterRecoveryService(disasterRecovery))
 	switch {
 	case cfg.DevMode:
 		logger.Info("embedded frontend disabled in development mode")

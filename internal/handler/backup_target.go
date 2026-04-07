@@ -240,6 +240,9 @@ func (h *Handler) CheckBackupTargetHealth(w http.ResponseWriter, r *http.Request
 		writeBackupTargetError(w, err, "failed to persist backup target health check")
 		return
 	}
+	if h.disasterRecovery != nil && engine.TargetHealthChanged(target, status, message, total, used) {
+		h.disasterRecovery.InvalidateByTarget(targetID)
+	}
 
 	updated, err := h.db.GetBackupTargetByID(targetID)
 	if err != nil {

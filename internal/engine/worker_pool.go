@@ -12,6 +12,7 @@ import (
 
 	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
 
@@ -24,14 +25,15 @@ type restoreTaskExecutor interface {
 }
 
 type WorkerPool struct {
-	workers   int
-	queue     *TaskQueue
-	rolling   backupTaskExecutor
-	cold      backupTaskExecutor
-	restore   restoreTaskExecutor
-	db        *store.DB
-	retention *RetentionCleaner
-	audit     *audit.Logger
+	workers          int
+	queue            *TaskQueue
+	rolling          backupTaskExecutor
+	cold             backupTaskExecutor
+	restore          restoreTaskExecutor
+	db               *store.DB
+	retention        *RetentionCleaner
+	audit            *audit.Logger
+	disasterRecovery *service.DisasterRecoveryService
 }
 
 func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB, retention *RetentionCleaner) *WorkerPool {
@@ -68,6 +70,13 @@ func (wp *WorkerPool) SetAuditLogger(logger *audit.Logger) {
 		return
 	}
 	wp.audit = logger
+}
+
+func (wp *WorkerPool) SetDisasterRecoveryService(disasterRecovery *service.DisasterRecoveryService) {
+	if wp == nil {
+		return
+	}
+	wp.disasterRecovery = disasterRecovery
 }
 
 func (wp *WorkerPool) Start(ctx context.Context) {
@@ -141,6 +150,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 	defer cancel()
 	defer wp.queue.clearTaskRuntimeData(loadedTask.ID)
 	defer wp.queue.OnTaskComplete(loadedTask.InstanceID)
+	defer wp.invalidateDisasterRecovery(loadedTask)
 
 	backup, policy, instance, target, err := wp.loadTaskContext(loadedTask)
 	if backup != nil {
@@ -398,4 +408,11 @@ func taskUsesManagedBackup(task *model.Task) bool {
 	default:
 		return false
 	}
+}
+
+func (wp *WorkerPool) invalidateDisasterRecovery(task *model.Task) {
+	if wp == nil || wp.disasterRecovery == nil || task == nil || !taskUsesManagedBackup(task) {
+		return
+	}
+	wp.disasterRecovery.Invalidate(task.InstanceID)
 }

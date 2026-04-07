@@ -162,6 +162,9 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		writePolicyError(w, err, "failed to create policy")
 		return
 	}
+	if h.disasterRecovery != nil {
+		h.disasterRecovery.Invalidate(policy.InstanceID)
+	}
 	if policy.Enabled && h.scheduler != nil {
 		h.scheduler.ReloadPolicy(policy.ID)
 	}
@@ -233,6 +236,9 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writePolicyError(w, err, "failed to update policy")
 		return
 	}
+	if h.disasterRecovery != nil {
+		h.disasterRecovery.Invalidate(current.InstanceID)
+	}
 	if h.scheduler != nil {
 		h.scheduler.ReloadPolicy(current.ID)
 	}
@@ -284,6 +290,9 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.DeletePolicy(policyID); err != nil {
 		writePolicyError(w, err, "failed to delete policy")
 		return
+	}
+	if h.disasterRecovery != nil {
+		h.disasterRecovery.Invalidate(policy.InstanceID)
 	}
 	if h.scheduler != nil {
 		h.scheduler.RemovePolicy(policyID)
