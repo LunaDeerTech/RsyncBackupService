@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/notify"
 	"rsync-backup-service/internal/service"
@@ -20,6 +21,7 @@ type Handler struct {
 	passwordGenerator func() (string, error)
 	loginLimiter      *loginRateLimiter
 	remoteConfigs     *service.RemoteConfigService
+	taskQueue         *engine.TaskQueue
 }
 
 type RouterOption func(*routerOptions)
@@ -32,6 +34,7 @@ type routerOptions struct {
 	loginLimiter      *loginRateLimiter
 	dataDir           string
 	remoteConfigs     *service.RemoteConfigService
+	taskQueue         *engine.TaskQueue
 }
 
 func WithFrontend(frontend http.Handler) RouterOption {
@@ -49,6 +52,12 @@ func WithJWTSecret(secret string) RouterOption {
 func WithDataDir(dataDir string) RouterOption {
 	return func(options *routerOptions) {
 		options.dataDir = dataDir
+	}
+}
+
+func WithTaskQueue(taskQueue *engine.TaskQueue) RouterOption {
+	return func(options *routerOptions) {
+		options.taskQueue = taskQueue
 	}
 }
 
@@ -104,6 +113,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		passwordGenerator: resolved.passwordGenerator,
 		loginLimiter:      resolved.loginLimiter,
 		remoteConfigs:     resolved.remoteConfigs,
+		taskQueue:         resolved.taskQueue,
 	}
 
 	mux := http.NewServeMux()
@@ -137,6 +147,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("PUT /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdatePolicy))))
 	mux.Handle("DELETE /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeletePolicy))))
 	mux.Handle("POST /api/v1/instances/{id}/policies/{pid}/trigger", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TriggerPolicy))))
+	mux.Handle("GET /api/v1/tasks", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListTasks))))
+	mux.Handle("GET /api/v1/tasks/{id}", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetTask))))
+	mux.Handle("POST /api/v1/tasks/{id}/cancel", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CancelTask))))
 	mux.Handle("PUT /api/v1/instances/{id}/permissions", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateInstancePermissions))))
 	mux.Handle("GET /api/v1/users/me", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUser))))
 	mux.Handle("PUT /api/v1/users/me/password", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserPassword))))

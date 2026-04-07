@@ -452,6 +452,101 @@ func (db *DB) UpdateTask(task *model.Task) error {
 	return nil
 }
 
+func (db *DB) ListActiveTasks() ([]model.Task, error) {
+	rows, err := db.Query(
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE status IN ('queued', 'running')
+		 ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at ASC, id ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list active tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]model.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan active task: %w", err)
+		}
+		tasks = append(tasks, *task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+func (db *DB) ListTasksByInstance(instanceID int64) ([]model.Task, error) {
+	rows, err := db.Query(
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE instance_id = ?
+		 ORDER BY created_at DESC, id DESC`,
+		instanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	tasks := make([]model.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan task for instance %d: %w", instanceID, err)
+		}
+		tasks = append(tasks, *task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks by instance %d: %w", instanceID, err)
+	}
+
+	return tasks, nil
+}
+
+func (db *DB) HasRunningTask(instanceID int64) (bool, error) {
+	var count int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE instance_id = ? AND status = 'running'`, instanceID).Scan(&count); err != nil {
+		return false, fmt.Errorf("check running task for instance %d: %w", instanceID, err)
+	}
+
+	return count > 0, nil
+}
+
+func (db *DB) GetQueuedTasksByInstance(instanceID int64) ([]model.Task, error) {
+	rows, err := db.Query(
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE instance_id = ? AND status = 'queued'
+		 ORDER BY created_at ASC, id ASC`,
+		instanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list queued tasks by instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	tasks := make([]model.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan queued task for instance %d: %w", instanceID, err)
+		}
+		tasks = append(tasks, *task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate queued tasks by instance %d: %w", instanceID, err)
+	}
+
+	return tasks, nil
+}
+
 func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *model.Task, error) {
 	if policy == nil {
 		return nil, nil, fmt.Errorf("policy is nil")
@@ -498,8 +593,8 @@ func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *mode
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		backupID,
-		"backup",
-		"pending",
+		policy.Type,
+		"queued",
 		0,
 		"queued",
 		nil,

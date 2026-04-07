@@ -104,11 +104,11 @@ func (e *RollingBackupExecutor) Execute(ctx context.Context, task *model.Task, p
 	}
 
 	if err := e.prepareDirectory(ctx, target.StorageType, snapshotPath, targetRemote); err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 
 	if err := e.updateTaskStep(task, rollingTaskSyncStep, 0, nil); err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 
 	var progressErr error
@@ -126,22 +126,22 @@ func (e *RollingBackupExecutor) Execute(ctx context.Context, task *model.Task, p
 		}
 	})
 	if err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if progressErr != nil {
-		return e.failRun(task, backup, progressErr)
+		return e.finishRun(task, backup, progressErr)
 	}
 
 	if err := e.updateTaskStep(task, rollingTaskLatestStep, 99, nil); err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if err := e.updateLatestLink(ctx, target.StorageType, latestLinkPath, snapshotPath, targetRemote); err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 
 	statsJSON, err := json.Marshal(result.Stats)
 	if err != nil {
-		return e.failRun(task, backup, fmt.Errorf("marshal rsync stats: %w", err))
+		return e.finishRun(task, backup, fmt.Errorf("marshal rsync stats: %w", err))
 	}
 
 	return e.completeRun(task, backup, result.Stats.TransferSize, result.Stats.TotalSize, string(statsJSON))
@@ -189,13 +189,13 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 	}
 
 	if err := os.MkdirAll(relayBase, 0o755); err != nil {
-		return e.failRun(task, backup, fmt.Errorf("create relay base %q: %w", relayBase, err))
+		return e.finishRun(task, backup, fmt.Errorf("create relay base %q: %w", relayBase, err))
 	}
 	if err := os.RemoveAll(relayStagePath); err != nil {
-		return e.failRun(task, backup, fmt.Errorf("reset relay staging path %q: %w", relayStagePath, err))
+		return e.finishRun(task, backup, fmt.Errorf("reset relay staging path %q: %w", relayStagePath, err))
 	}
 	if err := os.MkdirAll(relayStagePath, 0o755); err != nil {
-		return e.failRun(task, backup, fmt.Errorf("create relay staging path %q: %w", relayStagePath, err))
+		return e.finishRun(task, backup, fmt.Errorf("create relay staging path %q: %w", relayStagePath, err))
 	}
 
 	pullLinkDest := ""
@@ -219,16 +219,16 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 	})
 	if err != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if pullProgressErr != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, pullProgressErr)
+		return e.finishRun(task, backup, pullProgressErr)
 	}
 
 	if err := e.prepareDirectory(ctx, target.StorageType, snapshotPath, targetRemote); err != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 
 	var pushProgressErr error
@@ -247,23 +247,23 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 	})
 	if err != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if pushProgressErr != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, pushProgressErr)
+		return e.finishRun(task, backup, pushProgressErr)
 	}
 
 	if err := e.updateTaskStep(task, rollingTaskLatestStep, 99, nil); err != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if err := e.updateLatestLink(ctx, target.StorageType, latestLinkPath, snapshotPath, targetRemote); err != nil {
 		_ = os.RemoveAll(relayStagePath)
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 	if err := e.promoteRelaySnapshot(relayBase, relayStagePath, relayCurrentPath); err != nil {
-		return e.failRun(task, backup, err)
+		return e.finishRun(task, backup, err)
 	}
 
 	statsJSON, err := json.Marshal(relayStats{
@@ -272,7 +272,7 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 		Push: pushResult.Stats,
 	})
 	if err != nil {
-		return e.failRun(task, backup, fmt.Errorf("marshal relay rsync stats: %w", err))
+		return e.finishRun(task, backup, fmt.Errorf("marshal relay rsync stats: %w", err))
 	}
 
 	return e.completeRun(task, backup, pushResult.Stats.TransferSize, pushResult.Stats.TotalSize, string(statsJSON))
@@ -484,7 +484,7 @@ func (e *RollingBackupExecutor) startRun(task *model.Task, policy *model.Policy,
 	}
 
 	task.InstanceID = instance.ID
-	task.Type = "backup"
+	task.Type = policy.Type
 	task.BackupID = &backup.ID
 	task.Status = "running"
 	task.Progress = 0
@@ -507,6 +507,14 @@ func (e *RollingBackupExecutor) startRun(task *model.Task, policy *model.Policy,
 	return backup, nil
 }
 
+func (e *RollingBackupExecutor) finishRun(task *model.Task, backup *model.Backup, runErr error) error {
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		return e.cancelRun(task, backup, runErr)
+	}
+
+	return e.failRun(task, backup, runErr)
+}
+
 func (e *RollingBackupExecutor) failRun(task *model.Task, backup *model.Backup, runErr error) error {
 	completedAt := e.now()
 	var persistErr error
@@ -522,6 +530,36 @@ func (e *RollingBackupExecutor) failRun(task *model.Task, backup *model.Backup, 
 	}
 	if task != nil {
 		task.Status = "failed"
+		task.CompletedAt = &completedAt
+		task.EstimatedEnd = nil
+		task.ErrorMessage = strings.TrimSpace(runErr.Error())
+		if err := e.db.UpdateTask(task); err != nil {
+			persistErr = errors.Join(persistErr, err)
+		}
+	}
+
+	if persistErr != nil {
+		return errors.Join(runErr, persistErr)
+	}
+
+	return runErr
+}
+
+func (e *RollingBackupExecutor) cancelRun(task *model.Task, backup *model.Backup, runErr error) error {
+	completedAt := e.now()
+	var persistErr error
+
+	if backup != nil {
+		backup.Status = "cancelled"
+		backup.CompletedAt = &completedAt
+		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
+		backup.ErrorMessage = strings.TrimSpace(runErr.Error())
+		if err := e.db.UpdateBackup(backup); err != nil {
+			persistErr = errors.Join(persistErr, err)
+		}
+	}
+	if task != nil {
+		task.Status = "cancelled"
 		task.CompletedAt = &completedAt
 		task.EstimatedEnd = nil
 		task.ErrorMessage = strings.TrimSpace(runErr.Error())

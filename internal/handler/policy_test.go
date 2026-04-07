@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"rsync-backup-service/internal/crypto"
+	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
 )
 
@@ -16,7 +17,7 @@ func TestPolicyCRUDListAndTrigger(t *testing.T) {
 	db := newAuthTestDB(t)
 	admin := createHandlerTestUser(t, db, "admin@example.com", "Admin", "admin", "AdminPass123")
 	viewer := createHandlerTestUser(t, db, "viewer@example.com", "Viewer", "viewer", "ViewerPass123")
-	router := NewRouter(db, WithJWTSecret("secret"))
+	router := NewRouter(db, WithJWTSecret("secret"), WithTaskQueue(engine.NewTaskQueue(8, db)))
 
 	instanceID := createHandlerTestInstance(t, db, "mysql-prod")
 	if err := db.SetInstancePermissions(instanceID, []model.InstancePermission{{
@@ -90,7 +91,7 @@ func TestPolicyCRUDListAndTrigger(t *testing.T) {
 		t.Fatalf("initial LastExecutionStatus = %v, want nil", listPayload.Items[0].LastExecutionStatus)
 	}
 
-	triggerResponse := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/instances/"+itoa(instanceID)+"/policies/"+itoa(policy.ID)+"/trigger", nil, mustAccessTokenForUser(t, admin, "secret"))
+	triggerResponse := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/instances/"+itoa(instanceID)+"/policies/"+itoa(policy.ID)+"/trigger", map[string]any{"encryption_key": "SecretKey#1"}, mustAccessTokenForUser(t, admin, "secret"))
 	if triggerResponse.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v1/instances/{id}/policies/{pid}/trigger status = %d, want %d, body = %s", triggerResponse.Code, http.StatusCreated, triggerResponse.Body.String())
 	}
@@ -105,8 +106,8 @@ func TestPolicyCRUDListAndTrigger(t *testing.T) {
 	if err := json.Unmarshal(triggerEnvelope.Data, &triggerPayload); err != nil {
 		t.Fatalf("decode trigger payload: %v", err)
 	}
-	if triggerPayload.Backup.Status != "pending" || triggerPayload.Task.Status != "pending" {
-		t.Fatalf("trigger payload = %+v, want pending backup/task", triggerPayload)
+	if triggerPayload.Backup.Status != "pending" || triggerPayload.Task.Status != "queued" {
+		t.Fatalf("trigger payload = %+v, want pending backup and queued task", triggerPayload)
 	}
 
 	listAfterTrigger := performAuthorizedJSONRequest(t, router, http.MethodGet, "/api/v1/instances/"+itoa(instanceID)+"/policies", nil, mustAccessTokenForUser(t, viewer, "secret"))

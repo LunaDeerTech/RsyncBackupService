@@ -102,11 +102,46 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 	if backup.ID == 0 || task.ID == 0 {
 		t.Fatalf("pending run = (%+v, %+v), want persisted backup/task", backup, task)
 	}
-	if backup.Status != "pending" || task.Status != "pending" {
-		t.Fatalf("pending statuses = (%q, %q), want pending", backup.Status, task.Status)
+	if backup.Status != "pending" || task.Status != "queued" {
+		t.Fatalf("pending statuses = (%q, %q), want (pending, queued)", backup.Status, task.Status)
 	}
 	if task.BackupID == nil || *task.BackupID != backup.ID {
 		t.Fatalf("task.BackupID = %v, want %d", task.BackupID, backup.ID)
+	}
+	if task.Type != policy.Type || task.CurrentStep != "queued" {
+		t.Fatalf("queued task = %+v, want type %q and queued step", task, policy.Type)
+	}
+
+	activeTasks, err := db.ListActiveTasks()
+	if err != nil {
+		t.Fatalf("ListActiveTasks() error = %v", err)
+	}
+	if len(activeTasks) != 1 || activeTasks[0].ID != task.ID {
+		t.Fatalf("ListActiveTasks() = %+v, want queued task %d", activeTasks, task.ID)
+	}
+
+	instanceTasks, err := db.ListTasksByInstance(instance.ID)
+	if err != nil {
+		t.Fatalf("ListTasksByInstance() error = %v", err)
+	}
+	if len(instanceTasks) != 1 || instanceTasks[0].ID != task.ID {
+		t.Fatalf("ListTasksByInstance() = %+v, want task %d", instanceTasks, task.ID)
+	}
+
+	hasRunning, err := db.HasRunningTask(instance.ID)
+	if err != nil {
+		t.Fatalf("HasRunningTask() error = %v", err)
+	}
+	if hasRunning {
+		t.Fatal("HasRunningTask() = true, want false for queued-only state")
+	}
+
+	queuedTasks, err := db.GetQueuedTasksByInstance(instance.ID)
+	if err != nil {
+		t.Fatalf("GetQueuedTasksByInstance() error = %v", err)
+	}
+	if len(queuedTasks) != 1 || queuedTasks[0].ID != task.ID {
+		t.Fatalf("GetQueuedTasksByInstance() = %+v, want queued task %d", queuedTasks, task.ID)
 	}
 
 	summaries, err := db.ListPolicyExecutionSummaries(instance.ID)

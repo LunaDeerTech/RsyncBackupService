@@ -452,7 +452,7 @@ func (e *ColdBackupExecutor) startRun(task *model.Task, policy *model.Policy, in
 	}
 
 	task.InstanceID = instance.ID
-	task.Type = "backup"
+	task.Type = policy.Type
 	task.BackupID = &backup.ID
 	task.Status = "running"
 	task.Progress = 0

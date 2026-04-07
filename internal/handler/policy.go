@@ -32,6 +32,10 @@ type policyRequest struct {
 	RetentionValue int    `json:"retention_value"`
 }
 
+type triggerPolicyRequest struct {
+	EncryptionKey string `json:"encryption_key,omitempty"`
+}
+
 type policyInput struct {
 	InstanceID        int64
 	Name              string
@@ -275,10 +279,36 @@ func (h *Handler) TriggerPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var request triggerPolicyRequest
+	if !decodeRequestBody(w, r, &request) {
+		return
+	}
+
+	encryptionKey := strings.TrimSpace(request.EncryptionKey)
+	if policy.Type == "cold" && policy.Encryption {
+		if encryptionKey == "" {
+			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "encryption_key is required when triggering encrypted cold policies")
+			return
+		}
+		if policy.EncryptionKeyHash != nil && *policy.EncryptionKeyHash != "" && !authcrypto.ValidateEncryptionKey(encryptionKey, *policy.EncryptionKeyHash) {
+			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "encryption_key does not match policy")
+			return
+		}
+	}
+
 	backup, task, err := h.db.CreatePendingPolicyRun(policy)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to create pending policy run")
 		return
+	}
+	if h.taskQueue != nil {
+		if policy.Type == "cold" && encryptionKey != "" {
+			h.taskQueue.SetColdEncryptionKey(task.ID, encryptionKey)
+		}
+		if err := h.taskQueue.Enqueue(task); err != nil {
+			Error(w, http.StatusInternalServerError, authErrorInternal, "failed to enqueue task")
+			return
+		}
 	}
 
 	JSON(w, http.StatusCreated, map[string]any{"backup": backup, "task": task})
