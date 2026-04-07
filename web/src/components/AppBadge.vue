@@ -35,6 +35,10 @@ withDefaults(
   color: var(--success-500);
 }
 .app-badge--warning {
+  background: color-mix(in srgb, #d97706 12%, transparent);
+  color: #b45309;
+}
+[data-theme='dark'] .app-badge--warning {
   background: color-mix(in srgb, var(--warning-500) 15%, transparent);
   color: var(--warning-500);
 }

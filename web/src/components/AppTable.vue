@@ -128,7 +128,7 @@ function getCellValue(row: Record<string, unknown>, key: string): unknown {
   padding: 10px 12px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border-default);
@@ -167,6 +167,6 @@ function getCellValue(row: Record<string, unknown>, key: string): unknown {
   padding: 10px 12px;
   font-size: 14px;
   color: var(--text-primary);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-default);
 }
 </style>

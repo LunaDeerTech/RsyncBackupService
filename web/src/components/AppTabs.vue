@@ -51,7 +51,7 @@ const emit = defineEmits<{
   padding: 10px 16px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   cursor: pointer;

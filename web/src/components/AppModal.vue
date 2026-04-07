@@ -80,6 +80,9 @@ watch(
 }
 .app-modal {
   width: 100%;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
   background: var(--surface-raised);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
@@ -118,6 +121,8 @@ watch(
 }
 .app-modal__body {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 .app-modal__footer {
   display: flex;

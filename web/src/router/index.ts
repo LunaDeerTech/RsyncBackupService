@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import AppLayout from '../layouts/AppLayout.vue'
 import DashboardPage from '../pages/DashboardPage.vue'
-import InstancesPage from '../pages/InstancesPage.vue'
+import InstanceListPage from '../pages/instances/InstanceListPage.vue'
 import LoginPage from '../pages/LoginPage.vue'
 import RegisterPage from '../pages/RegisterPage.vue'
 import { useAuthStore } from '../stores/auth'
@@ -45,9 +45,17 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'instances',
         name: 'instances',
-        component: InstancesPage,
+        component: InstanceListPage,
         meta: {
           title: '实例列表',
+        },
+      },
+      {
+        path: 'instances/:id',
+        name: 'instance-detail',
+        component: () => import('../pages/instances/InstanceDetailPage.vue'),
+        meta: {
+          title: '实例详情',
         },
       },
       {
