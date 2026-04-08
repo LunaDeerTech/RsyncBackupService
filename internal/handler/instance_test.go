@@ -32,6 +32,7 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 		"name":             "mysql-prod",
 		"source_type":      "ssh",
 		"source_path":      "/srv/mysql",
+		"exclude_patterns": []string{"*.log", "tmp/**", "*.log"},
 		"remote_config_id": remote.ID,
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	if createResponse.Code != http.StatusCreated {
@@ -145,6 +146,9 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 	if detail.Stats.LastBackup == nil || detail.Stats.LastBackup.ID != secondBackupID {
 		t.Fatalf("detail stats last backup = %+v, want backup %d", detail.Stats.LastBackup, secondBackupID)
 	}
+	if len(detail.Instance.ExcludePatterns) != 2 || detail.Instance.ExcludePatterns[0] != "*.log" || detail.Instance.ExcludePatterns[1] != "tmp/**" {
+		t.Fatalf("detail instance exclude_patterns = %#v, want normalized patterns", detail.Instance.ExcludePatterns)
+	}
 
 	statsResponse := performAuthorizedJSONRequest(t, router, http.MethodGet, "/api/v1/instances/"+itoa(instance.ID)+"/stats", nil, mustAccessTokenForUser(t, viewer, "secret"))
 	if statsResponse.Code != http.StatusOK {
@@ -169,6 +173,7 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 		"name":             "mysql-main",
 		"source_type":      "ssh",
 		"source_path":      "/data/mysql",
+		"exclude_patterns": []string{"node_modules/", "*.tmp"},
 		"remote_config_id": remote.ID,
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	if updateResponse.Code != http.StatusOK {
@@ -181,6 +186,9 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 	}
 	if updated.Name != "mysql-main" || updated.SourcePath != "/data/mysql" {
 		t.Fatalf("updated instance = %+v, want renamed instance", updated)
+	}
+	if len(updated.ExcludePatterns) != 2 || updated.ExcludePatterns[0] != "node_modules/" || updated.ExcludePatterns[1] != "*.tmp" {
+		t.Fatalf("updated.ExcludePatterns = %#v, want updated patterns", updated.ExcludePatterns)
 	}
 
 	deleteResponse := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instance.ID), nil, mustAccessTokenForUser(t, admin, "secret"))

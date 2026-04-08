@@ -113,13 +113,14 @@ func (e *RollingBackupExecutor) Execute(ctx context.Context, task *model.Task, p
 
 	var progressErr error
 	result, err := e.runRsync(ctx, RsyncConfig{
-		SourcePath:   instance.SourcePath,
-		SourceType:   instance.SourceType,
-		SourceRemote: sourceRemote,
-		DestPath:     snapshotPath,
-		DestType:     target.StorageType,
-		DestRemote:   targetRemote,
-		LinkDestPath: linkDestPath,
+		SourcePath:      instance.SourcePath,
+		SourceType:      instance.SourceType,
+		SourceRemote:    sourceRemote,
+		DestPath:        snapshotPath,
+		DestType:        target.StorageType,
+		DestRemote:      targetRemote,
+		LinkDestPath:    linkDestPath,
+		ExcludePatterns: instance.ExcludePatterns,
 	}, func(progress ProgressInfo) {
 		if updateErr := e.reportProgress(task, rollingTaskSyncStep, progress, progressCb); updateErr != nil {
 			progressErr = errors.Join(progressErr, updateErr)
@@ -205,12 +206,13 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 
 	var pullProgressErr error
 	pullResult, err := e.runRsync(ctx, RsyncConfig{
-		SourcePath:   instance.SourcePath,
-		SourceType:   instance.SourceType,
-		SourceRemote: sourceRemote,
-		DestPath:     relayStagePath,
-		DestType:     "local",
-		LinkDestPath: pullLinkDest,
+		SourcePath:      instance.SourcePath,
+		SourceType:      instance.SourceType,
+		SourceRemote:    sourceRemote,
+		DestPath:        relayStagePath,
+		DestType:        "local",
+		LinkDestPath:    pullLinkDest,
+		ExcludePatterns: instance.ExcludePatterns,
 	}, func(progress ProgressInfo) {
 		mapped := scaleProgress(progress, 0, 50)
 		if updateErr := e.reportProgress(task, rollingTaskPullStep, mapped, progressCb); updateErr != nil {

@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	instanceColumns = `id, name, source_type, source_path, remote_config_id, status, created_at, updated_at`
+	instanceColumns = `id, name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at`
 	backupColumns   = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at`
 )
 
@@ -28,11 +28,12 @@ func (db *DB) CreateInstance(inst *model.Instance) error {
 	}
 
 	result, err := db.Exec(
-		`INSERT INTO instances (name, source_type, source_path, remote_config_id, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO instances (name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		inst.Name,
 		inst.SourceType,
 		inst.SourcePath,
+		joinExcludePatterns(inst.ExcludePatterns),
 		inst.RemoteConfigID,
 		inst.Status,
 	)
@@ -222,11 +223,12 @@ func (db *DB) UpdateInstance(inst *model.Instance) error {
 
 	result, err := db.Exec(
 		`UPDATE instances
-		 SET name = ?, source_type = ?, source_path = ?, remote_config_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+		 SET name = ?, source_type = ?, source_path = ?, exclude_patterns = ?, remote_config_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		inst.Name,
 		inst.SourceType,
 		inst.SourcePath,
+		joinExcludePatterns(inst.ExcludePatterns),
 		inst.RemoteConfigID,
 		inst.Status,
 		inst.ID,
@@ -430,10 +432,11 @@ func (db *DB) CountBackupsByInstance(instanceID int64) (int, error) {
 
 func scanInstance(scanner instanceScanner) (*model.Instance, error) {
 	var (
-		instance       model.Instance
-		remoteConfigID sql.NullInt64
-		rawCreated     string
-		rawUpdated     string
+		instance           model.Instance
+		rawExcludePatterns string
+		remoteConfigID     sql.NullInt64
+		rawCreated         string
+		rawUpdated         string
 	)
 
 	if err := scanner.Scan(
@@ -441,6 +444,7 @@ func scanInstance(scanner instanceScanner) (*model.Instance, error) {
 		&instance.Name,
 		&instance.SourceType,
 		&instance.SourcePath,
+		&rawExcludePatterns,
 		&remoteConfigID,
 		&instance.Status,
 		&rawCreated,
@@ -460,11 +464,30 @@ func scanInstance(scanner instanceScanner) (*model.Instance, error) {
 
 	instance.CreatedAt = createdAt
 	instance.UpdatedAt = updatedAt
+	instance.ExcludePatterns = splitExcludePatterns(rawExcludePatterns)
 	if remoteConfigID.Valid {
 		instance.RemoteConfigID = &remoteConfigID.Int64
 	}
 
 	return &instance, nil
+}
+
+func joinExcludePatterns(patterns []string) string {
+	normalized := model.NormalizeExcludePatterns(patterns)
+	if len(normalized) == 0 {
+		return ""
+	}
+
+	return strings.Join(normalized, "\n")
+}
+
+func splitExcludePatterns(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+
+	return model.NormalizeExcludePatterns(strings.Split(trimmed, "\n"))
 }
 
 func scanBackup(scanner backupScanner) (*model.Backup, error) {

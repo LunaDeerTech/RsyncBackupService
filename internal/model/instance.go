@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	BackupTriggerSourceManual    = "manual"
@@ -8,14 +11,40 @@ const (
 )
 
 type Instance struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	SourceType     string    `json:"source_type"`
-	SourcePath     string    `json:"source_path"`
-	RemoteConfigID *int64    `json:"remote_config_id,omitempty"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	SourceType      string    `json:"source_type"`
+	SourcePath      string    `json:"source_path"`
+	ExcludePatterns []string  `json:"exclude_patterns,omitempty"`
+	RemoteConfigID  *int64    `json:"remote_config_id,omitempty"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func NormalizeExcludePatterns(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(patterns))
+	seen := make(map[string]struct{}, len(patterns))
+	for _, pattern := range patterns {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+
+	return normalized
 }
 
 type Backup struct {

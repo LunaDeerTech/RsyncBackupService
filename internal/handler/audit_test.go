@@ -78,6 +78,7 @@ func TestInstanceHandlersWriteAuditLogs(t *testing.T) {
 		"name":             "mysql-prod",
 		"source_type":      "ssh",
 		"source_path":      "/srv/mysql",
+		"exclude_patterns": []string{"*.log"},
 		"remote_config_id": remote.ID,
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	if createResponse.Code != http.StatusCreated {
@@ -92,6 +93,7 @@ func TestInstanceHandlersWriteAuditLogs(t *testing.T) {
 		"name":             "mysql-main",
 		"source_type":      "ssh",
 		"source_path":      "/data/mysql",
+		"exclude_patterns": []string{"node_modules/"},
 		"remote_config_id": remote.ID,
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	if updateResponse.Code != http.StatusOK {
@@ -110,14 +112,15 @@ func TestInstanceHandlersWriteAuditLogs(t *testing.T) {
 	if err := db.QueryRow(`SELECT detail FROM audit_logs WHERE action = ? ORDER BY id DESC LIMIT 1`, "instance.delete").Scan(&detail); err != nil {
 		t.Fatalf("query instance.delete detail error = %v", err)
 	}
-	if detail != `{"deleted_instance_id":`+itoa(instance.ID)+`,"name":"mysql-main","source_path":"/data/mysql","source_type":"ssh"}` && detail != `{"deleted_instance_id":`+itoa(instance.ID)+`,"name":"mysql-prod","source_path":"/srv/mysql","source_type":"ssh"}` {
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(detail), &payload); err != nil {
-			t.Fatalf("json.Unmarshal(instance.delete detail) error = %v", err)
-		}
-		if int64(payload["deleted_instance_id"].(float64)) != instance.ID {
-			t.Fatalf("deleted_instance_id = %v, want %d", payload["deleted_instance_id"], instance.ID)
-		}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(instance.delete detail) error = %v", err)
+	}
+	if int64(payload["deleted_instance_id"].(float64)) != instance.ID {
+		t.Fatalf("deleted_instance_id = %v, want %d", payload["deleted_instance_id"], instance.ID)
+	}
+	if _, ok := payload["exclude_patterns"]; !ok {
+		t.Fatalf("instance.delete detail missing exclude_patterns: %v", payload)
 	}
 }
 

@@ -38,11 +38,12 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 	}
 
 	instance := &model.Instance{
-		Name:           "mysql-prod",
-		SourceType:     "ssh",
-		SourcePath:     "/srv/mysql",
-		RemoteConfigID: &remote.ID,
-		Status:         "idle",
+		Name:            "mysql-prod",
+		SourceType:      "ssh",
+		SourcePath:      "/srv/mysql",
+		ExcludePatterns: []string{"*.log", "tmp/**", "*.log"},
+		RemoteConfigID:  &remote.ID,
+		Status:          "idle",
 	}
 	if err := db.CreateInstance(instance); err != nil {
 		t.Fatalf("CreateInstance() error = %v", err)
@@ -68,6 +69,9 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 	if loadedByName.ID != instance.ID {
 		t.Fatalf("GetInstanceByName().ID = %d, want %d", loadedByName.ID, instance.ID)
 	}
+	if len(loadedByName.ExcludePatterns) != 2 || loadedByName.ExcludePatterns[0] != "*.log" || loadedByName.ExcludePatterns[1] != "tmp/**" {
+		t.Fatalf("GetInstanceByName().ExcludePatterns = %#v, want normalized patterns", loadedByName.ExcludePatterns)
+	}
 
 	page, err := db.ListInstancesPage(10, 0)
 	if err != nil {
@@ -87,11 +91,15 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 
 	instance.Name = "mysql-main"
 	instance.SourcePath = "/data/mysql"
+	instance.ExcludePatterns = []string{"node_modules/", "*.tmp"}
 	if err := db.UpdateInstance(instance); err != nil {
 		t.Fatalf("UpdateInstance() error = %v", err)
 	}
 	if instance.Name != "mysql-main" {
 		t.Fatalf("UpdateInstance().Name = %q, want %q", instance.Name, "mysql-main")
+	}
+	if len(instance.ExcludePatterns) != 2 || instance.ExcludePatterns[0] != "node_modules/" || instance.ExcludePatterns[1] != "*.tmp" {
+		t.Fatalf("UpdateInstance().ExcludePatterns = %#v, want updated patterns", instance.ExcludePatterns)
 	}
 
 	if err := db.UpdateInstanceStatus(instance.ID, "running"); err != nil {

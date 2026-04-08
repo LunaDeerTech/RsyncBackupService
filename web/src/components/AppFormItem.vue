@@ -15,8 +15,10 @@ withDefaults(
 
 <template>
   <div class="app-form-item">
-    <label v-if="label" class="app-form-item__label">
-      {{ label }}
+    <label v-if="label || $slots.label" class="app-form-item__label">
+      <slot name="label">
+        {{ label }}
+      </slot>
       <span v-if="required" class="app-form-item__required">*</span>
     </label>
     <slot />

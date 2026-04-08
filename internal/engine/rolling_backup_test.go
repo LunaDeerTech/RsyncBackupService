@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -308,10 +309,11 @@ func createRollingFixtures(t *testing.T, db *store.DB, sourceRoot, targetRoot st
 	t.Helper()
 
 	instance := &model.Instance{
-		Name:       "mysql-prod",
-		SourceType: "local",
-		SourcePath: sourceRoot,
-		Status:     "idle",
+		Name:            "mysql-prod",
+		SourceType:      "local",
+		SourcePath:      sourceRoot,
+		ExcludePatterns: []string{"*.tmp", "cache/**"},
+		Status:          "idle",
 	}
 	if err := db.CreateInstance(instance); err != nil {
 		t.Fatalf("CreateInstance() error = %v", err)
@@ -371,6 +373,13 @@ func emulateLocalSnapshotRsync(cfg RsyncConfig) (RsyncStats, error) {
 			return nil
 		}
 
+		if shouldExcludeLocalSnapshotPath(relPath, info.IsDir(), cfg.ExcludePatterns) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		destPath := filepath.Join(cfg.DestPath, relPath)
 		if info.IsDir() {
 			return os.MkdirAll(destPath, 0o755)
@@ -412,6 +421,37 @@ func emulateLocalSnapshotRsync(cfg RsyncConfig) (RsyncStats, error) {
 	}
 	stats.Speed = "1 bytes/sec"
 	return stats, nil
+}
+
+func shouldExcludeLocalSnapshotPath(relPath string, isDir bool, patterns []string) bool {
+	relSlash := filepath.ToSlash(relPath)
+	base := pathpkg.Base(relSlash)
+	for _, pattern := range model.NormalizeExcludePatterns(patterns) {
+		switch {
+		case strings.HasSuffix(pattern, "/**"):
+			prefix := strings.TrimSuffix(pattern, "/**")
+			if relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/") {
+				return true
+			}
+		case strings.HasSuffix(pattern, "/"):
+			prefix := strings.TrimSuffix(pattern, "/")
+			if relSlash == prefix || strings.HasPrefix(relSlash, prefix+"/") {
+				return true
+			}
+			if isDir && base == prefix {
+				return true
+			}
+		default:
+			if matched, _ := pathpkg.Match(pattern, relSlash); matched {
+				return true
+			}
+			if matched, _ := pathpkg.Match(pattern, base); matched {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func filesMatch(leftPath, rightPath string) (bool, error) {

@@ -98,6 +98,31 @@ func TestBuildRsyncArgsSSHToLocal(t *testing.T) {
 	}
 }
 
+func TestBuildRsyncArgsIncludesExcludePatterns(t *testing.T) {
+	args := BuildRsyncArgs(RsyncConfig{
+		SourcePath:      "/data/source",
+		SourceType:      "local",
+		DestPath:        "/data/dest",
+		DestType:        "local",
+		ExcludePatterns: []string{"*.log", "cache/**", "*.log", "node_modules/"},
+	})
+
+	want := []string{
+		"-avz",
+		"--delete",
+		"--stats",
+		"--info=progress2",
+		"--exclude=*.log",
+		"--exclude=cache/**",
+		"--exclude=node_modules/",
+		"/data/source/",
+		"/data/dest/",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("BuildRsyncArgs() = %#v, want %#v", args, want)
+	}
+}
+
 func TestParseProgress(t *testing.T) {
 	tests := []struct {
 		name   string

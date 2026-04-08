@@ -34,15 +34,16 @@ var (
 )
 
 type RsyncConfig struct {
-	SourcePath   string
-	SourceType   string
-	SourceRemote *model.RemoteConfig
-	DestPath     string
-	DestType     string
-	DestRemote   *model.RemoteConfig
-	LinkDestPath string
-	DisableDelete bool
-	ExtraArgs    []string
+	SourcePath      string
+	SourceType      string
+	SourceRemote    *model.RemoteConfig
+	DestPath        string
+	DestType        string
+	DestRemote      *model.RemoteConfig
+	LinkDestPath    string
+	ExcludePatterns []string
+	DisableDelete   bool
+	ExtraArgs       []string
 }
 
 type RsyncResult struct {
@@ -98,6 +99,9 @@ func BuildRsyncArgs(cfg RsyncConfig) []string {
 	}
 	if linkDest := strings.TrimSpace(cfg.LinkDestPath); linkDest != "" {
 		args = append(args, "--link-dest="+linkDest)
+	}
+	for _, pattern := range model.NormalizeExcludePatterns(cfg.ExcludePatterns) {
+		args = append(args, "--exclude="+pattern)
 	}
 	if len(cfg.ExtraArgs) > 0 {
 		args = append(args, cfg.ExtraArgs...)

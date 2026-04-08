@@ -269,10 +269,11 @@ func createColdFixtures(t *testing.T, db *store.DB, sourceRoot, targetRoot strin
 	t.Helper()
 
 	instance := &model.Instance{
-		Name:       "mysql-prod",
-		SourceType: "local",
-		SourcePath: sourceRoot,
-		Status:     "idle",
+		Name:            "mysql-prod",
+		SourceType:      "local",
+		SourcePath:      sourceRoot,
+		ExcludePatterns: []string{"*.tmp", "cache/**"},
+		Status:          "idle",
 	}
 	if err := db.CreateInstance(instance); err != nil {
 		t.Fatalf("CreateInstance() error = %v", err)

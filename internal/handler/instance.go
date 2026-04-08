@@ -22,17 +22,19 @@ const (
 )
 
 type instanceRequest struct {
-	Name           string `json:"name"`
-	SourceType     string `json:"source_type"`
-	SourcePath     string `json:"source_path"`
-	RemoteConfigID *int64 `json:"remote_config_id"`
+	Name            string   `json:"name"`
+	SourceType      string   `json:"source_type"`
+	SourcePath      string   `json:"source_path"`
+	ExcludePatterns []string `json:"exclude_patterns"`
+	RemoteConfigID  *int64   `json:"remote_config_id"`
 }
 
 type instanceInput struct {
-	Name           string
-	SourceType     string
-	SourcePath     string
-	RemoteConfigID *int64
+	Name            string
+	SourceType      string
+	SourcePath      string
+	ExcludePatterns []string
+	RemoteConfigID  *int64
 }
 
 type instancePermissionAssignmentRequest struct {
@@ -138,11 +140,12 @@ func (h *Handler) CreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	instance := &model.Instance{
-		Name:           input.Name,
-		SourceType:     input.SourceType,
-		SourcePath:     input.SourcePath,
-		RemoteConfigID: cloneOptionalInt64(input.RemoteConfigID),
-		Status:         "idle",
+		Name:            input.Name,
+		SourceType:      input.SourceType,
+		SourcePath:      input.SourcePath,
+		ExcludePatterns: append([]string(nil), input.ExcludePatterns...),
+		RemoteConfigID:  cloneOptionalInt64(input.RemoteConfigID),
+		Status:          "idle",
 	}
 	if err := h.db.CreateInstance(instance); err != nil {
 		writeInstanceError(w, err, "failed to create instance")
@@ -153,6 +156,7 @@ func (h *Handler) CreateInstance(w http.ResponseWriter, r *http.Request) {
 		"name":             instance.Name,
 		"source_type":      instance.SourceType,
 		"source_path":      instance.SourcePath,
+		"exclude_patterns": instance.ExcludePatterns,
 		"remote_config_id": instance.RemoteConfigID,
 	})
 
@@ -230,6 +234,7 @@ func (h *Handler) UpdateInstance(w http.ResponseWriter, r *http.Request) {
 	current.Name = input.Name
 	current.SourceType = input.SourceType
 	current.SourcePath = input.SourcePath
+	current.ExcludePatterns = append([]string(nil), input.ExcludePatterns...)
 	current.RemoteConfigID = cloneOptionalInt64(input.RemoteConfigID)
 	if err := h.db.UpdateInstance(current); err != nil {
 		writeInstanceError(w, err, "failed to update instance")
@@ -240,6 +245,7 @@ func (h *Handler) UpdateInstance(w http.ResponseWriter, r *http.Request) {
 		"name":             current.Name,
 		"source_type":      current.SourceType,
 		"source_path":      current.SourcePath,
+		"exclude_patterns": current.ExcludePatterns,
 		"remote_config_id": current.RemoteConfigID,
 	})
 
@@ -272,6 +278,7 @@ func (h *Handler) DeleteInstance(w http.ResponseWriter, r *http.Request) {
 		"name":                instance.Name,
 		"source_type":         instance.SourceType,
 		"source_path":         instance.SourcePath,
+		"exclude_patterns":    instance.ExcludePatterns,
 	})
 
 	if err := h.db.DeleteInstance(instanceID); err != nil {
@@ -370,10 +377,11 @@ func normalizeInstanceInput(request instanceRequest) (instanceInput, error) {
 	}
 
 	return instanceInput{
-		Name:           name,
-		SourceType:     sourceType,
-		SourcePath:     sourcePath,
-		RemoteConfigID: cloneOptionalInt64(request.RemoteConfigID),
+		Name:            name,
+		SourceType:      sourceType,
+		SourcePath:      sourcePath,
+		ExcludePatterns: model.NormalizeExcludePatterns(request.ExcludePatterns),
+		RemoteConfigID:  cloneOptionalInt64(request.RemoteConfigID),
 	}, nil
 }
 

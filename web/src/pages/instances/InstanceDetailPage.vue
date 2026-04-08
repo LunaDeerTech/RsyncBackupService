@@ -20,6 +20,7 @@ import { useToastStore } from '../../stores/toast'
 import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
 import { formatBytes } from '../../utils/format'
+import { EXCLUDE_PATTERN_HELP_EXAMPLES, excludePatternsToText, normalizeExcludePatternsInput } from '../../utils/exclude-patterns'
 import { formatRelativeTime } from '../../utils/time'
 import { formatScheduleValue } from '../../utils/schedule'
 import { getActionLabel, actionOptions, formatAuditDetail, getActionBadgeVariant } from '../../utils/audit'
@@ -47,7 +48,7 @@ import { getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRingColor } from '..
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
   Database, CheckCircle, HardDrive, Download, RotateCcw,
-  AlertTriangle, Clock, XCircle,
+  AlertTriangle, Clock, XCircle, CircleHelp,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -183,6 +184,7 @@ const settingsForm = reactive({
   name: '',
   source_type: 'local' as 'local' | 'ssh',
   source_path: '',
+  exclude_patterns_text: '',
   remote_config_id: undefined as number | undefined,
 })
 const settingsErrors = reactive({ name: '', source_path: '', remote_config_id: '' })
@@ -255,6 +257,8 @@ const backupStatusLabel: Record<string, string> = {
   running: '运行中',
   pending: '等待中',
 }
+
+const excludePatternHelpText = EXCLUDE_PATTERN_HELP_EXAMPLES.join('\n')
 
 // ── Task data (for overview) ──
 const taskStore = useTaskStore()
@@ -473,6 +477,7 @@ watch(activeTab, (tab) => {
     settingsForm.name = instance.value.name
     settingsForm.source_type = instance.value.source_type
     settingsForm.source_path = instance.value.source_path
+    settingsForm.exclude_patterns_text = excludePatternsToText(instance.value.exclude_patterns)
     settingsForm.remote_config_id = instance.value.remote_config_id
   }
 })
@@ -888,14 +893,17 @@ async function handleSaveSettings() {
 
   settingsSubmitting.value = true
   try {
+    const excludePatterns = normalizeExcludePatternsInput(settingsForm.exclude_patterns_text)
     const data: UpdateInstanceRequest = {
       name: settingsForm.name.trim(),
       source_type: settingsForm.source_type,
       source_path: settingsForm.source_path.trim(),
+      exclude_patterns: excludePatterns.length > 0 ? excludePatterns : undefined,
       remote_config_id: settingsForm.source_type === 'ssh' ? settingsForm.remote_config_id : undefined,
     }
     const updated = await updateInstance(instanceId.value, data)
     instance.value = updated
+    settingsForm.exclude_patterns_text = excludePatternsToText(updated.exclude_patterns)
     toast.success('实例信息已更新')
   } catch (e) {
     if (e instanceof ApiBusinessError) toast.error(e.message)
@@ -1375,6 +1383,22 @@ const permissionOptions = [
                   <AppFormItem label="数据源路径" :required="true" :error="settingsErrors.source_path">
                     <AppInput v-model="settingsForm.source_path" />
                   </AppFormItem>
+                  <AppFormItem>
+                    <template #label>
+                      <span class="exclude-field-label">
+                        <span>排除文件</span>
+                        <span class="exclude-help" :title="excludePatternHelpText" aria-label="排除规则示例">
+                          <CircleHelp :size="14" />
+                        </span>
+                      </span>
+                    </template>
+                    <textarea
+                      v-model="settingsForm.exclude_patterns_text"
+                      class="instance-textarea"
+                      rows="5"
+                      placeholder="每行一条规则，例如：&#10;*.log&#10;node_modules/&#10;cache/**"
+                    />
+                  </AppFormItem>
                   <AppFormItem v-if="settingsForm.source_type === 'ssh'" label="关联远程配置" :required="true"
                     :error="settingsErrors.remote_config_id">
                     <AppSelect v-model="settingsForm.remote_config_id" :options="remoteOptions" placeholder="请选择远程配置" />
@@ -1768,6 +1792,38 @@ const permissionOptions = [
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
+}
+
+.exclude-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.exclude-help {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.instance-textarea {
+  width: 100%;
+  min-height: 116px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.instance-textarea:focus {
+  outline: none;
+  border-color: var(--primary-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-500) 18%, transparent);
 }
 
 /* Stats 2×2 grid */

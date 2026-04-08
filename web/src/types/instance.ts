@@ -3,6 +3,7 @@ export interface Instance {
   name: string
   source_type: 'local' | 'ssh'
   source_path: string
+  exclude_patterns?: string[]
   remote_config_id?: number
   status: 'idle' | 'running'
   created_at: string
@@ -32,6 +33,7 @@ export interface CreateInstanceRequest {
   name: string
   source_type: 'local' | 'ssh'
   source_path: string
+  exclude_patterns?: string[]
   remote_config_id?: number
 }
 
@@ -39,6 +41,7 @@ export interface UpdateInstanceRequest {
   name: string
   source_type: 'local' | 'ssh'
   source_path: string
+  exclude_patterns?: string[]
   remote_config_id?: number
 }
 

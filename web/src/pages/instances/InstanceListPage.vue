@@ -8,6 +8,7 @@ import { useToastStore } from '../../stores/toast'
 import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
 import { formatRelativeTime } from '../../utils/time'
+import { EXCLUDE_PATTERN_HELP_EXAMPLES, normalizeExcludePatternsInput } from '../../utils/exclude-patterns'
 import type { InstanceListItem, CreateInstanceRequest } from '../../types/instance'
 import type { RemoteConfig } from '../../types/remote'
 import type { TableColumn } from '../../components/AppTable.vue'
@@ -22,7 +23,7 @@ import AppButton from '../../components/AppButton.vue'
 import AppBadge from '../../components/AppBadge.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import { getDRLevelColor } from '../../utils/disaster-recovery'
-import { Plus, Eye, Trash2 } from 'lucide-vue-next'
+import { Plus, Eye, Trash2, CircleHelp } from 'lucide-vue-next'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -44,6 +45,7 @@ const form = reactive({
   name: '',
   source_type: 'local' as 'local' | 'ssh',
   source_path: '',
+  exclude_patterns_text: '',
   remote_config_id: undefined as number | undefined,
 })
 
@@ -104,6 +106,8 @@ const backupStatusLabel: Record<string, string> = {
   failed: '失败',
 }
 
+const excludePatternHelpText = EXCLUDE_PATTERN_HELP_EXAMPLES.join('\n')
+
 // ── Fetch ──
 async function fetchList() {
   loading.value = true
@@ -150,6 +154,7 @@ function resetForm() {
   form.name = ''
   form.source_type = 'local'
   form.source_path = ''
+  form.exclude_patterns_text = ''
   form.remote_config_id = undefined
   errors.name = ''
   errors.source_path = ''
@@ -188,10 +193,12 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    const excludePatterns = normalizeExcludePatternsInput(form.exclude_patterns_text)
     const data: CreateInstanceRequest = {
       name: form.name.trim(),
       source_type: form.source_type,
       source_path: form.source_path.trim(),
+      exclude_patterns: excludePatterns.length > 0 ? excludePatterns : undefined,
       remote_config_id: form.source_type === 'ssh' ? form.remote_config_id : undefined,
     }
 
@@ -334,6 +341,23 @@ function goToDetail(row: Record<string, unknown>) {
             <AppInput v-model="form.source_path" placeholder="例如：/data/myapp" />
           </AppFormItem>
 
+          <AppFormItem :error="''">
+            <template #label>
+              <span class="exclude-field-label">
+                <span>排除文件</span>
+                <span class="exclude-help" :title="excludePatternHelpText" aria-label="排除规则示例">
+                  <CircleHelp :size="14" />
+                </span>
+              </span>
+            </template>
+            <textarea
+              v-model="form.exclude_patterns_text"
+              class="instance-textarea"
+              rows="5"
+              placeholder="每行一条规则，例如：&#10;*.log&#10;node_modules/&#10;cache/**"
+            />
+          </AppFormItem>
+
           <AppFormItem
             v-if="form.source_type === 'ssh'"
             label="关联远程配置"
@@ -420,5 +444,33 @@ function goToDetail(row: Record<string, unknown>) {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.exclude-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.exclude-help {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: help;
+}
+.instance-textarea {
+  width: 100%;
+  min-height: 116px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.instance-textarea:focus {
+  outline: none;
+  border-color: var(--primary-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-500) 18%, transparent);
 }
 </style>
