@@ -18,11 +18,16 @@ import (
 
 type DRCache = service.DRCache
 
+type emailDispatcher interface {
+	Send(to, subject, body string)
+}
+
 type RiskDetector struct {
 	db      *store.DB
 	drCache *DRCache
 	audit   *audit.Logger
 	now     func() time.Time
+	email   emailDispatcher
 }
 
 func NewRiskDetector(db *store.DB, drCache *DRCache, auditLogger *audit.Logger) *RiskDetector {
@@ -41,6 +46,13 @@ func (rd *RiskDetector) SetClock(now func() time.Time) {
 		return
 	}
 	rd.now = func() time.Time { return now().UTC() }
+}
+
+func (rd *RiskDetector) SetEmailSender(sender emailDispatcher) {
+	if rd == nil {
+		return
+	}
+	rd.email = sender
 }
 
 func (rd *RiskDetector) OnBackupFailed(ctx context.Context, instanceID int64, policyID int64) error {
@@ -377,6 +389,7 @@ func (rd *RiskDetector) ensureRiskEvent(ctx context.Context, instanceID *int64, 
 			"severity":      severity,
 			"message":       message,
 		}))
+		rd.notify(ctx, created)
 		rd.invalidateRelated(created.InstanceID, created.TargetID)
 		return nil
 	}
@@ -393,6 +406,10 @@ func (rd *RiskDetector) ensureRiskEvent(ctx context.Context, instanceID *int64, 
 		"from_severity": event.Severity,
 		"to_severity":   severity,
 	}))
+	event.Severity = severity
+	if severity == model.RiskSeverityCritical {
+		rd.notify(ctx, event)
+	}
 	rd.invalidateRelated(event.InstanceID, event.TargetID)
 	return nil
 }
@@ -452,6 +469,66 @@ func (rd *RiskDetector) invalidateRelated(instanceID *int64, targetID *int64) {
 	for id := range seen {
 		rd.drCache.Invalidate(id)
 	}
+}
+
+func (rd *RiskDetector) notify(ctx context.Context, event *model.RiskEvent) {
+	if rd == nil || rd.email == nil || rd.db == nil || event == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	instanceIDs, err := rd.notificationInstanceIDs(event)
+	if err != nil {
+		slog.Error("resolve risk notification instances failed", "risk_event_id", event.ID, "error", err)
+		return
+	}
+	if len(instanceIDs) == 0 {
+		return
+	}
+
+	var target *model.BackupTarget
+	if event.TargetID != nil {
+		target, err = rd.db.GetBackupTargetByID(*event.TargetID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			slog.Warn("load backup target for risk notification failed", "target_id", *event.TargetID, "error", err)
+		}
+	}
+
+	for _, instanceID := range instanceIDs {
+		instance, err := rd.db.GetInstanceByID(instanceID)
+		if err != nil {
+			slog.Warn("load instance for risk notification failed", "instance_id", instanceID, "error", err)
+			continue
+		}
+		subscribers, err := rd.db.ListSubscribersByInstance(instanceID)
+		if err != nil {
+			slog.Warn("load subscribers for risk notification failed", "instance_id", instanceID, "error", err)
+			continue
+		}
+		if len(subscribers) == 0 {
+			continue
+		}
+		subject := buildRiskNotificationSubject(event, instance, target)
+		body := buildRiskNotificationBody(event, instance, target)
+		for _, user := range subscribers {
+			rd.email.Send(user.Email, subject, body)
+		}
+	}
+}
+
+func (rd *RiskDetector) notificationInstanceIDs(event *model.RiskEvent) ([]int64, error) {
+	if event == nil {
+		return nil, nil
+	}
+	if event.InstanceID != nil && *event.InstanceID > 0 {
+		return []int64{*event.InstanceID}, nil
+	}
+	if event.TargetID != nil && *event.TargetID > 0 {
+		return rd.db.ListInstanceIDsByTargetID(*event.TargetID)
+	}
+	return nil, nil
 }
 
 func (rd *RiskDetector) latestBackupFailureMessage(instanceID int64, policyID int64) (string, error) {
@@ -622,6 +699,79 @@ func isCredentialError(message string) bool {
 		}
 	}
 	return false
+}
+
+func buildRiskNotificationSubject(event *model.RiskEvent, instance *model.Instance, target *model.BackupTarget) string {
+	instanceName := "未知实例"
+	if instance != nil && strings.TrimSpace(instance.Name) != "" {
+		instanceName = instance.Name
+	}
+	label := riskSourceLabel(event.Source)
+	if target != nil && strings.TrimSpace(target.Name) != "" {
+		return fmt.Sprintf("[RBS 预警] 实例 %s 关联的备份目标 %s 出现%s风险", instanceName, target.Name, label)
+	}
+	return fmt.Sprintf("[RBS 预警] 实例 %s 出现%s风险", instanceName, label)
+}
+
+func buildRiskNotificationBody(event *model.RiskEvent, instance *model.Instance, target *model.BackupTarget) string {
+	instanceName := "未知实例"
+	if instance != nil && strings.TrimSpace(instance.Name) != "" {
+		instanceName = instance.Name
+	}
+	targetName := ""
+	if target != nil && strings.TrimSpace(target.Name) != "" {
+		targetName = target.Name
+	}
+	createdAt := time.Now().UTC()
+	if event != nil && !event.CreatedAt.IsZero() {
+		createdAt = event.CreatedAt.UTC()
+	}
+
+	lines := []string{
+		fmt.Sprintf("实例: %s", instanceName),
+		fmt.Sprintf("风险类型: %s", riskSourceLabel(event.Source)),
+		fmt.Sprintf("风险等级: %s", riskSeverityLabel(event.Severity)),
+		fmt.Sprintf("风险描述: %s", event.Message),
+		fmt.Sprintf("时间: %s", createdAt.Format(time.RFC3339)),
+	}
+	if targetName != "" {
+		lines = append(lines, fmt.Sprintf("备份目标: %s", targetName))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func riskSourceLabel(source string) string {
+	switch source {
+	case model.RiskSourceBackupFailed:
+		return "备份失败"
+	case model.RiskSourceBackupOverdue:
+		return "备份超期"
+	case model.RiskSourceColdBackupMissing:
+		return "缺少冷备份"
+	case model.RiskSourceTargetUnreachable:
+		return "目标不可达"
+	case model.RiskSourceTargetCapacityLow:
+		return "目标容量不足"
+	case model.RiskSourceRestoreFailed:
+		return "恢复失败"
+	case model.RiskSourceCredentialError:
+		return "凭证异常"
+	default:
+		return "系统"
+	}
+}
+
+func riskSeverityLabel(severity string) string {
+	switch severity {
+	case model.RiskSeverityCritical:
+		return "critical"
+	case model.RiskSeverityWarning:
+		return "warning"
+	case model.RiskSeverityInfo:
+		return "info"
+	default:
+		return severity
+	}
 }
 
 func riskSeverityRank(severity string) int {

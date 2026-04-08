@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -110,6 +111,71 @@ func newFileAEAD(key []byte) (cipher.AEAD, error) {
 	}
 
 	return aead, nil
+}
+
+func DeriveAESKey(secret string) []byte {
+	checksum := sha256.Sum256([]byte(secret))
+	key := make([]byte, len(checksum))
+	copy(key, checksum[:])
+	return key
+}
+
+func AESEncrypt(plaintext string, key []byte) (string, error) {
+	if len(key) == 0 {
+		return "", fmt.Errorf("encryption key is required")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("create aes cipher: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("create aes-gcm cipher: %w", err)
+	}
+
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generate aes nonce: %w", err)
+	}
+
+	ciphertext := aead.Seal(nil, nonce, []byte(plaintext), nil)
+	payload := append(nonce, ciphertext...)
+	return base64.StdEncoding.EncodeToString(payload), nil
+}
+
+func AESDecrypt(ciphertext string, key []byte) (string, error) {
+	if len(key) == 0 {
+		return "", fmt.Errorf("encryption key is required")
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("decode ciphertext: %w", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("create aes cipher: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("create aes-gcm cipher: %w", err)
+	}
+	if len(payload) < aead.NonceSize() {
+		return "", fmt.Errorf("ciphertext payload is too short")
+	}
+
+	nonce := payload[:aead.NonceSize()]
+	encrypted := payload[aead.NonceSize():]
+	plaintext, err := aead.Open(nil, nonce, encrypted, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt ciphertext: %w", err)
+	}
+
+	return string(plaintext), nil
 }
 
 func encryptChunk(ctx context.Context, aead cipher.AEAD, input io.Reader, output io.Writer) error {

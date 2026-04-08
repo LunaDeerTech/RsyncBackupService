@@ -13,9 +13,11 @@ import (
 
 	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/config"
+	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/handler"
 	"rsync-backup-service/internal/middleware"
+	"rsync-backup-service/internal/notify"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 	frontend "rsync-backup-service/web"
@@ -50,11 +52,15 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 	auditLogger := audit.NewLogger(db)
-	disasterRecovery := service.NewDisasterRecoveryService(db)
-	riskDetector := engine.NewRiskDetector(db, disasterRecovery.Cache(), auditLogger)
-
 	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	aesKey := authcrypto.DeriveAESKey(cfg.JWTSecret)
+	systemConfigs := service.NewSystemConfigService(db, aesKey)
+	emailSender := notify.NewEmailSender(db, aesKey)
+	emailSender.Start(serverCtx)
+	disasterRecovery := service.NewDisasterRecoveryService(db)
+	riskDetector := engine.NewRiskDetector(db, disasterRecovery.Cache(), auditLogger)
+	riskDetector.SetEmailSender(emailSender)
 
 	healthChecker := engine.NewHealthChecker(db)
 	healthChecker.SetDisasterRecoveryService(disasterRecovery)
@@ -91,6 +97,7 @@ func main() {
 	routerOptions = append(routerOptions, handler.WithTaskQueue(taskQueue))
 	routerOptions = append(routerOptions, handler.WithScheduler(scheduler))
 	routerOptions = append(routerOptions, handler.WithDisasterRecoveryService(disasterRecovery))
+	routerOptions = append(routerOptions, handler.WithSystemConfigService(systemConfigs))
 	switch {
 	case cfg.DevMode:
 		logger.Info("embedded frontend disabled in development mode")

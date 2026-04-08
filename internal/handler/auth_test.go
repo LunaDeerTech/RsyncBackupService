@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	authcrypto "rsync-backup-service/internal/crypto"
+	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
 
@@ -154,6 +155,35 @@ func TestLoginRateLimitAfterFiveFailures(t *testing.T) {
 	if envelope.Message != "too many login attempts, try again later" {
 		t.Fatalf("locked message = %q, want %q", envelope.Message, "too many login attempts, try again later")
 	}
+}
+
+func TestRegisterRespectsRegistrationSwitchAfterBootstrap(t *testing.T) {
+	db := newAuthTestDB(t)
+	sender := newRecordingPasswordSender()
+	systemConfigs := service.NewSystemConfigService(db, authcrypto.DeriveAESKey("secret"))
+	if err := systemConfigs.UpdateRegistrationEnabled(false); err != nil {
+		t.Fatalf("UpdateRegistrationEnabled(false) error = %v", err)
+	}
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		WithSystemConfigService(systemConfigs),
+		withPasswordSender(sender),
+		withPasswordGenerator(sequencePasswordGenerator("AdminPass123", "ViewerPass123")),
+	)
+
+	status := performAuthRequest(t, router, http.MethodGet, "/api/v1/system/registration", nil)
+	if status.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/system/registration status = %d, want %d", status.Code, http.StatusOK)
+	}
+
+	first := performAuthRequest(t, router, http.MethodPost, "/api/v1/auth/register", map[string]string{"email": "admin@example.com"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first register status = %d, want %d", first.Code, http.StatusOK)
+	}
+
+	second := performAuthRequest(t, router, http.MethodPost, "/api/v1/auth/register", map[string]string{"email": "viewer@example.com"})
+	assertAPIError(t, second, http.StatusForbidden, authErrorRegistrationOff, "registration is disabled")
 }
 
 type apiEnvelope struct {

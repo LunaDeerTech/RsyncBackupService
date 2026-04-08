@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,50 @@ func TestRiskDetectorRestoreFailedCreatesRestoreAndCredentialRisks(t *testing.T)
 	assertActiveRiskEvent(t, db, &instance.ID, nil, model.RiskSourceCredentialError, model.RiskSeverityCritical)
 }
 
+func TestRiskDetectorSendsNotificationsOnCreateAndCriticalEscalation(t *testing.T) {
+	db := newRollingTestDB(t)
+	instance, policy, _, _, _ := createRollingFixtures(t, db, t.TempDir(), t.TempDir())
+	user := &model.User{Email: "viewer@example.com", Name: "Viewer", PasswordHash: "hash", Role: "viewer"}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatalf("CreateUser(viewer) error = %v", err)
+	}
+	if err := db.UpdateSubscriptions(user.ID, []model.NotificationSubscription{{InstanceID: instance.ID, Enabled: true}}); err != nil {
+		t.Fatalf("UpdateSubscriptions() error = %v", err)
+	}
+
+	sender := &recordingEmailSender{}
+	detector := NewRiskDetector(db, nil, audit.NewLogger(db))
+	detector.SetEmailSender(sender)
+	now := time.Date(2026, 4, 8, 8, 0, 0, 0, time.UTC)
+
+	createRiskTestBackup(t, db, instance.ID, policy.ID, "failed", now.Add(-3*time.Minute), "rsync failed")
+	if err := detector.OnBackupFailed(context.Background(), instance.ID, policy.ID); err != nil {
+		t.Fatalf("OnBackupFailed(first) error = %v", err)
+	}
+	if len(sender.jobs) != 1 {
+		t.Fatalf("notification count after create = %d, want %d", len(sender.jobs), 1)
+	}
+
+	createRiskTestBackup(t, db, instance.ID, policy.ID, "failed", now.Add(-2*time.Minute), "rsync failed")
+	if err := detector.OnBackupFailed(context.Background(), instance.ID, policy.ID); err != nil {
+		t.Fatalf("OnBackupFailed(second) error = %v", err)
+	}
+	if len(sender.jobs) != 1 {
+		t.Fatalf("notification count after second failure = %d, want %d", len(sender.jobs), 1)
+	}
+
+	createRiskTestBackup(t, db, instance.ID, policy.ID, "failed", now.Add(-time.Minute), "rsync failed")
+	if err := detector.OnBackupFailed(context.Background(), instance.ID, policy.ID); err != nil {
+		t.Fatalf("OnBackupFailed(third) error = %v", err)
+	}
+	if len(sender.jobs) != 2 {
+		t.Fatalf("notification count after critical escalation = %d, want %d", len(sender.jobs), 2)
+	}
+	if sender.jobs[1].to != user.Email || !strings.Contains(sender.jobs[1].subject, "备份失败") || !strings.Contains(sender.jobs[1].body, "critical") {
+		t.Fatalf("critical notification = %+v, want backup-failed critical email", sender.jobs[1])
+	}
+}
+
 func createRiskTestBackup(t *testing.T, db *store.DB, instanceID, policyID int64, status string, completedAt time.Time, errorMessage string) *model.Backup {
 	t.Helper()
 	startedAt := completedAt.Add(-5 * time.Minute)
@@ -245,4 +290,18 @@ func assertNoActiveRiskEvent(t *testing.T, db *store.DB, instanceID *int64, targ
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetActiveRiskEvent(%s) error = %v, want sql.ErrNoRows", source, err)
 	}
+}
+
+type recordingEmailSender struct {
+	jobs []recordedEmailJob
+}
+
+type recordedEmailJob struct {
+	to      string
+	subject string
+	body    string
+}
+
+func (s *recordingEmailSender) Send(to, subject, body string) {
+	s.jobs = append(s.jobs, recordedEmailJob{to: to, subject: subject, body: body})
 }

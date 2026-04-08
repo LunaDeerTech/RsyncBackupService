@@ -24,6 +24,7 @@ const (
 	authErrorInvalidRequest  = 40002
 	authErrorUserExists      = 40901
 	authErrorUnauthorized    = 40101
+	authErrorRegistrationOff = 40303
 	authErrorTooManyAttempts = 42901
 	authErrorInternal        = 50001
 	loginFailureLimit        = 5
@@ -98,6 +99,17 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to count users")
 		return
+	}
+	if count > 0 {
+		enabled, err := h.registrationEnabled()
+		if err != nil {
+			Error(w, http.StatusInternalServerError, authErrorInternal, "failed to query registration status")
+			return
+		}
+		if !enabled {
+			Error(w, http.StatusForbidden, authErrorRegistrationOff, "registration is disabled")
+			return
+		}
 	}
 
 	password, err := h.passwordGenerator()
@@ -262,6 +274,13 @@ func (h *Handler) issueTokens(user model.User) (string, string, error) {
 	}
 
 	return accessToken, refreshToken, nil
+}
+
+func (h *Handler) registrationEnabled() (bool, error) {
+	if h == nil || h.systemConfigs == nil {
+		return true, nil
+	}
+	return h.systemConfigs.GetRegistrationEnabled()
 }
 
 func (l *loginRateLimiter) locked(ip, email string) (time.Time, bool) {

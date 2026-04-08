@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"rsync-backup-service/internal/audit"
+	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/notify"
@@ -22,6 +23,7 @@ type Handler struct {
 	passwordGenerator func() (string, error)
 	loginLimiter      *loginRateLimiter
 	remoteConfigs     *service.RemoteConfigService
+	systemConfigs     *service.SystemConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
 	disasterRecovery  *service.DisasterRecoveryService
@@ -39,6 +41,7 @@ type routerOptions struct {
 	loginLimiter      *loginRateLimiter
 	dataDir           string
 	remoteConfigs     *service.RemoteConfigService
+	systemConfigs     *service.SystemConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
 	disasterRecovery  *service.DisasterRecoveryService
@@ -78,6 +81,12 @@ func WithScheduler(scheduler *engine.Scheduler) RouterOption {
 func WithDisasterRecoveryService(disasterRecovery *service.DisasterRecoveryService) RouterOption {
 	return func(options *routerOptions) {
 		options.disasterRecovery = disasterRecovery
+	}
+}
+
+func WithSystemConfigService(systemConfigs *service.SystemConfigService) RouterOption {
+	return func(options *routerOptions) {
+		options.systemConfigs = systemConfigs
 	}
 }
 
@@ -125,6 +134,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.remoteConfigs == nil {
 		resolved.remoteConfigs = service.NewRemoteConfigService(db, resolved.dataDir, nil)
 	}
+	if resolved.systemConfigs == nil {
+		resolved.systemConfigs = service.NewSystemConfigService(db, authcrypto.DeriveAESKey(resolved.jwtSecret))
+	}
 	if resolved.downloadTokens == nil {
 		resolved.downloadTokens = NewDownloadTokenManager()
 	}
@@ -141,6 +153,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		passwordGenerator: resolved.passwordGenerator,
 		loginLimiter:      resolved.loginLimiter,
 		remoteConfigs:     resolved.remoteConfigs,
+		systemConfigs:     resolved.systemConfigs,
 		taskQueue:         resolved.taskQueue,
 		scheduler:         resolved.scheduler,
 		disasterRecovery:  resolved.disasterRecovery,
@@ -150,10 +163,15 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.Health)
+	mux.HandleFunc("GET /api/v1/system/registration", handler.GetRegistrationStatus)
 	mux.HandleFunc("POST /api/v1/auth/register", handler.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", handler.Login)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handler.Refresh)
 	authenticated := middleware.Auth(resolved.jwtSecret)
+	mux.Handle("GET /api/v1/system/smtp", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.GetSMTPConfig))))
+	mux.Handle("PUT /api/v1/system/smtp", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateSMTPConfig))))
+	mux.Handle("POST /api/v1/system/smtp/test", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TestSMTP))))
+	mux.Handle("PUT /api/v1/system/registration", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateRegistrationStatus))))
 	mux.Handle("GET /api/v1/audit-logs", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListAuditLogs))))
 	mux.Handle("GET /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListUsers))))
 	mux.Handle("POST /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateUser))))
@@ -191,8 +209,10 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("POST /api/v1/tasks/{id}/cancel", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CancelTask))))
 	mux.Handle("PUT /api/v1/instances/{id}/permissions", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateInstancePermissions))))
 	mux.Handle("GET /api/v1/users/me", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUser))))
+	mux.Handle("GET /api/v1/users/me/subscriptions", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUserSubscriptions))))
 	mux.Handle("PUT /api/v1/users/me/password", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserPassword))))
 	mux.Handle("PUT /api/v1/users/me/profile", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserProfile))))
+	mux.Handle("PUT /api/v1/users/me/subscriptions", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserSubscriptions))))
 	if resolved.frontend != nil {
 		mux.Handle("/", resolved.frontend)
 	}

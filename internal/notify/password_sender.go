@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/smtp"
 	"os"
 	"strings"
@@ -46,9 +45,8 @@ func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password s
 		return nil
 	}
 
-	message := buildMailMessage(s.config.From, email, password)
-	address := net.JoinHostPort(s.config.Host, s.config.Port)
-	if err := smtp.SendMail(address, auth, s.config.From, []string{email}, []byte(message)); err != nil {
+	_ = auth
+	if err := SendSMTPMail(s.config.Host, mustParsePort(s.config.Port), s.config.Username, s.config.Password, s.config.From, email, "Rsync Backup Service 登录密码", fmt.Sprintf("您的初始登录密码为: %s", password), DefaultSendMail); err != nil {
 		slog.Error("smtp delivery failed; generated password logged for manual delivery", "email", email, "error", err, "password", password)
 		return nil
 	}
@@ -81,14 +79,8 @@ func (c smtpConfig) auth() (smtp.Auth, error) {
 	return smtp.PlainAuth("", c.Username, c.Password, c.Host), nil
 }
 
-func buildMailMessage(from, to, password string) string {
-	return strings.Join([]string{
-		fmt.Sprintf("From: %s", from),
-		fmt.Sprintf("To: %s", to),
-		"Subject: Rsync Backup Service 登录密码",
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
-		"",
-		fmt.Sprintf("您的初始登录密码为: %s", password),
-	}, "\r\n")
+func mustParsePort(raw string) int {
+	var port int
+	_, _ = fmt.Sscanf(strings.TrimSpace(raw), "%d", &port)
+	return port
 }
