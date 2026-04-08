@@ -45,6 +45,22 @@ const rawClient = axios.create({
 
 let refreshRequest: Promise<string> | null = null
 
+function isStateChangingMethod(method?: string) {
+  if (typeof method !== 'string') {
+    return false
+  }
+
+  switch (method.toUpperCase()) {
+  case 'POST':
+  case 'PUT':
+  case 'PATCH':
+  case 'DELETE':
+    return true
+  default:
+    return false
+  }
+}
+
 function isAuthRoute(url?: string) {
   return typeof url === 'string' && /^\/auth\/(login|register|refresh)$/.test(url)
 }
@@ -129,6 +145,10 @@ async function refreshAccessTokenWithLock() {
 }
 
 httpClient.interceptors.request.use((config) => {
+  if (isStateChangingMethod(config.method) && !config.headers.has('X-Requested-With')) {
+    config.headers.set('X-Requested-With', 'XMLHttpRequest')
+  }
+
   const token = getAccessToken()
   if (token) {
     config.headers.set('Authorization', `Bearer ${token}`)
