@@ -13,6 +13,7 @@ import (
 	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/util"
 )
 
 const (
@@ -359,6 +360,9 @@ func normalizeInstanceInput(request instanceRequest) (instanceInput, error) {
 	sourcePath := strings.TrimSpace(request.SourcePath)
 	if sourcePath == "" {
 		return instanceInput{}, fmt.Errorf("source_path is required")
+	}
+	if err := util.ValidatePath(sourcePath); err != nil {
+		return instanceInput{}, fmt.Errorf("source_path: %w", err)
 	}
 
 	if request.RemoteConfigID != nil && *request.RemoteConfigID <= 0 {

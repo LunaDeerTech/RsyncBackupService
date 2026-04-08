@@ -21,6 +21,7 @@ import (
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/util"
 )
 
 const backupErrorNotFound = 40407
@@ -198,6 +199,10 @@ func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	case "custom":
 		if targetPath == "" {
 			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "target_path is required when restore_type is custom")
+			return
+		}
+		if err := util.ValidatePath(targetPath); err != nil {
+			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "target_path: "+err.Error())
 			return
 		}
 	default:

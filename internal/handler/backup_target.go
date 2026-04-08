@@ -12,6 +12,7 @@ import (
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/store"
+	"rsync-backup-service/internal/util"
 )
 
 const (
@@ -284,6 +285,9 @@ func normalizeBackupTargetInput(request backupTargetRequest) (backupTargetInput,
 	storagePath := strings.TrimSpace(request.StoragePath)
 	if storagePath == "" {
 		return backupTargetInput{}, fmt.Errorf("storage_path is required")
+	}
+	if err := util.ValidatePath(storagePath); err != nil {
+		return backupTargetInput{}, fmt.Errorf("storage_path: %w", err)
 	}
 
 	if request.RemoteConfigID != nil && *request.RemoteConfigID <= 0 {

@@ -37,6 +37,8 @@ const (
 	ActionRiskCreate         = "risk.create"
 	ActionRiskEscalate       = "risk.escalate"
 	ActionRiskResolve        = "risk.resolve"
+	ActionLoginSuccess       = "auth.login_success"
+	ActionLoginFailed        = "auth.login_failed"
 )
 
 type Logger struct {

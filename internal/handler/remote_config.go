@@ -13,6 +13,7 @@ import (
 
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/service"
+	"rsync-backup-service/internal/util"
 )
 
 const (
@@ -326,6 +327,9 @@ func validateRemoteConfigInput(input service.RemoteConfigInput, requirePrivateKe
 	case "ssh":
 		if strings.TrimSpace(input.Host) == "" {
 			return fmt.Errorf("host is required")
+		}
+		if err := util.ValidateSSHHost(input.Host); err != nil {
+			return fmt.Errorf("host: %w", err)
 		}
 		if input.Port < 1 || input.Port > 65535 {
 			return fmt.Errorf("port must be between 1 and 65535")

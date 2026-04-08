@@ -182,6 +182,9 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.loginLimiter.recordFailure(clientIP, email)
 		if errors.Is(err, sql.ErrNoRows) {
+			h.writeAuditLog(r.Context(), 0, 0, audit.ActionLoginFailed, map[string]any{
+				"email": email, "ip": clientIP, "reason": "user not found",
+			})
 			Error(w, http.StatusUnauthorized, authErrorUnauthorized, "invalid email or password")
 			return
 		}
@@ -192,6 +195,9 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	if !authcrypto.CheckPassword(request.Password, user.PasswordHash) {
 		h.loginLimiter.recordFailure(clientIP, email)
+		h.writeAuditLog(r.Context(), 0, user.ID, audit.ActionLoginFailed, map[string]any{
+			"email": email, "ip": clientIP, "reason": "invalid password",
+		})
 		Error(w, http.StatusUnauthorized, authErrorUnauthorized, "invalid email or password")
 		return
 	}
@@ -203,6 +209,9 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to issue token")
 		return
 	}
+	h.writeAuditLog(r.Context(), 0, user.ID, audit.ActionLoginSuccess, map[string]any{
+		"email": email, "ip": clientIP,
+	})
 
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"access_token":  accessToken,
