@@ -46,7 +46,7 @@ func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password s
 	}
 
 	_ = auth
-	if err := SendSMTPMail(s.config.Host, mustParsePort(s.config.Port), s.config.Username, s.config.Password, s.config.From, email, "Rsync Backup Service 登录密码", fmt.Sprintf("您的初始登录密码为: %s", password), DefaultSendMail); err != nil {
+	if err := SendSMTPMail(s.config.Host, mustParsePort(s.config.Port), s.config.Username, s.config.Password, s.config.From, "none", email, "Rsync Backup Service 登录密码", fmt.Sprintf("您的初始登录密码为: %s", password), DefaultSendMail); err != nil {
 		slog.Error("smtp delivery failed; generated password logged for manual delivery", "email", email, "error", err, "password", password)
 		return nil
 	}

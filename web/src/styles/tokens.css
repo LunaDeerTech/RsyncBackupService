@@ -85,8 +85,8 @@
   --text-muted: #64748b;
 
   /* Border */
-  --border-default: #1e293b;
-  --border-subtle: #162032;
+  --border-default: #2a3a52;
+  --border-subtle: #1e2d42;
   --border-focus: var(--primary-500);
 
   /* Shadow */

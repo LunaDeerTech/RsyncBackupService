@@ -21,16 +21,18 @@ const (
 	smtpUsernameKey     = "smtp.username"
 	smtpPasswordKey     = "smtp.password"
 	smtpFromKey         = "smtp.from"
+	smtpEncryptionKey   = "smtp.encryption"
 	registrationKey     = "registration.enabled"
 	registrationDefault = true
 )
 
 type SMTPConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	From     string `json:"from"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	From       string `json:"from"`
+	Encryption string `json:"encryption"`
 }
 
 type SystemConfigService struct {
@@ -90,11 +92,12 @@ func (s *SystemConfigService) UpdateSMTPConfig(cfg *SMTPConfig) error {
 	}
 
 	return s.db.SetSystemConfigs(map[string]string{
-		smtpHostKey:     validated.Host,
-		smtpPortKey:     fmt.Sprintf("%d", validated.Port),
-		smtpUsernameKey: validated.Username,
-		smtpPasswordKey: encryptedPassword,
-		smtpFromKey:     validated.From,
+		smtpHostKey:       validated.Host,
+		smtpPortKey:       fmt.Sprintf("%d", validated.Port),
+		smtpUsernameKey:   validated.Username,
+		smtpPasswordKey:   encryptedPassword,
+		smtpFromKey:       validated.From,
+		smtpEncryptionKey: validated.Encryption,
 	})
 }
 
@@ -111,7 +114,7 @@ func (s *SystemConfigService) TestSMTP(cfg *SMTPConfig, to string) error {
 		return fmt.Errorf("invalid test recipient: %w", err)
 	}
 
-	return notify.SendSMTPMail(validated.Host, validated.Port, validated.Username, validated.Password, validated.From, to, "Rsync Backup Service SMTP 测试邮件", "这是一封来自 Rsync Backup Service 的 SMTP 测试邮件。", s.mailer)
+	return notify.SendSMTPMail(validated.Host, validated.Port, validated.Username, validated.Password, validated.From, validated.Encryption, to, "Rsync Backup Service SMTP 测试邮件", "这是一封来自 Rsync Backup Service 的 SMTP 测试邮件。", s.mailer)
 }
 
 func (s *SystemConfigService) GetRegistrationEnabled() (bool, error) {
@@ -140,15 +143,20 @@ func (s *SystemConfigService) loadSMTPConfig(includePassword bool) (*SMTPConfig,
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("system config service unavailable")
 	}
-	values, err := s.db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey})
+	values, err := s.db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey, smtpEncryptionKey})
 	if err != nil {
 		return nil, err
 	}
 
+	encryption := strings.TrimSpace(values[smtpEncryptionKey])
+	if encryption == "" {
+		encryption = "none"
+	}
 	config := &SMTPConfig{
-		Host:     strings.TrimSpace(values[smtpHostKey]),
-		Username: strings.TrimSpace(values[smtpUsernameKey]),
-		From:     strings.TrimSpace(values[smtpFromKey]),
+		Host:       strings.TrimSpace(values[smtpHostKey]),
+		Username:   strings.TrimSpace(values[smtpUsernameKey]),
+		From:       strings.TrimSpace(values[smtpFromKey]),
+		Encryption: encryption,
 	}
 	if rawPort := strings.TrimSpace(values[smtpPortKey]); rawPort != "" {
 		port, err := strconv.Atoi(rawPort)
@@ -177,11 +185,15 @@ func (s *SystemConfigService) normalizeSMTPConfig(cfg *SMTPConfig) (*SMTPConfig,
 		return nil, fmt.Errorf("smtp config is required")
 	}
 	normalized := &SMTPConfig{
-		Host:     strings.TrimSpace(cfg.Host),
-		Port:     cfg.Port,
-		Username: strings.TrimSpace(cfg.Username),
-		Password: cfg.Password,
-		From:     strings.TrimSpace(cfg.From),
+		Host:       strings.TrimSpace(cfg.Host),
+		Port:       cfg.Port,
+		Username:   strings.TrimSpace(cfg.Username),
+		Password:   cfg.Password,
+		From:       strings.TrimSpace(cfg.From),
+		Encryption: strings.TrimSpace(cfg.Encryption),
+	}
+	if normalized.Encryption == "" {
+		normalized.Encryption = "none"
 	}
 	if normalized.Host == "" {
 		return nil, fmt.Errorf("smtp host is required")

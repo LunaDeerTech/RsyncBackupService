@@ -88,7 +88,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'profile',
         name: 'profile',
-        component: () => import('../pages/ComingSoonPage.vue'),
+        component: () => import('../pages/ProfilePage.vue'),
         meta: {
           title: '个人中心',
         },

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,16 +16,76 @@ import (
 )
 
 const (
-	smtpHostKey     = "smtp.host"
-	smtpPortKey     = "smtp.port"
-	smtpUsernameKey = "smtp.username"
-	smtpPasswordKey = "smtp.password"
-	smtpFromKey     = "smtp.from"
+	smtpHostKey       = "smtp.host"
+	smtpPortKey       = "smtp.port"
+	smtpUsernameKey   = "smtp.username"
+	smtpPasswordKey   = "smtp.password"
+	smtpFromKey       = "smtp.from"
+	smtpEncryptionKey = "smtp.encryption"
 )
 
 type SendMailFunc func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error
 
 var DefaultSendMail SendMailFunc = smtp.SendMail
+
+const smtpDialTimeout = 15 * time.Second
+
+func dialSMTP(addr, host, encryption string) (net.Conn, error) {
+	switch encryption {
+	case "ssltls":
+		return tls.DialWithDialer(&net.Dialer{Timeout: smtpDialTimeout}, "tcp", addr, &tls.Config{ServerName: host})
+	default:
+		return net.DialTimeout("tcp", addr, smtpDialTimeout)
+	}
+}
+
+func sendMailDirect(addr string, auth smtp.Auth, from string, to []string, msg []byte, encryption string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	conn, err := dialSMTP(addr, host, encryption)
+	if err != nil {
+		return fmt.Errorf("smtp dial: %w", err)
+	}
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("smtp new client: %w", err)
+	}
+	defer c.Close()
+	if encryption == "starttls" {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+				return fmt.Errorf("smtp starttls: %w", err)
+			}
+		}
+	}
+	if auth != nil {
+		if err := c.Auth(auth); err != nil {
+			return fmt.Errorf("smtp auth: %w", err)
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return fmt.Errorf("smtp mail: %w", err)
+	}
+	for _, rcpt := range to {
+		if err := c.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("smtp rcpt: %w", err)
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("smtp data: %w", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("smtp write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("smtp close data: %w", err)
+	}
+	return c.Quit()
+}
 
 type EmailSender struct {
 	db          *store.DB
@@ -138,19 +199,24 @@ func (s *EmailSender) deliver(job *EmailJob) error {
 		return nil
 	}
 
-	return SendSMTPMail(config.Host, config.Port, config.Username, config.Password, config.From, job.To, job.Subject, job.Body, s.sendMail)
+	return SendSMTPMail(config.Host, config.Port, config.Username, config.Password, config.From, config.Encryption, job.To, job.Subject, job.Body, s.sendMail)
 }
 
 func (s *EmailSender) loadSMTPConfig() (*smtpRuntimeConfig, error) {
-	values, err := s.db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey})
+	values, err := s.db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey, smtpEncryptionKey})
 	if err != nil {
 		return nil, err
 	}
 
+	encryption := strings.TrimSpace(values[smtpEncryptionKey])
+	if encryption == "" {
+		encryption = "none"
+	}
 	config := &smtpRuntimeConfig{
-		Host:     strings.TrimSpace(values[smtpHostKey]),
-		Username: strings.TrimSpace(values[smtpUsernameKey]),
-		From:     strings.TrimSpace(values[smtpFromKey]),
+		Host:       strings.TrimSpace(values[smtpHostKey]),
+		Username:   strings.TrimSpace(values[smtpUsernameKey]),
+		From:       strings.TrimSpace(values[smtpFromKey]),
+		Encryption: encryption,
 	}
 	if rawPort := strings.TrimSpace(values[smtpPortKey]); rawPort != "" {
 		if _, err := fmt.Sscanf(rawPort, "%d", &config.Port); err != nil {
@@ -169,18 +235,19 @@ func (s *EmailSender) loadSMTPConfig() (*smtpRuntimeConfig, error) {
 }
 
 type smtpRuntimeConfig struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	From     string
+	Host       string
+	Port       int
+	Username   string
+	Password   string
+	From       string
+	Encryption string
 }
 
 func (c smtpRuntimeConfig) isConfigured() bool {
 	return c.Host != "" && c.Port > 0 && c.From != ""
 }
 
-func SendSMTPMail(host string, port int, username, password, from, to, subject, body string, sendMail SendMailFunc) error {
+func SendSMTPMail(host string, port int, username, password, from, encryption, to, subject, body string, sendMail SendMailFunc) error {
 	if sendMail == nil {
 		sendMail = DefaultSendMail
 	}
@@ -203,6 +270,11 @@ func SendSMTPMail(host string, port int, username, password, from, to, subject, 
 
 	message := buildMailMessage(trimmedFrom, trimmedTo, trimmedSubject, trimmedBody)
 	address := net.JoinHostPort(trimmedHost, fmt.Sprintf("%d", port))
+
+	if encryption == "starttls" || encryption == "ssltls" {
+		return sendMailDirect(address, auth, trimmedFrom, []string{trimmedTo}, []byte(message), encryption)
+	}
+
 	if err := sendMail(address, auth, trimmedFrom, []string{trimmedTo}, []byte(message)); err != nil {
 		return fmt.Errorf("send smtp mail: %w", err)
 	}

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import AppTabs from '../../components/AppTabs.vue'
 import type { TabItem } from '../../components/AppTabs.vue'
 import RemoteConfigPanel from './RemoteConfigPanel.vue'
+import SmtpConfigPanel from './SmtpConfigPanel.vue'
 
 const tabs: TabItem[] = [
   { key: 'remotes', label: '远程配置' },
@@ -25,9 +26,7 @@ const activeTab = ref('remotes')
         </div>
       </template>
       <template #tab-smtp>
-        <div class="coming-soon">
-          <p class="coming-soon__text">SMTP 配置功能即将上线</p>
-        </div>
+        <SmtpConfigPanel />
       </template>
     </AppTabs>
   </div>
