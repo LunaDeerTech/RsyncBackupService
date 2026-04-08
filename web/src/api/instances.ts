@@ -39,6 +39,10 @@ export function updateInstancePermissions(id: number, permissions: PermissionIte
   return apiClient.put<void>(`/instances/${id}/permissions`, { permissions })
 }
 
+export function listInstancePermissions(id: number) {
+  return apiClient.get<{ permissions: PermissionItem[] }>(`/instances/${id}/permissions`)
+}
+
 export function getDisasterRecovery(id: number) {
   return apiClient.get<DisasterRecoveryScore>(`/instances/${id}/disaster-recovery`)
 }

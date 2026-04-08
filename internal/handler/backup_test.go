@@ -73,7 +73,7 @@ func TestGenerateBackupDownloadURLAndConsumeTokenOnce(t *testing.T) {
 	router := NewRouter(db, WithJWTSecret("secret"), WithTaskQueue(engine.NewTaskQueue(8, db)))
 
 	instanceID, backupID := createColdBackupForHandlerTests(t, db, false)
-	if err := db.SetInstancePermissions(instanceID, []model.InstancePermission{{UserID: viewer.ID, Permission: "readonly"}}); err != nil {
+	if err := db.SetInstancePermissions(instanceID, []model.InstancePermission{{UserID: viewer.ID, Permission: "readdownload"}}); err != nil {
 		t.Fatalf("SetInstancePermissions() error = %v", err)
 	}
 

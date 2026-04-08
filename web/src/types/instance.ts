@@ -82,6 +82,7 @@ export interface InstanceStats {
 export interface InstanceDetail {
   instance: Instance
   stats: InstanceStats
+  permission?: string
 }
 
 export interface PermissionItem {

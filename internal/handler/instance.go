@@ -63,8 +63,9 @@ type instanceListItem struct {
 }
 
 type instanceDetailResponse struct {
-	Instance model.Instance      `json:"instance"`
-	Stats    model.InstanceStats `json:"stats"`
+	Instance   model.Instance      `json:"instance"`
+	Stats      model.InstanceStats `json:"stats"`
+	Permission string              `json:"permission,omitempty"`
 }
 
 func (h *Handler) ListInstances(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +188,16 @@ func (h *Handler) GetInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSON(w, http.StatusOK, instanceDetailResponse{Instance: *instance, Stats: *stats})
+	resp := instanceDetailResponse{Instance: *instance, Stats: *stats}
+	claims := middleware.GetUser(r.Context())
+	if claims != nil && claims.Role != "admin" {
+		perm, err := h.db.GetInstancePermission(claims.UserID, instanceID)
+		if err == nil {
+			resp.Permission = perm.Permission
+		}
+	}
+
+	JSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) UpdateInstance(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +325,32 @@ func (h *Handler) GetInstanceStats(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, stats)
 }
 
+func (h *Handler) ListInstancePermissions(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+		return
+	}
+
+	instanceID, err := instanceIDFromRequest(r)
+	if err != nil {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "invalid instance id")
+		return
+	}
+
+	if _, err := h.db.GetInstanceByID(instanceID); err != nil {
+		writeInstanceError(w, err, "failed to query instance")
+		return
+	}
+
+	permissions, err := h.db.ListInstancePermissionsByInstance(instanceID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to list instance permissions")
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{"permissions": permissions})
+}
+
 func (h *Handler) UpdateInstancePermissions(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
@@ -439,8 +475,8 @@ func (h *Handler) normalizeInstancePermissions(request instancePermissionsReques
 		seenUserIDs[item.UserID] = struct{}{}
 
 		permission := strings.ToLower(strings.TrimSpace(item.Permission))
-		if permission != "readonly" {
-			return nil, fmt.Errorf("permission must be readonly")
+		if permission != "readonly" && permission != "readdownload" {
+			return nil, fmt.Errorf("permission must be readonly or readdownload")
 		}
 
 		user, err := h.db.GetUserByID(item.UserID)

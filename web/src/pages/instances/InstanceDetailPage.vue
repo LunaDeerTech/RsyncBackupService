@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions } from '../../api/instances'
+import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions, listInstancePermissions } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
 import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
 import type { RestoreRequest } from '../../api/backups'
@@ -77,6 +77,8 @@ const activeTab = ref('overview')
 const instance = ref<Instance | null>(null)
 const stats = ref<InstanceStats | null>(null)
 const drScore = ref<DisasterRecoveryScore | null>(null)
+const viewerPermission = ref<string | undefined>(undefined)
+const canDownload = computed(() => authStore.isAdmin || viewerPermission.value === 'readdownload')
 const pageLoading = ref(false)
 
 // ── Policy data ──
@@ -191,8 +193,22 @@ const settingsErrors = reactive({ name: '', source_path: '', remote_config_id: '
 const settingsSubmitting = ref(false)
 const remotes = ref<RemoteConfig[]>([])
 const users = ref<User[]>([])
-const permissionMap = ref<Record<number, string>>({})
+// ── Permission state ──
+interface PermUserEntry { user_id: number; name: string; email: string; permission: string }
+const permEntries = ref<PermUserEntry[]>([])
 const permissionSaving = ref(false)
+const addPermVisible = ref(false)
+const addPermSearch = ref('')
+const addPermSelected = ref<number | null>(null)
+const addPermLevel = ref<string>('readonly')
+const addPermSaving = ref(false)
+const filteredAddPermUsers = computed(() => {
+  const existingIds = new Set(permEntries.value.map(e => e.user_id))
+  const available = users.value.filter(u => !existingIds.has(u.id))
+  const q = addPermSearch.value.trim().toLowerCase()
+  if (!q) return available
+  return available.filter(u => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+})
 
 // ── Computed: policy form helpers ──
 const policyTypeOptions = [
@@ -318,6 +334,7 @@ async function fetchInstance() {
     const res = await getInstance(instanceId.value)
     instance.value = res.instance
     stats.value = res.stats
+    viewerPermission.value = res.permission
   } catch {
     toast.error('加载实例详情失败')
     router.push('/instances')
@@ -376,6 +393,22 @@ async function fetchUsers() {
   try {
     const res = await listUsers({ page: 1, page_size: 200 })
     users.value = (res.items ?? []).filter((u: User) => u.role === 'viewer')
+  } catch {
+    // silent
+  }
+}
+
+async function fetchPermissions() {
+  try {
+    const res = await listInstancePermissions(instanceId.value)
+    const perms = res.permissions ?? []
+    const userMap = new Map(users.value.map(u => [u.id, u]))
+    permEntries.value = perms
+      .filter(p => userMap.has(p.user_id))
+      .map(p => {
+        const u = userMap.get(p.user_id)!
+        return { user_id: p.user_id, name: u.name, email: u.email, permission: p.permission }
+      })
   } catch {
     // silent
   }
@@ -459,7 +492,7 @@ onMounted(async () => {
   if (authStore.isAdmin) {
     fetchTargets()
     fetchRemotes()
-    fetchUsers()
+    fetchUsers().then(() => fetchPermissions())
   }
 })
 
@@ -913,15 +946,10 @@ async function handleSaveSettings() {
   }
 }
 
-async function handleSavePermissions() {
+async function savePermissions() {
   permissionSaving.value = true
   try {
-    const permissions: PermissionItem[] = []
-    for (const [userId, perm] of Object.entries(permissionMap.value)) {
-      if (perm === 'readonly') {
-        permissions.push({ user_id: Number(userId), permission: 'readonly' })
-      }
-    }
+    const permissions: PermissionItem[] = permEntries.value.map(e => ({ user_id: e.user_id, permission: e.permission }))
     await updateInstancePermissions(instanceId.value, permissions)
     toast.success('权限已更新')
   } catch (e) {
@@ -929,6 +957,39 @@ async function handleSavePermissions() {
     else toast.error('保存失败')
   } finally {
     permissionSaving.value = false
+  }
+}
+
+async function handleAddPermission() {
+  if (!addPermSelected.value) return
+  addPermSaving.value = true
+  try {
+    const user = users.value.find(u => u.id === addPermSelected.value)
+    if (!user) return
+    permEntries.value.push({ user_id: user.id, name: user.name, email: user.email, permission: addPermLevel.value })
+    await savePermissions()
+    addPermVisible.value = false
+    addPermSearch.value = ''
+    addPermSelected.value = null
+    addPermLevel.value = 'readonly'
+  } catch (e) {
+    if (e instanceof ApiBusinessError) toast.error(e.message)
+    else toast.error('添加失败')
+  } finally {
+    addPermSaving.value = false
+  }
+}
+
+async function handleRemovePermission(userId: number) {
+  permEntries.value = permEntries.value.filter(e => e.user_id !== userId)
+  await savePermissions()
+}
+
+async function handleChangePermission(userId: number, permission: string) {
+  const entry = permEntries.value.find(e => e.user_id === userId)
+  if (entry) {
+    entry.permission = permission
+    await savePermissions()
   }
 }
 
@@ -941,8 +1002,8 @@ function formatDuration(seconds: number): string {
 }
 
 const permissionOptions = [
-  { label: '无权限', value: 'none' },
   { label: '只读', value: 'readonly' },
+  { label: '只读+下载', value: 'readdownload' },
 ]
 
 </script>
@@ -1293,7 +1354,7 @@ const permissionOptions = [
                       <RotateCcw :size="14" style="margin-right: 2px" />
                       恢复
                     </AppButton>
-                    <AppButton v-if="row.type === 'cold'" variant="ghost" size="sm"
+                    <AppButton v-if="row.type === 'cold' && canDownload" variant="ghost" size="sm"
                       :loading="downloadingBackupId === (row.id as number)" @click="handleDownload(row)">
                       <Download :size="14" style="margin-right: 2px" />
                       下载
@@ -1369,7 +1430,7 @@ const permissionOptions = [
 
         <!-- ═══ Settings Tab ═══ -->
         <template #tab-settings v-if="authStore.isAdmin">
-          <div class="tab-content">
+          <div class="tab-content settings-layout">
             <!-- Instance info form -->
             <AppCard title="基础信息">
               <form @submit.prevent="handleSaveSettings">
@@ -1416,30 +1477,75 @@ const permissionOptions = [
 
             <!-- Permissions -->
             <AppCard title="访问权限">
-              <template v-if="users.length > 0">
-                <div class="permission-list">
-                  <div v-for="u in users" :key="u.id" class="permission-row">
-                    <div class="permission-user">
-                      <span class="permission-user__name">{{ u.name }}</span>
-                      <span class="permission-user__email">{{ u.email }}</span>
+              <div class="permission-toolbar">
+                <AppButton variant="outline" size="sm" @click="addPermVisible = true">
+                  <Plus :size="14" style="margin-right: 4px" />
+                  添加用户
+                </AppButton>
+                <span v-if="permEntries.length > 0" class="permission-toolbar__count">{{ permEntries.length }} 位已授权用户</span>
+              </div>
+              <template v-if="permEntries.length > 0">
+                <div class="permission-table">
+                  <div class="permission-table__header">
+                    <span class="permission-table__col--user">用户</span>
+                    <span class="permission-table__col--perm">权限</span>
+                    <span class="permission-table__col--action">操作</span>
+                  </div>
+                  <div class="permission-table__body">
+                    <div v-for="entry in permEntries" :key="entry.user_id" class="permission-table__row">
+                      <div class="permission-table__col--user">
+                        <span class="permission-user__name">{{ entry.name }}</span>
+                        <span class="permission-user__email">{{ entry.email }}</span>
+                      </div>
+                      <div class="permission-table__col--perm">
+                        <AppSelect :model-value="entry.permission" :options="permissionOptions"
+                          @update:model-value="handleChangePermission(entry.user_id, $event as string)" />
+                      </div>
+                      <div class="permission-table__col--action">
+                        <AppButton variant="ghost" size="sm" @click="handleRemovePermission(entry.user_id)">
+                          <Trash2 :size="14" />
+                        </AppButton>
+                      </div>
                     </div>
-                    <AppSelect :model-value="permissionMap[u.id] ?? 'none'" :options="permissionOptions"
-                      @update:model-value="permissionMap[u.id] = $event as string" />
                   </div>
                 </div>
-                <div class="settings-actions">
-                  <AppButton variant="primary" size="md" :loading="permissionSaving" @click="handleSavePermissions">
-                    <Save :size="16" style="margin-right: 4px" />
-                    保存权限
-                  </AppButton>
-                </div>
               </template>
-              <AppEmpty v-else message="暂无 viewer 用户" />
+              <AppEmpty v-else message="暂无已授权用户，点击上方按钮添加" />
             </AppCard>
           </div>
         </template>
       </AppTabs>
     </template>
+
+    <!-- Add Permission Modal -->
+    <AppModal v-model:visible="addPermVisible" title="添加用户权限" width="480px">
+      <AppFormGroup>
+        <AppFormItem label="搜索用户">
+          <AppInput v-model="addPermSearch" placeholder="输入用户名或邮箱搜索…" />
+        </AppFormItem>
+        <AppFormItem v-if="addPermSearch.trim()" label="选择用户" :required="true">
+          <div class="add-perm-user-list">
+            <div v-for="u in filteredAddPermUsers" :key="u.id"
+              class="add-perm-user-item" :class="{ 'add-perm-user-item--selected': addPermSelected === u.id }"
+              @click="addPermSelected = u.id">
+              <div class="add-perm-user-info">
+                <span class="permission-user__name">{{ u.name }}</span>
+                <span class="permission-user__email">{{ u.email }}</span>
+              </div>
+              <CheckCircle v-if="addPermSelected === u.id" :size="16" class="add-perm-check" />
+            </div>
+            <AppEmpty v-if="filteredAddPermUsers.length === 0" message="无匹配的 viewer 用户" />
+          </div>
+        </AppFormItem>
+        <AppFormItem label="权限级别" :required="true">
+          <AppSelect v-model="addPermLevel" :options="permissionOptions" />
+        </AppFormItem>
+      </AppFormGroup>
+      <template #footer>
+        <AppButton variant="outline" size="md" @click="addPermVisible = false">取消</AppButton>
+        <AppButton variant="primary" size="md" :loading="addPermSaving" :disabled="!addPermSelected" @click="handleAddPermission">确认添加</AppButton>
+      </template>
+    </AppModal>
 
     <!-- Policy Create/Edit Modal -->
     <AppModal v-model:visible="policyModalVisible" :title="policyEditing ? '编辑策略' : '新增策略'" width="560px">
@@ -1685,6 +1791,20 @@ const permissionOptions = [
   flex-direction: column;
   gap: 20px;
   padding-top: 16px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  padding-top: 16px;
+}
+
+@media (min-width: 960px) {
+  .settings-layout {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
 }
 
 .tab-header {
@@ -2050,40 +2170,130 @@ const permissionOptions = [
   margin-top: 16px;
 }
 
-.permission-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.permission-row {
+.permission-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 0;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.permission-toolbar__count {
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.permission-table {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.permission-table__header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
   border-bottom: 1px solid var(--border-default);
 }
 
-.permission-row:last-child {
+.permission-table__body {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.permission-table__row {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.permission-table__row:last-child {
   border-bottom: none;
 }
 
-.permission-user {
+.permission-table__col--user {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+}
+
+.permission-table__col--perm {
+  flex-shrink: 0;
+  width: 160px;
+}
+
+.permission-table__col--action {
+  flex-shrink: 0;
+  width: 48px;
+  display: flex;
+  justify-content: center;
 }
 
 .permission-user__name {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .permission-user__email {
   font-size: 12px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-perm-user-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+}
+
+.add-perm-user-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-default);
+  transition: background 0.15s;
+}
+
+.add-perm-user-item:last-child {
+  border-bottom: none;
+}
+
+.add-perm-user-item:hover {
+  background: var(--bg-subtle);
+}
+
+.add-perm-user-item--selected {
+  background: var(--primary-50);
+  border-color: var(--primary-200);
+}
+
+.add-perm-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.add-perm-check {
+  flex-shrink: 0;
+  color: var(--primary-500);
 }
 
 /* Common */

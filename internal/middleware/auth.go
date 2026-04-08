@@ -109,6 +109,48 @@ func RequireInstanceAccess(db *store.DB) func(http.Handler) http.Handler {
 	}
 }
 
+func RequireInstanceDownload(db *store.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := GetUser(r.Context())
+			if claims == nil {
+				writeError(w, http.StatusUnauthorized, authErrorUnauthorized, "unauthorized")
+				return
+			}
+			if claims.Role == "admin" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if db == nil {
+				writeError(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+				return
+			}
+
+			instanceID, err := instanceIDFromRequest(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, authErrorInvalid, "invalid instance id")
+				return
+			}
+
+			perm, err := db.GetInstancePermission(claims.UserID, instanceID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					writeError(w, http.StatusForbidden, authErrorForbidden, "forbidden")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, authErrorInternal, "failed to query instance permission")
+				return
+			}
+			if perm.Permission != "readdownload" {
+				writeError(w, http.StatusForbidden, authErrorForbidden, "download not permitted")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func bearerToken(header string) (string, bool) {
 	parts := strings.Fields(strings.TrimSpace(header))
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {

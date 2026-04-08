@@ -94,6 +94,32 @@ func (db *DB) ListInstancePermissionsByUser(userID int64) ([]model.InstancePermi
 	return permissions, nil
 }
 
+func (db *DB) ListInstancePermissionsByInstance(instanceID int64) ([]model.InstancePermission, error) {
+	rows, err := db.Query(
+		`SELECT `+instancePermissionColumns+` FROM instance_permissions WHERE instance_id = ? ORDER BY user_id ASC`,
+		instanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list instance permissions for instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	permissions := make([]model.InstancePermission, 0)
+	for rows.Next() {
+		permission, err := scanInstancePermission(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan listed instance permission for instance %d: %w", instanceID, err)
+		}
+		permissions = append(permissions, *permission)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate instance permissions for instance %d: %w", instanceID, err)
+	}
+
+	return permissions, nil
+}
+
 func scanInstancePermission(scanner instancePermissionScanner) (*model.InstancePermission, error) {
 	var (
 		permission model.InstancePermission
