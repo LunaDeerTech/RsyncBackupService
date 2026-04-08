@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ChevronDown, Check } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -22,15 +22,57 @@ const emit = defineEmits<{
 
 const open = ref(false)
 const wrapperRef = ref<HTMLElement | null>(null)
+const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownStyle = ref<Record<string, string>>({})
 
 const selectedLabel = computed(() => {
   const opt = props.options.find((o) => String(o.value) === String(props.modelValue))
   return opt?.label ?? ''
 })
 
-function toggle() {
-  if (!props.disabled) open.value = !open.value
+function updateDropdownPosition() {
+  if (!wrapperRef.value) return
+  const rect = wrapperRef.value.getBoundingClientRect()
+  const viewportHeight = window.innerHeight
+  const spaceBelow = viewportHeight - rect.bottom
+  const dropdownMaxH = 220
+
+  if (spaceBelow < dropdownMaxH && rect.top > spaceBelow) {
+    // Open upward
+    dropdownStyle.value = {
+      position: 'fixed',
+      left: `${rect.left}px`,
+      width: `${rect.width}px`,
+      bottom: `${viewportHeight - rect.top + 4}px`,
+      top: 'auto',
+      zIndex: '2000',
+    }
+  } else {
+    // Open downward
+    dropdownStyle.value = {
+      position: 'fixed',
+      left: `${rect.left}px`,
+      width: `${rect.width}px`,
+      top: `${rect.bottom + 4}px`,
+      bottom: 'auto',
+      zIndex: '2000',
+    }
+  }
 }
+
+function toggle() {
+  if (props.disabled) return
+  open.value = !open.value
+  if (open.value) {
+    nextTick(updateDropdownPosition)
+  }
+}
+
+watch(open, (v) => {
+  if (v) {
+    nextTick(updateDropdownPosition)
+  }
+})
 
 function select(value: string | number) {
   emit('update:modelValue', value)
@@ -38,7 +80,10 @@ function select(value: string | number) {
 }
 
 function onClickOutside(e: MouseEvent) {
-  if (wrapperRef.value && !wrapperRef.value.contains(e.target as Node)) {
+  if (
+    wrapperRef.value && !wrapperRef.value.contains(e.target as Node) &&
+    dropdownRef.value && !dropdownRef.value.contains(e.target as Node)
+  ) {
     open.value = false
   }
 }
@@ -55,20 +100,22 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
       </span>
       <ChevronDown :size="16" class="app-select__arrow" />
     </button>
-    <Transition name="dropdown">
-      <ul v-if="open" class="app-select__dropdown">
-        <li
-          v-for="opt in options"
-          :key="opt.value"
-          class="app-select__option"
-          :class="{ 'app-select__option--selected': String(opt.value) === String(modelValue) }"
-          @click="select(opt.value)"
-        >
-          <span>{{ opt.label }}</span>
-          <Check v-if="String(opt.value) === String(modelValue)" :size="14" class="app-select__check" />
-        </li>
-      </ul>
-    </Transition>
+    <Teleport to="body">
+      <Transition name="dropdown">
+        <ul v-if="open" ref="dropdownRef" class="app-select__dropdown" :style="dropdownStyle">
+          <li
+            v-for="opt in options"
+            :key="opt.value"
+            class="app-select__option"
+            :class="{ 'app-select__option--selected': String(opt.value) === String(modelValue) }"
+            @click="select(opt.value)"
+          >
+            <span>{{ opt.label }}</span>
+            <Check v-if="String(opt.value) === String(modelValue)" :size="14" class="app-select__check" />
+          </li>
+        </ul>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -124,11 +171,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
 .app-select--open .app-select__arrow {
   transform: rotate(180deg);
 }
+</style>
+
+<style>
 .app-select__dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
   margin: 0;
   padding: 4px;
   list-style: none;
@@ -136,7 +182,6 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  z-index: 100;
   max-height: 220px;
   overflow-y: auto;
 }

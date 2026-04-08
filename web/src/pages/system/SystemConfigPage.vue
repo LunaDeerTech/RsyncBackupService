@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import AppTabs from '../../components/AppTabs.vue'
 import type { TabItem } from '../../components/AppTabs.vue'
 import RemoteConfigPanel from './RemoteConfigPanel.vue'
+import UserManagementPage from './UserManagementPage.vue'
 import SmtpConfigPanel from './SmtpConfigPanel.vue'
 
 const tabs: TabItem[] = [
@@ -21,9 +22,7 @@ const activeTab = ref('remotes')
         <RemoteConfigPanel />
       </template>
       <template #tab-users>
-        <div class="coming-soon">
-          <p class="coming-soon__text">用户管理功能即将上线</p>
-        </div>
+        <UserManagementPage />
       </template>
       <template #tab-smtp>
         <SmtpConfigPanel />
@@ -36,16 +35,5 @@ const activeTab = ref('remotes')
 .system-config-page {
   display: flex;
   flex-direction: column;
-}
-.coming-soon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 64px 0;
-}
-.coming-soon__text {
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-muted);
 }
 </style>

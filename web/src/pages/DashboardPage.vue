@@ -364,7 +364,7 @@ const quickLinks = [
                   <span class="upcoming-item__name">{{ task.instance_name }}</span>
                   <span class="upcoming-item__policy">{{ task.policy_name }}</span>
                 </div>
-                <AppBadge :variant="task.type === 'cold' ? 'info' : 'default'">{{ taskTypeLabel(task.type) }}</AppBadge>
+                <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
                 <span class="upcoming-item__time">
                   <Clock :size="12" />
                   {{ formatFutureTime(task.next_run_at) }}
@@ -912,4 +912,26 @@ const quickLinks = [
 
 /* Utilities */
 .py-4 { padding-top: 16px; padding-bottom: 16px; }
+
+/* Policy type badge */
+.policy-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.policy-type-badge--rolling {
+  background: color-mix(in srgb, #3b82f6 15%, transparent);
+  color: #3b82f6;
+}
+
+.policy-type-badge--cold {
+  background: color-mix(in srgb, #8b5cf6 15%, transparent);
+  color: #8b5cf6;
+}
 </style>

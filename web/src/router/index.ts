@@ -79,7 +79,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'system/risks',
         name: 'system-risks',
-        component: () => import('../pages/ComingSoonPage.vue'),
+        component: () => import('../pages/system/RiskEventsPage.vue'),
         meta: {
           requiresAdmin: true,
           title: '风险事件',

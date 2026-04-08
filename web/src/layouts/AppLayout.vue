@@ -42,6 +42,9 @@ const navItems = computed<NavItem[]>(() => {
 })
 
 function isActive(path: string): boolean {
+  if (path === '/system') {
+    return route.path === '/system'
+  }
   return route.path === path || route.path.startsWith(path + '/')
 }
 

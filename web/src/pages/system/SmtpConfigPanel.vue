@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { getSmtpConfig, updateSmtpConfig, testSmtp, getRegistrationStatus, updateRegistrationStatus } from '../../api/system'
+import { getSmtpConfig, updateSmtpConfig, testSmtp } from '../../api/system'
 import type { SmtpConfig } from '../../api/system'
 import { useToastStore } from '../../stores/toast'
 import { ApiBusinessError } from '../../api/client'
@@ -9,7 +9,6 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppButton from '../../components/AppButton.vue'
 import AppSelect from '../../components/AppSelect.vue'
-import AppSwitch from '../../components/AppSwitch.vue'
 
 const toast = useToastStore()
 
@@ -45,9 +44,7 @@ const testEmail = ref('')
 const testEmailError = ref('')
 const testing = ref(false)
 
-// ── Registration toggle ──
-const registrationEnabled = ref(false)
-const registrationLoading = ref(false)
+
 
 // ── Load SMTP config ──
 async function fetchConfig() {
@@ -68,19 +65,8 @@ async function fetchConfig() {
   }
 }
 
-// ── Load registration status ──
-async function fetchRegistrationStatus() {
-  try {
-    const res = await getRegistrationStatus()
-    registrationEnabled.value = res.enabled
-  } catch {
-    // ignore
-  }
-}
-
 onMounted(() => {
   fetchConfig()
-  fetchRegistrationStatus()
 })
 
 // ── Validation ──
@@ -174,23 +160,7 @@ async function handleTest() {
   }
 }
 
-// ── Registration toggle ──
-async function handleRegistrationToggle(val: boolean) {
-  registrationLoading.value = true
-  try {
-    const res = await updateRegistrationStatus(val)
-    registrationEnabled.value = res.enabled
-    toast.success(val ? '已开启注册' : '已关闭注册')
-  } catch (e) {
-    if (e instanceof ApiBusinessError) {
-      toast.error(e.message)
-    } else {
-      toast.error('操作失败')
-    }
-  } finally {
-    registrationLoading.value = false
-  }
-}
+
 </script>
 
 <template>
@@ -267,47 +237,26 @@ async function handleRegistrationToggle(val: boolean) {
       </div>
     </div>
 
-    <!-- Bottom row: Test Send + Registration -->
-    <div class="smtp-bottom-row">
-      <!-- Test Send Card -->
-      <div class="smtp-card">
-        <div class="smtp-card__header">
-          <h3 class="smtp-card__title">测试发送</h3>
-          <p class="smtp-card__desc">向指定邮箱发送一封测试邮件以验证配置是否正确。</p>
-        </div>
-        <div class="smtp-card__body">
-          <div class="smtp-panel__test-row">
-            <div class="smtp-panel__test-input">
-              <AppFormItem :error="testEmailError">
-                <AppInput
-                  v-model="testEmail"
-                  type="email"
-                  placeholder="收件人邮箱"
-                />
-              </AppFormItem>
-            </div>
-            <AppButton variant="outline" :loading="testing" @click="handleTest">
-              发送测试邮件
-            </AppButton>
-          </div>
-        </div>
+    <!-- Test Send -->
+    <div class="smtp-card">
+      <div class="smtp-card__header">
+        <h3 class="smtp-card__title">测试发送</h3>
+        <p class="smtp-card__desc">向指定邮箱发送一封测试邮件以验证配置是否正确。</p>
       </div>
-
-      <!-- Registration Toggle Card -->
-      <div class="smtp-card">
-        <div class="smtp-card__header">
-          <h3 class="smtp-card__title">注册设置</h3>
-          <p class="smtp-card__desc">控制是否允许新用户自行注册账户。</p>
-        </div>
-        <div class="smtp-card__body">
-          <div class="smtp-panel__switch-row">
-            <AppSwitch
-              :model-value="registrationEnabled"
-              :disabled="registrationLoading"
-              @update:model-value="handleRegistrationToggle"
-            />
-            <span class="smtp-panel__switch-label">允许新用户注册</span>
+      <div class="smtp-card__body">
+        <div class="smtp-panel__test-row">
+          <div class="smtp-panel__test-input">
+            <AppFormItem :error="testEmailError">
+              <AppInput
+                v-model="testEmail"
+                type="email"
+                placeholder="收件人邮箱"
+              />
+            </AppFormItem>
           </div>
+          <AppButton variant="outline" :loading="testing" @click="handleTest">
+            发送测试邮件
+          </AppButton>
         </div>
       </div>
     </div>
@@ -376,18 +325,6 @@ async function handleRegistrationToggle(val: boolean) {
   }
 }
 
-.smtp-bottom-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-@media (max-width: 768px) {
-  .smtp-bottom-row {
-    grid-template-columns: 1fr;
-  }
-}
-
 .smtp-panel__test-row {
   display: flex;
   align-items: flex-start;
@@ -398,14 +335,5 @@ async function handleRegistrationToggle(val: boolean) {
   flex: 1;
 }
 
-.smtp-panel__switch-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
 
-.smtp-panel__switch-label {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
 </style>

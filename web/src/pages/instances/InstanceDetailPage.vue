@@ -1105,8 +1105,7 @@ const permissionOptions = [
                   <div v-for="task in instanceUpcoming" :key="task.policy_id" class="instance-upcoming-item">
                     <div class="instance-upcoming-item__info">
                       <span class="instance-upcoming-item__name">{{ task.policy_name }}</span>
-                      <AppBadge :variant="task.type === 'cold' ? 'info' : 'default'">{{ taskTypeLabel(task.type) }}
-                      </AppBadge>
+                      <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
                     </div>
                     <span class="instance-upcoming-item__time">
                       <Clock :size="12" />
