@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Rsync Backup Service Logo</title>
+  <desc id="desc">Final logo for Rsync Backup Service featuring layered backup files, diagonal sync arrows, and a compressed archive pack.</desc>
+  <rect width="256" height="256" rx="52" fill="#102033" />
+  <g transform="translate(-23 -23) scale(1.18)">
+    <rect x="98" y="62" width="86" height="104" rx="24" fill="#63D9FF" opacity="0.68" />
+    <rect x="72" y="86" width="92" height="108" rx="26" fill="#EAF5FF" />
+    <path d="M104 140h28a7 7 0 0 1 7 7v3H97v-3a7 7 0 0 1 7-7Z" fill="#63D9FF" fill-opacity="0.86" />
+    <path d="M99 150h38v12c0 3.9-3.1 7-7 7h-24c-3.9 0-7-3.1-7-7Z" fill="#7EF2D4" fill-opacity="0.88" />
+    <rect x="114" y="148" width="8" height="14" rx="4" fill="#102033" fill-opacity="0.18" />
+    <path d="M102 116 136 82" fill="none" stroke="#63D9FF" stroke-width="8" stroke-linecap="round" />
+    <path d="M136 82 124 86" fill="none" stroke="#63D9FF" stroke-width="8" stroke-linecap="round" />
+    <path d="M136 82 132 94" fill="none" stroke="#63D9FF" stroke-width="8" stroke-linecap="round" />
+    <path d="M170 82 136 116" fill="none" stroke="#7EF2D4" stroke-width="8" stroke-linecap="round" />
+    <path d="M136 116 148 112" fill="none" stroke="#7EF2D4" stroke-width="8" stroke-linecap="round" />
+    <path d="M136 116 140 104" fill="none" stroke="#7EF2D4" stroke-width="8" stroke-linecap="round" />
+  </g>
+</svg>

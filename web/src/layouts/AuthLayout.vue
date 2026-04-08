@@ -21,7 +21,7 @@ defineProps<Props>()
     <div class="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
       <header class="flex items-center justify-center py-4 sm:justify-between">
         <RouterLink to="/" class="inline-flex items-center gap-3 text-content-primary transition hover:text-primary-600">
-          <span class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,var(--primary-500),#7EF2D4)] font-mono text-sm font-bold text-slate-950 shadow-glow">RBS</span>
+          <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-11 w-11 rounded-2xl shadow-glow" />
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.36em] text-content-muted">Secure Access</p>
             <p class="text-lg font-semibold">Rsync Backup Service</p>

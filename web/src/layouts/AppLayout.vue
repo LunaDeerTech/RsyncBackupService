@@ -112,7 +112,7 @@ watch(() => route.path, () => {
         <Menu v-if="!drawerOpen" :size="20" />
         <X v-else :size="20" />
       </button>
-      <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,var(--primary-500),var(--accent-mint-400))] font-mono text-xs font-bold text-slate-950">RBS</span>
+      <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
       <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
       <div class="ml-auto flex items-center gap-2">
         <button
@@ -144,7 +144,7 @@ watch(() => route.path, () => {
     >
       <!-- Sidebar header -->
       <div class="flex h-14 items-center gap-3 border-b border-outline px-5">
-        <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,var(--primary-500),var(--accent-mint-400))] font-mono text-xs font-bold text-slate-950">RBS</span>
+        <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
         <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
       </div>
 
