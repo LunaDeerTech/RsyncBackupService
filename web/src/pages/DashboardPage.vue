@@ -15,6 +15,8 @@ import {
 import AppCard from '../components/AppCard.vue'
 import AppBadge from '../components/AppBadge.vue'
 import AppEmpty from '../components/AppEmpty.vue'
+import AppProgress from '../components/AppProgress.vue'
+import { useTaskStore } from '../stores/task'
 import {
   getOverview,
   getRisks,
@@ -31,6 +33,7 @@ import { formatRelativeTime } from '../utils/time'
 import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant } from '../utils/disaster-recovery'
 
 const router = useRouter()
+const taskStore = useTaskStore()
 
 const overview = ref<DashboardOverview | null>(null)
 const trends = ref<DashboardTrends | null>(null)
@@ -253,17 +256,22 @@ const quickLinks = [
         <div class="dashboard__left">
           <!-- Current tasks -->
           <AppCard title="当前任务">
-            <div v-if="(overview?.running_tasks ?? 0) + (overview?.queued_tasks ?? 0) === 0" class="py-4">
+            <div v-if="taskStore.activeTasks.length === 0" class="py-4">
               <AppEmpty message="暂无运行中任务" />
             </div>
             <div v-else class="task-summary">
-              <div class="task-summary__row">
-                <span class="task-summary__label">运行中</span>
-                <span class="task-summary__count">{{ overview?.running_tasks ?? 0 }}</span>
-              </div>
-              <div class="task-summary__row">
-                <span class="task-summary__label">排队中</span>
-                <span class="task-summary__count">{{ overview?.queued_tasks ?? 0 }}</span>
+              <div v-for="t in taskStore.activeTasks" :key="t.id" class="task-summary__row task-summary__row--detail task-summary__row--clickable" @click="router.push(`/instances/${t.instance_id}`)">
+                <div class="task-summary__info">
+                  <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">
+                    {{ t.status === 'running' ? '运行中' : '排队中' }}
+                  </AppBadge>
+                  <span class="task-summary__name">{{ t.instance_name }}</span>
+                  <span class="task-summary__type">{{ taskTypeLabel(t.type) }}</span>
+                </div>
+                <div class="task-summary__progress">
+                  <AppProgress :value="t.progress" size="sm" />
+                  <span class="task-summary__percent">{{ t.progress }}%</span>
+                </div>
               </div>
             </div>
           </AppCard>
@@ -578,7 +586,7 @@ const quickLinks = [
 .task-summary {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .task-summary__row {
   display: flex;
@@ -588,6 +596,51 @@ const quickLinks = [
   border-bottom: 1px solid var(--border-subtle);
 }
 .task-summary__row:last-child { border-bottom: none; }
+.task-summary__row--detail {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.task-summary__row--clickable {
+  cursor: pointer;
+  border-radius: var(--radius-md, 8px);
+  padding: 8px;
+  margin: 0 -8px;
+  transition: background 0.15s;
+}
+.task-summary__row--clickable:hover {
+  background: var(--surface-sunken, #f3f4f6);
+}
+.task-summary__info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.task-summary__name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.task-summary__type {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.task-summary__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-summary__progress .app-progress {
+  flex: 1;
+}
+.task-summary__percent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  min-width: 36px;
+  text-align: right;
+}
 .task-summary__label {
   font-size: 14px;
   color: var(--text-secondary);

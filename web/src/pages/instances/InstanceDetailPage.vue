@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
@@ -7,7 +7,10 @@ import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
 import type { RestoreRequest } from '../../api/backups'
 import { listInstanceAuditLogs } from '../../api/audit'
 import { getUpcomingTasks as fetchUpcomingTasksAPI, type UpcomingTask } from '../../api/dashboard'
-import { listTasks } from '../../api/tasks'
+import { listTasks, type TaskItem } from '../../api/tasks'
+import { useTaskStore } from '../../stores/task'
+import { useElapsedTime } from '../../composables/useElapsedTime'
+import AppProgress from '../../components/AppProgress.vue'
 import type { AuditLog, AuditLogParams } from '../../api/audit'
 import { listTargets } from '../../api/targets'
 import { listRemotes } from '../../api/remotes'
@@ -44,7 +47,7 @@ import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRin
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
   Database, CheckCircle, HardDrive, Shield, Download, RotateCcw,
-  AlertTriangle, Clock,
+  AlertTriangle, Clock, XCircle,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -243,6 +246,7 @@ const backupStatusVariant: Record<string, 'success' | 'error' | 'info' | 'warnin
 }
 
 const backupColumns: TableColumn[] = [
+  { key: 'started_at', title: '备份时间' },
   { key: 'completed_at', title: '完成时间' },
   { key: 'type', title: '类型' },
   { key: 'backup_size_bytes', title: '备份大小' },
@@ -259,8 +263,55 @@ const backupStatusLabel: Record<string, string> = {
 }
 
 // ── Task data (for overview) ──
-const instanceTasks = ref<{ id: number; type: string; status: string; progress: number; current_step: string }[]>([])
+const taskStore = useTaskStore()
+const instanceTasks = ref<TaskItem[]>([])
 const instanceUpcoming = ref<UpcomingTask[]>([])
+const taskWatcherStoppers = ref<(() => void)[]>([])
+
+// Leading running task for elapsed-time display
+const leadingTask = computed(() => instanceTasks.value.find(t => t.status === 'running') ?? null)
+const leadingTaskStartTime = computed(() => leadingTask.value?.started_at ?? null)
+const elapsedTime = useElapsedTime(leadingTaskStartTime)
+
+function formatEstimatedRemaining(estimatedEnd: string | undefined): string {
+  if (!estimatedEnd) return '--'
+  const diff = new Date(estimatedEnd).getTime() - Date.now()
+  if (diff <= 0) return '即将完成'
+  const m = Math.floor(diff / 60000)
+  const h = Math.floor(m / 60)
+  if (h > 0) return `${h} 小时 ${m % 60} 分钟`
+  return `${m} 分钟`
+}
+
+function formatDateTime(dateStr: string | undefined): string {
+  if (!dateStr) return '--'
+  return new Date(dateStr).toLocaleString('zh-CN')
+}
+
+function startTaskWatchers() {
+  stopTaskWatchers()
+  const running = instanceTasks.value.filter(t => t.status === 'running' || t.status === 'queued')
+  for (const t of running) {
+    const stop = taskStore.watchTask(t.id, (updated) => {
+      const idx = instanceTasks.value.findIndex(x => x.id === updated.id)
+      if (idx >= 0) {
+        instanceTasks.value[idx] = updated
+      }
+      if (updated.status === 'success' || updated.status === 'failed' || updated.status === 'cancelled') {
+        // Refresh related data
+        fetchStats()
+        fetchDR()
+        fetchInstanceTasks()
+      }
+    })
+    taskWatcherStoppers.value.push(stop)
+  }
+}
+
+function stopTaskWatchers() {
+  for (const stop of taskWatcherStoppers.value) stop()
+  taskWatcherStoppers.value = []
+}
 
 // ── Fetch core data ──
 async function fetchInstance() {
@@ -356,9 +407,17 @@ async function fetchInstanceTasks() {
   try {
     const res = await listTasks()
     instanceTasks.value = (res.items ?? []).filter(t => t.instance_id === instanceId.value)
+    startTaskWatchers()
   } catch {
     // silent
   }
+}
+
+async function handleCancelTask(taskId: number) {
+  const yes = await confirm({ title: '取消任务', message: '确定要取消该任务吗？此操作不可撤销。', confirmText: '取消任务', danger: true })
+  if (!yes) return
+  await taskStore.doCancelTask(taskId)
+  fetchInstanceTasks()
 }
 
 async function fetchInstanceUpcoming() {
@@ -404,6 +463,10 @@ onMounted(async () => {
     fetchRemotes()
     fetchUsers()
   }
+})
+
+onUnmounted(() => {
+  stopTaskWatchers()
 })
 
 // ── Watch tab changes ──
@@ -1049,15 +1112,48 @@ const permissionOptions = [
                 <div v-if="instanceTasks.length === 0" class="py-4">
                   <AppEmpty message="暂无运行中任务" />
                 </div>
-                <div v-else class="instance-task-list">
-                  <div v-for="t in instanceTasks" :key="t.id" class="instance-task-item">
-                    <div class="instance-task-item__info">
-                      <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">{{ taskStatusLabel(t.status) }}
-                      </AppBadge>
-                      <span class="instance-task-item__type">{{ taskTypeLabel(t.type) }}</span>
+                <div v-else class="task-progress-list">
+                  <div v-for="t in instanceTasks" :key="t.id" class="task-progress-card">
+                    <div class="task-progress-header">
+                      <div class="task-progress-header__left">
+                        <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">{{ taskStatusLabel(t.status) }}</AppBadge>
+                        <span class="task-progress-header__type">{{ taskTypeLabel(t.type) }}</span>
+                      </div>
+                      <AppButton
+                        v-if="authStore.isAdmin && (t.status === 'running' || t.status === 'queued')"
+                        variant="danger"
+                        size="sm"
+                        @click="handleCancelTask(t.id)"
+                      >
+                        <XCircle :size="14" />
+                        取消
+                      </AppButton>
                     </div>
-                    <span class="instance-task-item__step">{{ t.current_step || '--' }}</span>
-                    <span class="instance-task-item__progress">{{ t.progress }}%</span>
+                    <div class="task-progress-body">
+                      <div class="task-progress-bar-row">
+                        <AppProgress :value="t.progress" size="md" />
+                        <span class="task-progress-percent">{{ t.progress }}%</span>
+                      </div>
+                      <div v-if="t.current_step" class="task-progress-step">{{ t.current_step }}</div>
+                      <div class="task-progress-meta">
+                        <div class="task-progress-meta__item">
+                          <span class="task-progress-meta__label">开始时间</span>
+                          <span class="task-progress-meta__value">{{ formatDateTime(t.started_at) }}</span>
+                        </div>
+                        <div class="task-progress-meta__item">
+                          <span class="task-progress-meta__label">已运行</span>
+                          <span class="task-progress-meta__value task-progress-meta__value--mono">{{ t.status === 'running' && t.id === leadingTask?.id ? elapsedTime : '--' }}</span>
+                        </div>
+                        <div class="task-progress-meta__item">
+                          <span class="task-progress-meta__label">预计完成</span>
+                          <span class="task-progress-meta__value">{{ formatDateTime(t.estimated_end) }}</span>
+                        </div>
+                        <div class="task-progress-meta__item">
+                          <span class="task-progress-meta__label">预计剩余</span>
+                          <span class="task-progress-meta__value">{{ formatEstimatedRemaining(t.estimated_end) }}</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </AppCard>
@@ -1183,6 +1279,10 @@ const permissionOptions = [
             <div class="tab-table">
               <AppTable :columns="backupColumns" :data="(backups as unknown as Record<string, unknown>[])"
                 :loading="backupLoading">
+                <template #cell-started_at="{ row }">
+                  {{ row.started_at ? formatRelativeTime(row.started_at as string) : '--' }}
+                </template>
+
                 <template #cell-completed_at="{ row }">
                   {{ row.completed_at ? formatRelativeTime(row.completed_at as string) : '--' }}
                 </template>
@@ -2156,7 +2256,99 @@ const permissionOptions = [
   gap: 8px;
 }
 
-.instance-task-item,
+/* Task progress card styles */
+.task-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-progress-card {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.task-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.task-progress-header__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-progress-header__type {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.task-progress-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-progress-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-progress-bar-row .app-progress {
+  flex: 1;
+}
+
+.task-progress-percent {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  min-width: 42px;
+  text-align: right;
+}
+
+.task-progress-step {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+}
+
+.task-progress-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.task-progress-meta__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-progress-meta__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.task-progress-meta__value {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.task-progress-meta__value--mono {
+  font-family: monospace;
+  font-weight: 600;
+}
+
 .instance-upcoming-item {
   display: flex;
   align-items: center;
@@ -2166,34 +2358,8 @@ const permissionOptions = [
   font-size: 13px;
 }
 
-.instance-task-item:last-child,
 .instance-upcoming-item:last-child {
   border-bottom: none;
-}
-
-.instance-task-item__info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.instance-task-item__type {
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-.instance-task-item__step {
-  flex: 1;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.instance-task-item__progress {
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
 }
 
 .instance-upcoming-item__info {

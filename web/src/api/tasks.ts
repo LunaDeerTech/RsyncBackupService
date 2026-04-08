@@ -23,3 +23,7 @@ export function listTasks() {
 export function getTask(taskId: number) {
   return apiClient.get<TaskItem>(`/tasks/${taskId}`)
 }
+
+export function cancelTask(taskId: number) {
+  return apiClient.post<{ message: string; task: TaskItem }>(`/tasks/${taskId}/cancel`, {})
+}

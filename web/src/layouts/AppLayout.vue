@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -12,16 +12,49 @@ import {
   LogOut,
   Menu,
   X,
+  Activity,
 } from 'lucide-vue-next'
 import ThemeToggle from '../components/ThemeToggle.vue'
+import AppBadge from '../components/AppBadge.vue'
+import AppProgress from '../components/AppProgress.vue'
 import { useAuthStore } from '../stores/auth'
+import { useTaskStore } from '../stores/task'
 
 const authStore = useAuthStore()
-const { isAdmin, user } = storeToRefs(authStore)
+const { isAdmin, user, isAuthenticated } = storeToRefs(authStore)
+const taskStore = useTaskStore()
 const route = useRoute()
 const router = useRouter()
 
 const drawerOpen = ref(false)
+const taskPanelOpen = ref(false)
+
+// Start/stop task polling based on auth
+watch(isAuthenticated, (val) => {
+  if (val) taskStore.startPolling()
+  else taskStore.stopPolling()
+}, { immediate: true })
+
+onUnmounted(() => {
+  taskStore.stopPolling()
+})
+
+function toggleTaskPanel() {
+  taskPanelOpen.value = !taskPanelOpen.value
+}
+
+function closeTaskPanel() {
+  taskPanelOpen.value = false
+}
+
+function taskTypeLabel(type: string): string {
+  switch (type) {
+    case 'rolling': return '滚动备份'
+    case 'cold': return '冷备份'
+    case 'restore': return '恢复'
+    default: return type
+  }
+}
 
 interface NavItem {
   label: string
@@ -54,6 +87,7 @@ function navigateTo(path: string) {
 }
 
 async function handleLogout() {
+  taskStore.stopPolling()
   authStore.logout()
   drawerOpen.value = false
   await router.replace('/login')
@@ -62,6 +96,7 @@ async function handleLogout() {
 // Close drawer on route change
 watch(() => route.path, () => {
   drawerOpen.value = false
+  taskPanelOpen.value = false
 })
 </script>
 
@@ -79,7 +114,16 @@ watch(() => route.path, () => {
       </button>
       <span class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[linear-gradient(135deg,var(--primary-500),var(--accent-mint-400))] font-mono text-xs font-bold text-slate-950">RBS</span>
       <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
-      <div class="ml-auto">
+      <div class="ml-auto flex items-center gap-2">
+        <button
+          v-if="taskStore.runningCount > 0"
+          type="button"
+          class="task-indicator"
+          @click="toggleTaskPanel"
+        >
+          <Activity :size="16" />
+          <span class="task-indicator__count">{{ taskStore.runningCount }}</span>
+        </button>
         <ThemeToggle compact />
       </div>
     </header>
@@ -151,7 +195,49 @@ watch(() => route.path, () => {
         <h1 class="text-lg font-semibold text-content-primary">
           {{ route.meta.title ?? '' }}
         </h1>
-        <ThemeToggle />
+        <div class="flex items-center gap-3">
+          <div class="task-indicator-wrapper">
+            <button
+              type="button"
+              class="task-indicator"
+              :class="{ 'task-indicator--active': taskStore.runningCount > 0 }"
+              @click="toggleTaskPanel"
+            >
+              <Activity :size="16" />
+              <span v-if="taskStore.runningCount > 0" class="task-indicator__count">{{ taskStore.runningCount }}</span>
+            </button>
+            <!-- Task dropdown panel -->
+            <Transition name="fade">
+              <div v-if="taskPanelOpen" class="task-panel" @click.stop>
+                <div class="task-panel__header">
+                  <span class="task-panel__title">运行中任务</span>
+                  <button type="button" class="task-panel__close" @click="closeTaskPanel">
+                    <X :size="14" />
+                  </button>
+                </div>
+                <div v-if="taskStore.activeTasks.length === 0" class="task-panel__empty">
+                  暂无运行中任务
+                </div>
+                <div v-else class="task-panel__list">
+                  <div v-for="t in taskStore.activeTasks" :key="t.id" class="task-panel__item">
+                    <div class="task-panel__item-header">
+                      <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'" class="task-panel__badge">
+                        {{ t.status === 'running' ? '运行中' : '排队中' }}
+                      </AppBadge>
+                      <span class="task-panel__item-name">{{ t.instance_name }}</span>
+                      <span class="task-panel__item-type">{{ taskTypeLabel(t.type) }}</span>
+                    </div>
+                    <div class="task-panel__item-progress">
+                      <AppProgress :value="t.progress" size="sm" />
+                      <span class="task-panel__item-percent">{{ t.progress }}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Transition>
+          </div>
+          <ThemeToggle />
+        </div>
       </header>
 
       <!-- Page content -->
@@ -170,5 +256,139 @@ watch(() => route.path, () => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* Task indicator */
+.task-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 8px);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.task-indicator:hover {
+  background: var(--surface-sunken, #f3f4f6);
+  color: var(--text-primary, #111827);
+}
+.task-indicator--active {
+  color: var(--primary-500, #3b82f6);
+}
+.task-indicator__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--primary-500, #3b82f6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Task panel dropdown */
+.task-indicator-wrapper {
+  position: relative;
+}
+.task-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--surface-base, #fff);
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,.1), 0 8px 10px -6px rgba(0,0,0,.1);
+  z-index: 100;
+}
+.task-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle, #f3f4f6);
+}
+.task-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+.task-panel__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9ca3af);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.task-panel__close:hover {
+  background: var(--surface-sunken, #f3f4f6);
+}
+.task-panel__empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted, #9ca3af);
+}
+.task-panel__list {
+  padding: 8px;
+}
+.task-panel__item {
+  padding: 10px 8px;
+  border-radius: var(--radius-md, 8px);
+  transition: background 0.15s;
+}
+.task-panel__item:hover {
+  background: var(--surface-sunken, #f3f4f6);
+}
+.task-panel__item + .task-panel__item {
+  border-top: 1px solid var(--border-subtle, #f3f4f6);
+}
+.task-panel__item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.task-panel__item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #111827);
+}
+.task-panel__item-type {
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+}
+.task-panel__item-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-panel__item-progress .app-progress {
+  flex: 1;
+}
+.task-panel__item-percent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+  min-width: 32px;
+  text-align: right;
 }
 </style>
