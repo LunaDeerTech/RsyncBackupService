@@ -43,10 +43,10 @@ import AppSwitch from '../../components/AppSwitch.vue'
 import AppEmpty from '../../components/AppEmpty.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import AppPagination from '../../components/AppPagination.vue'
-import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRingColor } from '../../utils/disaster-recovery'
+import { getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRingColor } from '../../utils/disaster-recovery'
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
-  Database, CheckCircle, HardDrive, Shield, Download, RotateCcw,
+  Database, CheckCircle, HardDrive, Download, RotateCcw,
   AlertTriangle, Clock, XCircle,
 } from 'lucide-vue-next'
 
@@ -128,12 +128,6 @@ const policyErrors = reactive({
   encryption_key: '',
   split_size_mb: '',
   retention_value: '',
-})
-
-// ── Backup data (from stats for now) ──
-const recentBackups = computed<Backup[]>(() => {
-  if (!stats.value?.last_backup) return []
-  return [stats.value.last_backup]
 })
 
 // ── Backup data (full list) ──
@@ -965,91 +959,47 @@ const permissionOptions = [
         <!-- ═══ Overview Tab ═══ -->
         <template #tab-overview>
           <div class="tab-content">
-            <!-- Info card -->
-            <AppCard>
-              <div class="overview-info">
-                <div class="overview-info__item">
-                  <span class="overview-info__label">实例名称</span>
-                  <span class="overview-info__value">{{ instance.name }}</span>
-                </div>
-                <div class="overview-info__item">
-                  <span class="overview-info__label">数据源</span>
-                  <span class="overview-info__value">{{ sourceTypeLabel[instance.source_type] ?? instance.source_type
-                    }}: {{ instance.source_path }}</span>
-                </div>
-                <div class="overview-info__item">
-                  <span class="overview-info__label">状态</span>
-                  <AppBadge :variant="instance.status === 'running' ? 'info' : 'default'">
-                    {{ instance.status === 'running' ? '运行中' : '空闲' }}
-                  </AppBadge>
-                </div>
-              </div>
-            </AppCard>
-
-            <!-- Stats cards -->
-            <div class="stats-grid">
+            <!-- Row 1: Combined info + DR card & Stats 2×2 -->
+            <div class="overview-top-row">
+              <!-- Combined Info + DR Card -->
               <AppCard>
-                <button class="stat-card stat-card--clickable" @click="activeTab = 'backups'">
-                  <Database :size="20" class="stat-icon stat-icon--primary" />
-                  <div class="stat-card__content">
-                    <span class="stat-card__value">{{ stats?.success_backup_count ?? 0 }}</span>
-                    <span class="stat-card__label">可用备份</span>
-                  </div>
-                </button>
-              </AppCard>
-              <AppCard>
-                <div class="stat-card">
-                  <CheckCircle :size="20" class="stat-icon stat-icon--success" />
-                  <div class="stat-card__content">
-                    <span class="stat-card__value" :style="{ color: successRateColor }">
-                      {{ successRate !== null ? successRate + '%' : '--' }}
-                    </span>
-                    <span class="stat-card__label">成功率</span>
-                  </div>
-                </div>
-              </AppCard>
-              <AppCard>
-                <div class="stat-card">
-                  <HardDrive :size="20" class="stat-icon stat-icon--info" />
-                  <div class="stat-card__content">
-                    <span class="stat-card__value">{{ formatBytes(stats?.total_backup_size_bytes) }}</span>
-                    <span class="stat-card__label">总备份大小</span>
-                  </div>
-                </div>
-              </AppCard>
-              <AppCard>
-                <div class="stat-card">
-                  <Shield :size="20" class="stat-icon"
-                    :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }" />
-                  <div class="stat-card__content">
-                    <span class="stat-card__value"
-                      :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }">
-                      {{ drScore ? Math.round(drScore.total) : '--' }}
-                    </span>
-                    <span class="stat-card__label">容灾率</span>
-                  </div>
-                </div>
-              </AppCard>
-            </div>
-
-            <!-- Disaster Recovery & Current Tasks row -->
-            <div class="overview-tasks-row">
-              <!-- Disaster Recovery Detail Card -->
-              <AppCard v-if="drScore" title="容灾评估">
-                <div class="dr-card">
-                  <div class="dr-card__header">
-                    <!-- Ring chart -->
-                    <div class="dr-ring"
-                      :style="{ '--dr-ring-color': getDRLevelRingColor(drScore.level), '--dr-ring-pct': Math.round(drScore.total) }">
-                      <svg viewBox="0 0 36 36" class="dr-ring__svg">
-                        <path class="dr-ring__bg"
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                        <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`"
-                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                      </svg>
-                      <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+                <div class="hero-card">
+                  <div class="hero-card__top">
+                    <div class="hero-card__info">
+                      <div class="overview-info__item">
+                        <span class="overview-info__label">数据源</span>
+                        <span class="overview-info__value">{{ sourceTypeLabel[instance.source_type] ?? instance.source_type }}: {{ instance.source_path }}</span>
+                      </div>
+                      <div class="overview-info__item">
+                        <span class="overview-info__label">状态</span>
+                        <span>
+                          <AppBadge :variant="instance.status === 'running' ? 'info' : 'default'">
+                            {{ instance.status === 'running' ? '运行中' : '空闲' }}
+                          </AppBadge>
+                        </span>
+                      </div>
+                      <div v-if="drScore && drScore.deductions && drScore.deductions.length > 0" class="hero-card__deductions">
+                        <span class="overview-info__label">容灾扣分项</span>
+                        <div class="hero-deduction-list">
+                          <div v-for="(d, i) in drScore.deductions" :key="i" class="hero-deduction-item">
+                            <AlertTriangle :size="12" class="hero-deduction-item__icon" />
+                            <span>{{ d }}</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div class="dr-card__summary">
+                    <div v-if="drScore" class="hero-card__ring">
+                      <span class="hero-card__ring-label">容灾评分</span>
+                      <div class="dr-ring"
+                        :style="{ '--dr-ring-color': getDRLevelRingColor(drScore.level), '--dr-ring-pct': Math.round(drScore.total) }">
+                        <svg viewBox="0 0 36 36" class="dr-ring__svg">
+                          <path class="dr-ring__bg"
+                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                          <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`"
+                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        </svg>
+                        <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+                      </div>
                       <AppBadge :variant="getDRLevelBadgeVariant(drScore.level)">
                         {{ getDRLevelLabel(drScore.level) }}
                       </AppBadge>
@@ -1057,7 +1007,7 @@ const permissionOptions = [
                   </div>
 
                   <!-- Sub-scores -->
-                  <div class="dr-sub-scores">
+                  <div v-if="drScore" class="dr-sub-scores">
                     <div class="dr-sub-score">
                       <div class="dr-sub-score__header">
                         <span class="dr-sub-score__name">备份新鲜度</span>
@@ -1095,14 +1045,86 @@ const permissionOptions = [
                       </div>
                     </div>
                   </div>
+                </div>
+              </AppCard>
 
-                  <!-- Deductions -->
-                  <div v-if="drScore.deductions && drScore.deductions.length > 0" class="dr-deductions">
-                    <div class="dr-deductions__title">扣分原因</div>
-                    <div v-for="(d, i) in drScore.deductions" :key="i" class="dr-deduction-item">
-                      <AlertTriangle :size="14" class="dr-deduction-item__icon" />
-                      <span>{{ d }}</span>
+              <!-- Stats cards 2×2 -->
+              <div class="stats-grid-2x2">
+                <AppCard>
+                  <button class="stat-card stat-card--clickable" @click="activeTab = 'backups'">
+                    <div class="stat-card__content">
+                      <span class="stat-card__value">{{ stats?.success_backup_count ?? 0 }}</span>
+                      <span class="stat-card__label">可用备份</span>
+                      <span class="stat-card__sub">共 {{ stats?.backup_count ?? 0 }} 次备份</span>
                     </div>
+                    <Database :size="22" class="stat-icon stat-icon--primary" />
+                  </button>
+                </AppCard>
+                <AppCard>
+                  <div class="stat-card">
+                    <div class="stat-card__content">
+                      <span class="stat-card__value" :style="{ color: successRateColor }">
+                        {{ successRate !== null ? successRate + '%' : '--' }}
+                      </span>
+                      <span class="stat-card__label">成功率</span>
+                      <span class="stat-card__sub">成功 {{ stats?.success_backup_count ?? 0 }} / 失败 {{ stats?.failure_backup_count ?? 0 }}</span>
+                    </div>
+                    <CheckCircle :size="22" class="stat-icon stat-icon--success" />
+                  </div>
+                </AppCard>
+                <AppCard>
+                  <div class="stat-card">
+                    <div class="stat-card__content">
+                      <span class="stat-card__value">{{ formatBytes(stats?.total_backup_size_bytes) }}</span>
+                      <span class="stat-card__label">总备份大小</span>
+                    </div>
+                    <HardDrive :size="22" class="stat-icon stat-icon--info" />
+                  </div>
+                </AppCard>
+                <AppCard>
+                  <div class="stat-card">
+                    <div class="stat-card__content">
+                      <template v-if="stats?.last_backup">
+                        <span class="stat-card__value stat-card__value--sm">
+                          {{ stats.last_backup.completed_at ? formatRelativeTime(stats.last_backup.completed_at) : '--' }}
+                        </span>
+                        <span class="stat-card__label">最近备份</span>
+                        <span class="stat-card__sub">
+                          <AppBadge size="sm" :variant="backupStatusVariant[stats.last_backup.status] ?? 'default'">
+                            {{ backupStatusLabel[stats.last_backup.status] ?? stats.last_backup.status }}
+                          </AppBadge>
+                          {{ policyTypeLabel[stats.last_backup.type] ?? stats.last_backup.type }}
+                          · {{ formatBytes(stats.last_backup.backup_size_bytes) }}
+                        </span>
+                      </template>
+                      <template v-else>
+                        <span class="stat-card__value">--</span>
+                        <span class="stat-card__label">最近备份</span>
+                      </template>
+                    </div>
+                    <Clock :size="22" class="stat-icon stat-icon--muted" />
+                  </div>
+                </AppCard>
+              </div>
+            </div>
+
+            <!-- Row 2: Upcoming tasks & Current tasks -->
+            <div class="overview-tasks-row">
+              <!-- Upcoming tasks for this instance -->
+              <AppCard title="即将执行的任务">
+                <div v-if="instanceUpcoming.length === 0" class="py-4">
+                  <AppEmpty message="暂无计划任务" />
+                </div>
+                <div v-else class="instance-upcoming-list">
+                  <div v-for="task in instanceUpcoming" :key="task.policy_id" class="instance-upcoming-item">
+                    <div class="instance-upcoming-item__info">
+                      <span class="instance-upcoming-item__name">{{ task.policy_name }}</span>
+                      <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
+                    </div>
+                    <span class="instance-upcoming-item__time">
+                      <Clock :size="12" />
+                      {{ formatFutureTime(task.next_run_at) }}
+                    </span>
                   </div>
                 </div>
               </AppCard>
@@ -1159,58 +1181,7 @@ const permissionOptions = [
               </AppCard>
             </div>
 
-            <!-- Recent backups & Upcoming tasks row -->
-            <div class="overview-tasks-row">
-              <!-- Recent backups mini table -->
-              <AppCard title="最近备份">
-                <template v-if="recentBackups.length > 0">
-                  <div class="mini-table">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>时间</th>
-                          <th>类型</th>
-                          <th>状态</th>
-                          <th>大小</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="b in recentBackups" :key="b.id">
-                          <td>{{ b.completed_at ? formatRelativeTime(b.completed_at) : '--' }}</td>
-                          <td>{{ policyTypeLabel[b.type] ?? b.type }}</td>
-                          <td>
-                            <AppBadge :variant="backupStatusVariant[b.status] ?? 'default'">
-                              {{ backupStatusLabel[b.status] ?? b.status }}
-                            </AppBadge>
-                          </td>
-                          <td>{{ formatBytes(b.backup_size_bytes) }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </template>
-                <AppEmpty v-else message="暂无备份记录" />
-              </AppCard>
 
-              <!-- Upcoming tasks for this instance -->
-              <AppCard title="即将执行的任务">
-                <div v-if="instanceUpcoming.length === 0" class="py-4">
-                  <AppEmpty message="暂无计划任务" />
-                </div>
-                <div v-else class="instance-upcoming-list">
-                  <div v-for="task in instanceUpcoming" :key="task.policy_id" class="instance-upcoming-item">
-                    <div class="instance-upcoming-item__info">
-                      <span class="instance-upcoming-item__name">{{ task.policy_name }}</span>
-                      <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
-                    </div>
-                    <span class="instance-upcoming-item__time">
-                      <Clock :size="12" />
-                      {{ formatFutureTime(task.next_run_at) }}
-                    </span>
-                  </div>
-                </div>
-              </AppCard>
-            </div>
           </div>
         </template>
 
@@ -1703,11 +1674,81 @@ const permissionOptions = [
   overflow: hidden;
 }
 
-/* Overview */
-.overview-info {
+/* Overview – Top row: hero card + stats 2×2 */
+.overview-top-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 767px) {
+  .overview-top-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Hero card = merged info + DR */
+.hero-card {
   display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.hero-card__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.hero-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  max-width: calc(100% - 110px);
+}
+
+.hero-card__ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hero-card__ring-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.hero-card__deductions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hero-deduction-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hero-deduction-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.hero-deduction-item__icon {
+  flex-shrink: 0;
+  color: var(--warning-500);
+  margin-top: 1px;
 }
 
 .overview-info__item {
@@ -1729,10 +1770,35 @@ const permissionOptions = [
   color: var(--text-primary);
 }
 
-.stats-grid {
+/* Stats 2×2 grid */
+.stats-grid-2x2 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+
+.stats-grid-2x2 .stat-card {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.stats-grid-2x2 .stat-icon {
+  width: 28px;
+  height: 28px;
+  opacity: 0.7;
+}
+
+.stat-card__sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-card__value--sm {
+  font-size: 18px;
 }
 
 .stat-card {
@@ -1764,17 +1830,18 @@ const permissionOptions = [
 .stat-card__content {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .stat-card__value {
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.2;
+  line-height: 1.3;
 }
 
 .stat-card__label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -1808,24 +1875,7 @@ const permissionOptions = [
   border-bottom: none;
 }
 
-/* Disaster Recovery card */
-.dr-card {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.dr-card__header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.dr-card__summary {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+/* Disaster Recovery ring & sub-scores */
 
 .dr-ring {
   position: relative;
@@ -1901,34 +1951,6 @@ const permissionOptions = [
   background: var(--primary-500);
   border-radius: 3px;
   transition: width 0.4s ease;
-}
-
-.dr-deductions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dr-deductions__title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 2px;
-}
-
-.dr-deduction-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
-.dr-deduction-item__icon {
-  flex-shrink: 0;
-  color: var(--warning-500);
-  margin-top: 2px;
 }
 
 /* Policy type badge */
