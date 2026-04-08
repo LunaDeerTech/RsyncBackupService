@@ -501,6 +501,10 @@ func scoreToLevel(total float64) string {
 	}
 }
 
+func DRLevelForScore(total float64) string {
+	return scoreToLevel(total)
+}
+
 func cloneDisasterRecoveryScore(score *DisasterRecoveryScore) *DisasterRecoveryScore {
 	if score == nil {
 		return nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,15 @@ type Scheduler struct {
 	now         func() time.Time
 }
 
+type UpcomingTask struct {
+	PolicyID     int64     `json:"policy_id"`
+	PolicyName   string    `json:"policy_name"`
+	InstanceID   int64     `json:"instance_id"`
+	InstanceName string    `json:"instance_name"`
+	Type         string    `json:"type"`
+	NextRunAt    time.Time `json:"next_run_at"`
+}
+
 func NewScheduler(db *store.DB, queue *TaskQueue) *Scheduler {
 	return &Scheduler{
 		db:          db,
@@ -37,6 +47,15 @@ func NewScheduler(db *store.DB, queue *TaskQueue) *Scheduler {
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
+	}
+}
+
+func (s *Scheduler) SetClock(now func() time.Time) {
+	if s == nil || now == nil {
+		return
+	}
+	s.now = func() time.Time {
+		return now().UTC()
 	}
 }
 
@@ -108,6 +127,66 @@ func (s *Scheduler) RemovePolicy(policyID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.removePolicyLocked(policyID)
+}
+
+func (s *Scheduler) GetUpcomingTasks(within time.Duration) []UpcomingTask {
+	if s == nil || s.db == nil || within <= 0 {
+		return []UpcomingTask{}
+	}
+
+	now := s.now().UTC()
+	deadline := now.Add(within)
+	policies, err := s.db.ListEnabledPolicies()
+	if err != nil {
+		return []UpcomingTask{}
+	}
+
+	instanceNames := make(map[int64]string)
+	upcoming := make([]UpcomingTask, 0, len(policies))
+	for index := range policies {
+		policy := policies[index]
+		nextRun, shouldSchedule, err := s.nextTriggerTime(&policy, now)
+		if err != nil || !shouldSchedule || nextRun.After(deadline) {
+			continue
+		}
+
+		instanceName, ok := instanceNames[policy.InstanceID]
+		if !ok {
+			instance, err := s.db.GetInstanceByID(policy.InstanceID)
+			if err != nil {
+				continue
+			}
+			instanceName = instance.Name
+			instanceNames[policy.InstanceID] = instanceName
+		}
+
+		upcoming = append(upcoming, UpcomingTask{
+			PolicyID:     policy.ID,
+			PolicyName:   policy.Name,
+			InstanceID:   policy.InstanceID,
+			InstanceName: instanceName,
+			Type:         policy.Type,
+			NextRunAt:    nextRun.UTC(),
+		})
+	}
+
+	slices.SortFunc(upcoming, func(left, right UpcomingTask) int {
+		if !left.NextRunAt.Equal(right.NextRunAt) {
+			if left.NextRunAt.Before(right.NextRunAt) {
+				return -1
+			}
+			return 1
+		}
+		if left.PolicyID < right.PolicyID {
+			return -1
+		}
+		if left.PolicyID > right.PolicyID {
+			return 1
+		}
+		return 0
+	})
+
+	return upcoming
 }
 
 func (s *Scheduler) reloadPolicyByID(policyID int64, now time.Time) error {

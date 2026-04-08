@@ -149,6 +149,86 @@ func TestSchedulerHandleTimerCreatesScheduledTask(t *testing.T) {
 	}
 }
 
+func TestSchedulerGetUpcomingTasks(t *testing.T) {
+	baseNow := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	db := newRollingTestDB(t)
+
+	first := createSchedulerPolicyWithNames(t, db, "scheduler-first", "policy-first", "60")
+	second := createSchedulerPolicyWithNames(t, db, "scheduler-second", "policy-second", "120")
+	third := createSchedulerPolicyWithNames(t, db, "scheduler-third", "policy-third", "300")
+	fourth := createSchedulerPolicyWithNames(t, db, "scheduler-fourth", "policy-fourth", "7200")
+
+	createCompletedPolicyRunWithSource(t, db, first, model.BackupTriggerSourceScheduled, baseNow.Add(-30*time.Second))
+	createCompletedPolicyRunWithSource(t, db, second, model.BackupTriggerSourceScheduled, baseNow.Add(-10*time.Second))
+	createCompletedPolicyRunWithSource(t, db, third, model.BackupTriggerSourceScheduled, baseNow.Add(-10*time.Minute))
+	createCompletedPolicyRunWithSource(t, db, fourth, model.BackupTriggerSourceScheduled, baseNow.Add(-30*time.Minute))
+
+	scheduler := NewScheduler(db, nil)
+	scheduler.SetClock(func() time.Time { return baseNow })
+
+	upcoming := scheduler.GetUpcomingTasks(2 * time.Minute)
+	if len(upcoming) != 3 {
+		t.Fatalf("len(GetUpcomingTasks()) = %d, want 3", len(upcoming))
+	}
+	if upcoming[0].PolicyID != third.ID || !upcoming[0].NextRunAt.Equal(baseNow) {
+		t.Fatalf("upcoming[0] = %+v, want overdue third policy at now", upcoming[0])
+	}
+	if upcoming[1].PolicyID != first.ID || !upcoming[1].NextRunAt.Equal(baseNow.Add(30*time.Second)) {
+		t.Fatalf("upcoming[1] = %+v, want first policy at %s", upcoming[1], baseNow.Add(30*time.Second).Format(time.RFC3339))
+	}
+	if upcoming[2].PolicyID != second.ID || !upcoming[2].NextRunAt.Equal(baseNow.Add(110*time.Second)) {
+		t.Fatalf("upcoming[2] = %+v, want second policy at %s", upcoming[2], baseNow.Add(110*time.Second).Format(time.RFC3339))
+	}
+	for _, task := range upcoming {
+		if task.InstanceName == "" {
+			t.Fatalf("InstanceName = empty for upcoming task %+v", task)
+		}
+	}
+}
+
+func createSchedulerPolicyWithNames(t *testing.T, db *store.DB, instanceName, policyName, intervalSeconds string) *model.Policy {
+	t.Helper()
+
+	instance := &model.Instance{
+		Name:       instanceName,
+		SourceType: "local",
+		SourcePath: t.TempDir(),
+		Status:     "idle",
+	}
+	if err := db.CreateInstance(instance); err != nil {
+		t.Fatalf("CreateInstance() error = %v", err)
+	}
+
+	target := &model.BackupTarget{
+		Name:          policyName + "-target",
+		BackupType:    "rolling",
+		StorageType:   "local",
+		StoragePath:   t.TempDir(),
+		HealthStatus:  "healthy",
+		HealthMessage: "ok",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	policy := &model.Policy{
+		InstanceID:     instance.ID,
+		Name:           policyName,
+		Type:           "rolling",
+		TargetID:       target.ID,
+		ScheduleType:   "interval",
+		ScheduleValue:  intervalSeconds,
+		Enabled:        true,
+		RetentionType:  "count",
+		RetentionValue: 7,
+	}
+	if err := db.CreatePolicy(policy); err != nil {
+		t.Fatalf("CreatePolicy() error = %v", err)
+	}
+
+	return policy
+}
+
 func createSchedulerPolicy(t *testing.T, db *store.DB, intervalSeconds string) *model.Policy {
 	t.Helper()
 

@@ -350,7 +350,7 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 		 FROM days
 		 LEFT JOIN backups
 		   ON backups.instance_id = ?
-		  AND date(COALESCE(backups.completed_at, backups.started_at, backups.created_at)) = days.day
+		  AND substr(COALESCE(backups.completed_at, backups.started_at, backups.created_at), 1, 10) = days.day
 		 GROUP BY days.day
 		 ORDER BY days.day ASC`,
 		instanceID,
