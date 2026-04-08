@@ -1,0 +1,10 @@
+.git
+.github
+.superpowers
+.worktrees
+.env
+bin
+data
+docs
+web/dist
+web/node_modules
