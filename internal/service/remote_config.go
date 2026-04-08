@@ -273,7 +273,7 @@ func VerifySSHConnection(ctx context.Context, remote model.RemoteConfig) error {
 
 	session, err := client.NewSession()
 	if err != nil {
-		return fmt.Errorf("ssh session setup failed")
+		return fmt.Errorf("ssh session setup failed: %v", err)
 	}
 	defer session.Close()
 
@@ -291,7 +291,7 @@ func VerifySSHConnection(ctx context.Context, remote model.RemoteConfig) error {
 		return ctx.Err()
 	case err := <-commandDone:
 		if err != nil {
-			return fmt.Errorf("ssh command execution failed")
+			return fmt.Errorf("ssh command execution failed: %v", err)
 		}
 	}
 
@@ -332,19 +332,19 @@ func DialSSHClient(ctx context.Context, remote model.RemoteConfig) (*ssh.Client,
 	dialer := &net.Dialer{Timeout: defaultSSHTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("ssh connection failed")
+		return nil, fmt.Errorf("ssh connection failed: %v", err)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			_ = conn.Close()
-			return nil, fmt.Errorf("ssh connection failed")
+			return nil, fmt.Errorf("ssh connection failed: %v", err)
 		}
 	}
 
 	clientConn, channels, requests, err := ssh.NewClientConn(conn, address, clientConfig)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("ssh connection failed")
+		return nil, fmt.Errorf("ssh connection failed: %v", err)
 	}
 	_ = conn.SetDeadline(time.Time{})
 
