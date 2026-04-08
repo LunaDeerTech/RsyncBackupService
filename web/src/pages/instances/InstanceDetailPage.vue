@@ -1061,7 +1061,7 @@ const permissionOptions = [
                   </button>
                 </AppCard>
                 <AppCard>
-                  <div class="stat-card">
+                  <button class="stat-card stat-card--clickable" @click="activeTab = 'audit'">
                     <div class="stat-card__content">
                       <span class="stat-card__value" :style="{ color: successRateColor }">
                         {{ successRate !== null ? successRate + '%' : '--' }}
@@ -1070,7 +1070,7 @@ const permissionOptions = [
                       <span class="stat-card__sub">成功 {{ stats?.success_backup_count ?? 0 }} / 失败 {{ stats?.failure_backup_count ?? 0 }}</span>
                     </div>
                     <CheckCircle :size="22" class="stat-icon stat-icon--success" />
-                  </div>
+                  </button>
                 </AppCard>
                 <AppCard>
                   <div class="stat-card">

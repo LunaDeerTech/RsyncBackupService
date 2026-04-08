@@ -77,10 +77,18 @@ onUnmounted(() => {
 })
 
 // Trend chart helpers
+const showSuccess = ref(true)
+const showFailed = ref(true)
+
 const maxTrendValue = computed(() => {
   if (!trends.value?.backup_results?.length) return 1
   return Math.max(
-    ...trends.value.backup_results.map((d) => d.success + d.failed),
+    ...trends.value.backup_results.map((d) => {
+      let total = 0
+      if (showSuccess.value) total += d.success
+      if (showFailed.value) total += d.failed
+      return total
+    }),
     1,
   )
 })
@@ -89,6 +97,22 @@ function formatTrendDate(dateStr: string): string {
   const d = new Date(dateStr)
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
+
+// DR icon computed style – resolve actual color values to avoid CSS var nesting issues
+const drIconColorMap: Record<string, string> = {
+  safe: '#5dcc96',
+  caution: '#f5be58',
+  risk: '#f06060',
+  danger: '#d94343',
+}
+const drIconStyle = computed(() => {
+  const level = overview.value?.system_dr_level ?? ''
+  const color = drIconColorMap[level] || '#9ca3af'
+  return {
+    background: `color-mix(in srgb, ${color} 15%, transparent)`,
+    color,
+  }
+})
 
 // Instance health distribution
 const healthTotal = computed(() => {
@@ -218,7 +242,8 @@ const quickLinks = [
         </button>
 
         <div class="overview-card overview-card--static">
-          <div class="overview-card__icon" :style="{ background: `color-mix(in srgb, ${getDRLevelColor(overview?.system_dr_level ?? '')} 15%, transparent)`, color: getDRLevelColor(overview?.system_dr_level ?? '') }">
+          <div class="overview-card__icon"
+            :style="drIconStyle">
             <Shield :size="20" />
           </div>
           <div class="overview-card__content">
@@ -277,7 +302,7 @@ const quickLinks = [
           </AppCard>
 
           <!-- Risks -->
-          <AppCard title="风险提醒">
+          <AppCard title="风险提醒" class="risk-card">
             <div v-if="risks.length === 0" class="py-4">
               <AppEmpty message="暂无未解决风险" />
             </div>
@@ -314,28 +339,43 @@ const quickLinks = [
                   :key="day.date"
                   class="trend-chart__col"
                 >
-                  <div class="trend-chart__bar-group">
+                  <div class="trend-chart__stacked">
                     <div
-                      class="trend-chart__bar trend-chart__bar--success"
-                      :style="{ height: `${(day.success / maxTrendValue) * 100}%` }"
-                      :title="`成功: ${day.success}`"
-                    >
-                      <span v-if="day.success > 0" class="trend-chart__bar-label">{{ day.success }}</span>
-                    </div>
-                    <div
-                      class="trend-chart__bar trend-chart__bar--error"
+                      v-if="showFailed && day.failed > 0"
+                      class="trend-chart__seg trend-chart__seg--error"
                       :style="{ height: `${(day.failed / maxTrendValue) * 100}%` }"
                       :title="`失败: ${day.failed}`"
-                    >
-                      <span v-if="day.failed > 0" class="trend-chart__bar-label">{{ day.failed }}</span>
-                    </div>
+                    />
+                    <div
+                      v-if="showSuccess && day.success > 0"
+                      class="trend-chart__seg trend-chart__seg--success"
+                      :style="{ height: `${(day.success / maxTrendValue) * 100}%` }"
+                      :title="`成功: ${day.success}`"
+                    />
                   </div>
-                  <span class="trend-chart__date">{{ formatTrendDate(day.date) }}</span>
+                  <span class="trend-chart__total">
+                    {{ (showSuccess ? day.success : 0) + (showFailed ? day.failed : 0) }}
+                  </span>
                 </div>
               </div>
+              <div class="trend-chart__dates">
+                <span v-for="day in trends!.backup_results" :key="day.date" class="trend-chart__date">{{ formatTrendDate(day.date) }}</span>
+              </div>
               <div class="trend-chart__legend">
-                <span class="trend-chart__legend-item"><span class="dot dot--success" /> 成功</span>
-                <span class="trend-chart__legend-item"><span class="dot dot--error" /> 失败</span>
+                <button
+                  class="trend-chart__legend-btn"
+                  :class="{ 'trend-chart__legend-btn--off': !showSuccess }"
+                  @click="showSuccess = !showSuccess"
+                >
+                  <span class="dot dot--success" /> 成功
+                </button>
+                <button
+                  class="trend-chart__legend-btn"
+                  :class="{ 'trend-chart__legend-btn--off': !showFailed }"
+                  @click="showFailed = !showFailed"
+                >
+                  <span class="dot dot--error" /> 失败
+                </button>
               </div>
             </div>
           </AppCard>
@@ -651,6 +691,11 @@ const quickLinks = [
   color: var(--text-primary);
 }
 
+/* Risk card min height */
+.risk-card :deep(.app-card__body) {
+  min-height: 320px;
+}
+
 /* Risk list */
 .risk-list {
   display: flex;
@@ -707,47 +752,65 @@ const quickLinks = [
 .trend-chart {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 .trend-chart__bars {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   height: 160px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border-default);
 }
 .trend-chart__col {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   height: 100%;
 }
-.trend-chart__bar-group {
+.trend-chart__dates {
+  display: flex;
+  gap: 8px;
+  padding-top: 2px;
+}
+.trend-chart__dates .trend-chart__date {
+  flex: 1;
+  text-align: center;
+}
+.trend-chart__stacked {
   flex: 1;
   display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  width: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 60%;
+  min-width: 16px;
+  max-width: 40px;
 }
-.trend-chart__bar {
-  flex: 1;
+.trend-chart__seg {
   min-height: 2px;
-  border-radius: 3px 3px 0 0;
-  transition: height var(--transition-normal);
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  transition: height 0.4s ease;
 }
-.trend-chart__bar--success { background: var(--success-500); }
-.trend-chart__bar--error { background: var(--error-500); }
-.trend-chart__bar-label {
-  font-size: 10px;
+.trend-chart__seg--success {
+  background: var(--success-500);
+  border-radius: 0 0 3px 3px;
+}
+.trend-chart__seg--error {
+  background: var(--error-500);
+  border-radius: 3px 3px 0 0;
+}
+.trend-chart__seg:first-child:last-child.trend-chart__seg--success {
+  border-radius: 3px;
+}
+.trend-chart__seg:first-child:last-child.trend-chart__seg--error {
+  border-radius: 3px;
+}
+.trend-chart__total {
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-primary);
-  position: absolute;
-  top: -16px;
+  color: var(--text-secondary);
+  line-height: 1;
 }
 .trend-chart__date {
   font-size: 11px;
@@ -756,15 +819,32 @@ const quickLinks = [
 }
 .trend-chart__legend {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   justify-content: center;
+  margin-top: 12px;
 }
-.trend-chart__legend-item {
+.trend-chart__legend-btn {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
   color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: 9999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: opacity 0.2s, border-color 0.2s;
+  user-select: none;
+}
+.trend-chart__legend-btn:hover {
+  border-color: var(--primary-500);
+}
+.trend-chart__legend-btn--off {
+  opacity: 0.4;
+}
+.trend-chart__legend-btn--off .dot {
+  background: var(--text-muted) !important;
 }
 
 /* Dots */
