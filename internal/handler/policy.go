@@ -366,6 +366,7 @@ func (h *Handler) TriggerPolicy(w http.ResponseWriter, r *http.Request) {
 		"backup_id":      backup.ID,
 		"task_id":        task.ID,
 		"policy_id":      policy.ID,
+		"policy_name":    policy.Name,
 		"type":           policy.Type,
 		"trigger_source": backup.TriggerSource,
 	})

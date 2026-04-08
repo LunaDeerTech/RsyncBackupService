@@ -6,6 +6,8 @@ import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy }
 import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
 import type { RestoreRequest } from '../../api/backups'
 import { listInstanceAuditLogs } from '../../api/audit'
+import { getUpcomingTasks as fetchUpcomingTasksAPI, type UpcomingTask } from '../../api/dashboard'
+import { listTasks } from '../../api/tasks'
 import type { AuditLog, AuditLogParams } from '../../api/audit'
 import { listTargets } from '../../api/targets'
 import { listRemotes } from '../../api/remotes'
@@ -17,7 +19,7 @@ import { ApiBusinessError } from '../../api/client'
 import { formatBytes } from '../../utils/format'
 import { formatRelativeTime } from '../../utils/time'
 import { formatScheduleValue } from '../../utils/schedule'
-import { getActionLabel, actionOptions, formatAuditDetail } from '../../utils/audit'
+import { getActionLabel, actionOptions, formatAuditDetail, getActionBadgeVariant } from '../../utils/audit'
 import type { Instance, InstanceStats, Backup, UpdateInstanceRequest, PermissionItem, DisasterRecoveryScore } from '../../types/instance'
 import type { Policy, CreatePolicyRequest, UpdatePolicyRequest } from '../../types/policy'
 import type { BackupTarget } from '../../types/target'
@@ -42,7 +44,7 @@ import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRin
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
   Database, CheckCircle, HardDrive, Shield, Download, RotateCcw,
-  AlertTriangle,
+  AlertTriangle, Clock,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -256,6 +258,10 @@ const backupStatusLabel: Record<string, string> = {
   pending: '等待中',
 }
 
+// ── Task data (for overview) ──
+const instanceTasks = ref<{ id: number; type: string; status: string; progress: number; current_step: string }[]>([])
+const instanceUpcoming = ref<UpcomingTask[]>([])
+
 // ── Fetch core data ──
 async function fetchInstance() {
   pageLoading.value = true
@@ -346,10 +352,53 @@ async function fetchAuditLogs() {
   }
 }
 
+async function fetchInstanceTasks() {
+  try {
+    const res = await listTasks()
+    instanceTasks.value = (res.items ?? []).filter(t => t.instance_id === instanceId.value)
+  } catch {
+    // silent
+  }
+}
+
+async function fetchInstanceUpcoming() {
+  try {
+    const res = await fetchUpcomingTasksAPI()
+    instanceUpcoming.value = (res.items ?? []).filter(t => t.instance_id === instanceId.value)
+  } catch {
+    // silent
+  }
+}
+
+function formatFutureTime(dateStr: string): string {
+  const target = new Date(dateStr)
+  const now = new Date()
+  const diffMs = target.getTime() - now.getTime()
+  if (diffMs <= 0) return '即将执行'
+  const minutes = Math.floor(diffMs / 60000)
+  const hours = Math.floor(minutes / 60)
+  if (hours > 0) return `${hours} 小时 ${minutes % 60} 分钟后`
+  return `${minutes} 分钟后`
+}
+
+function taskTypeLabel(type: string): string {
+  return type === 'rolling' ? '滚动备份' : type === 'cold' ? '冷备份' : type
+}
+
+function taskStatusLabel(status: string): string {
+  switch (status) {
+    case 'running': return '运行中'
+    case 'queued': return '排队中'
+    default: return status
+  }
+}
+
 onMounted(async () => {
   await fetchInstance()
   fetchPolicies()
   fetchDR()
+  fetchInstanceTasks()
+  fetchInstanceUpcoming()
   if (authStore.isAdmin) {
     fetchTargets()
     fetchRemotes()
@@ -359,7 +408,7 @@ onMounted(async () => {
 
 // ── Watch tab changes ──
 watch(activeTab, (tab) => {
-  if (tab === 'overview') { fetchStats(); fetchDR() }
+  if (tab === 'overview') { fetchStats(); fetchDR(); fetchInstanceTasks(); fetchInstanceUpcoming() }
   if (tab === 'policies') fetchPolicies()
   if (tab === 'backups') { fetchBackups(); fetchPolicies() }
   if (tab === 'audit') fetchAuditLogs()
@@ -862,7 +911,8 @@ const permissionOptions = [
                 </div>
                 <div class="overview-info__item">
                   <span class="overview-info__label">数据源</span>
-                  <span class="overview-info__value">{{ sourceTypeLabel[instance.source_type] ?? instance.source_type }}: {{ instance.source_path }}</span>
+                  <span class="overview-info__value">{{ sourceTypeLabel[instance.source_type] ?? instance.source_type
+                    }}: {{ instance.source_path }}</span>
                 </div>
                 <div class="overview-info__item">
                   <span class="overview-info__label">状态</span>
@@ -876,13 +926,13 @@ const permissionOptions = [
             <!-- Stats cards -->
             <div class="stats-grid">
               <AppCard>
-                <div class="stat-card">
+                <button class="stat-card stat-card--clickable" @click="activeTab = 'backups'">
                   <Database :size="20" class="stat-icon stat-icon--primary" />
                   <div class="stat-card__content">
-                    <span class="stat-card__value">{{ stats?.backup_count ?? 0 }}</span>
-                    <span class="stat-card__label">备份总数</span>
+                    <span class="stat-card__value">{{ stats?.success_backup_count ?? 0 }}</span>
+                    <span class="stat-card__label">可用备份</span>
                   </div>
-                </div>
+                </button>
               </AppCard>
               <AppCard>
                 <div class="stat-card">
@@ -906,9 +956,11 @@ const permissionOptions = [
               </AppCard>
               <AppCard>
                 <div class="stat-card">
-                  <Shield :size="20" class="stat-icon" :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }" />
+                  <Shield :size="20" class="stat-icon"
+                    :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }" />
                   <div class="stat-card__content">
-                    <span class="stat-card__value" :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }">
+                    <span class="stat-card__value"
+                      :style="{ color: drScore ? getDRLevelColor(drScore.level) : 'var(--text-muted)' }">
                       {{ drScore ? Math.round(drScore.total) : '--' }}
                     </span>
                     <span class="stat-card__label">容灾率</span>
@@ -917,98 +969,153 @@ const permissionOptions = [
               </AppCard>
             </div>
 
-            <!-- Disaster Recovery Detail Card -->
-            <AppCard v-if="drScore" title="容灾评估">
-              <div class="dr-card">
-                <div class="dr-card__header">
-                  <!-- Ring chart -->
-                  <div class="dr-ring" :style="{ '--dr-ring-color': getDRLevelRingColor(drScore.level), '--dr-ring-pct': Math.round(drScore.total) }">
-                    <svg viewBox="0 0 36 36" class="dr-ring__svg">
-                      <path class="dr-ring__bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                      <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                    </svg>
-                    <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+            <!-- Disaster Recovery & Current Tasks row -->
+            <div class="overview-tasks-row">
+              <!-- Disaster Recovery Detail Card -->
+              <AppCard v-if="drScore" title="容灾评估">
+                <div class="dr-card">
+                  <div class="dr-card__header">
+                    <!-- Ring chart -->
+                    <div class="dr-ring"
+                      :style="{ '--dr-ring-color': getDRLevelRingColor(drScore.level), '--dr-ring-pct': Math.round(drScore.total) }">
+                      <svg viewBox="0 0 36 36" class="dr-ring__svg">
+                        <path class="dr-ring__bg"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                      </svg>
+                      <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+                    </div>
+                    <div class="dr-card__summary">
+                      <AppBadge :variant="getDRLevelBadgeVariant(drScore.level)">
+                        {{ getDRLevelLabel(drScore.level) }}
+                      </AppBadge>
+                    </div>
                   </div>
-                  <div class="dr-card__summary">
-                    <AppBadge :variant="getDRLevelBadgeVariant(drScore.level)">
-                      {{ getDRLevelLabel(drScore.level) }}
-                    </AppBadge>
-                  </div>
-                </div>
 
-                <!-- Sub-scores -->
-                <div class="dr-sub-scores">
-                  <div class="dr-sub-score">
-                    <div class="dr-sub-score__header">
-                      <span class="dr-sub-score__name">备份新鲜度</span>
-                      <span class="dr-sub-score__value">{{ Math.round(drScore.freshness) }}</span>
+                  <!-- Sub-scores -->
+                  <div class="dr-sub-scores">
+                    <div class="dr-sub-score">
+                      <div class="dr-sub-score__header">
+                        <span class="dr-sub-score__name">备份新鲜度</span>
+                        <span class="dr-sub-score__value">{{ Math.round(drScore.freshness) }}</span>
+                      </div>
+                      <div class="dr-sub-score__bar">
+                        <div class="dr-sub-score__fill" :style="{ width: drScore.freshness + '%' }" />
+                      </div>
                     </div>
-                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.freshness + '%' }" /></div>
-                  </div>
-                  <div class="dr-sub-score">
-                    <div class="dr-sub-score__header">
-                      <span class="dr-sub-score__name">恢复点可用性</span>
-                      <span class="dr-sub-score__value">{{ Math.round(drScore.recovery_points) }}</span>
+                    <div class="dr-sub-score">
+                      <div class="dr-sub-score__header">
+                        <span class="dr-sub-score__name">恢复点可用性</span>
+                        <span class="dr-sub-score__value">{{ Math.round(drScore.recovery_points) }}</span>
+                      </div>
+                      <div class="dr-sub-score__bar">
+                        <div class="dr-sub-score__fill" :style="{ width: drScore.recovery_points + '%' }" />
+                      </div>
                     </div>
-                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.recovery_points + '%' }" /></div>
-                  </div>
-                  <div class="dr-sub-score">
-                    <div class="dr-sub-score__header">
-                      <span class="dr-sub-score__name">冗余与隔离度</span>
-                      <span class="dr-sub-score__value">{{ Math.round(drScore.redundancy) }}</span>
+                    <div class="dr-sub-score">
+                      <div class="dr-sub-score__header">
+                        <span class="dr-sub-score__name">冗余与隔离度</span>
+                        <span class="dr-sub-score__value">{{ Math.round(drScore.redundancy) }}</span>
+                      </div>
+                      <div class="dr-sub-score__bar">
+                        <div class="dr-sub-score__fill" :style="{ width: drScore.redundancy + '%' }" />
+                      </div>
                     </div>
-                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.redundancy + '%' }" /></div>
-                  </div>
-                  <div class="dr-sub-score">
-                    <div class="dr-sub-score__header">
-                      <span class="dr-sub-score__name">执行稳定性</span>
-                      <span class="dr-sub-score__value">{{ Math.round(drScore.stability) }}</span>
+                    <div class="dr-sub-score">
+                      <div class="dr-sub-score__header">
+                        <span class="dr-sub-score__name">执行稳定性</span>
+                        <span class="dr-sub-score__value">{{ Math.round(drScore.stability) }}</span>
+                      </div>
+                      <div class="dr-sub-score__bar">
+                        <div class="dr-sub-score__fill" :style="{ width: drScore.stability + '%' }" />
+                      </div>
                     </div>
-                    <div class="dr-sub-score__bar"><div class="dr-sub-score__fill" :style="{ width: drScore.stability + '%' }" /></div>
                   </div>
-                </div>
 
-                <!-- Deductions -->
-                <div v-if="drScore.deductions && drScore.deductions.length > 0" class="dr-deductions">
-                  <div class="dr-deductions__title">扣分原因</div>
-                  <div v-for="(d, i) in drScore.deductions" :key="i" class="dr-deduction-item">
-                    <AlertTriangle :size="14" class="dr-deduction-item__icon" />
-                    <span>{{ d }}</span>
+                  <!-- Deductions -->
+                  <div v-if="drScore.deductions && drScore.deductions.length > 0" class="dr-deductions">
+                    <div class="dr-deductions__title">扣分原因</div>
+                    <div v-for="(d, i) in drScore.deductions" :key="i" class="dr-deduction-item">
+                      <AlertTriangle :size="14" class="dr-deduction-item__icon" />
+                      <span>{{ d }}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </AppCard>
+              </AppCard>
 
-            <!-- Recent backups mini table -->
-            <AppCard title="最近备份">
-              <template v-if="recentBackups.length > 0">
-                <div class="mini-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>时间</th>
-                        <th>类型</th>
-                        <th>状态</th>
-                        <th>大小</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="b in recentBackups" :key="b.id">
-                        <td>{{ b.completed_at ? formatRelativeTime(b.completed_at) : '--' }}</td>
-                        <td>{{ policyTypeLabel[b.type] ?? b.type }}</td>
-                        <td>
-                          <AppBadge :variant="backupStatusVariant[b.status] ?? 'default'">
-                            {{ backupStatusLabel[b.status] ?? b.status }}
-                          </AppBadge>
-                        </td>
-                        <td>{{ formatBytes(b.backup_size_bytes) }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+              <!-- Current tasks for this instance -->
+              <AppCard title="当前任务">
+                <div v-if="instanceTasks.length === 0" class="py-4">
+                  <AppEmpty message="暂无运行中任务" />
                 </div>
-              </template>
-              <AppEmpty v-else message="暂无备份记录" />
-            </AppCard>
+                <div v-else class="instance-task-list">
+                  <div v-for="t in instanceTasks" :key="t.id" class="instance-task-item">
+                    <div class="instance-task-item__info">
+                      <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">{{ taskStatusLabel(t.status) }}
+                      </AppBadge>
+                      <span class="instance-task-item__type">{{ taskTypeLabel(t.type) }}</span>
+                    </div>
+                    <span class="instance-task-item__step">{{ t.current_step || '--' }}</span>
+                    <span class="instance-task-item__progress">{{ t.progress }}%</span>
+                  </div>
+                </div>
+              </AppCard>
+            </div>
+
+            <!-- Recent backups & Upcoming tasks row -->
+            <div class="overview-tasks-row">
+              <!-- Recent backups mini table -->
+              <AppCard title="最近备份">
+                <template v-if="recentBackups.length > 0">
+                  <div class="mini-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>时间</th>
+                          <th>类型</th>
+                          <th>状态</th>
+                          <th>大小</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="b in recentBackups" :key="b.id">
+                          <td>{{ b.completed_at ? formatRelativeTime(b.completed_at) : '--' }}</td>
+                          <td>{{ policyTypeLabel[b.type] ?? b.type }}</td>
+                          <td>
+                            <AppBadge :variant="backupStatusVariant[b.status] ?? 'default'">
+                              {{ backupStatusLabel[b.status] ?? b.status }}
+                            </AppBadge>
+                          </td>
+                          <td>{{ formatBytes(b.backup_size_bytes) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+                <AppEmpty v-else message="暂无备份记录" />
+              </AppCard>
+
+              <!-- Upcoming tasks for this instance -->
+              <AppCard title="即将执行的任务">
+                <div v-if="instanceUpcoming.length === 0" class="py-4">
+                  <AppEmpty message="暂无计划任务" />
+                </div>
+                <div v-else class="instance-upcoming-list">
+                  <div v-for="task in instanceUpcoming" :key="task.policy_id" class="instance-upcoming-item">
+                    <div class="instance-upcoming-item__info">
+                      <span class="instance-upcoming-item__name">{{ task.policy_name }}</span>
+                      <AppBadge :variant="task.type === 'cold' ? 'info' : 'default'">{{ taskTypeLabel(task.type) }}
+                      </AppBadge>
+                    </div>
+                    <span class="instance-upcoming-item__time">
+                      <Clock :size="12" />
+                      {{ formatFutureTime(task.next_run_at) }}
+                    </span>
+                  </div>
+                </div>
+              </AppCard>
+            </div>
           </div>
         </template>
 
@@ -1039,11 +1146,8 @@ const permissionOptions = [
                 </template>
 
                 <template #cell-enabled="{ row }">
-                  <AppSwitch
-                    :model-value="row.enabled as boolean"
-                    :disabled="!authStore.isAdmin"
-                    @update:model-value="handleTogglePolicy(row, $event)"
-                  />
+                  <AppSwitch :model-value="row.enabled as boolean" :disabled="!authStore.isAdmin"
+                    @update:model-value="handleTogglePolicy(row, $event)" />
                 </template>
 
                 <template #cell-last_execution="{ row }">
@@ -1078,7 +1182,8 @@ const permissionOptions = [
         <template #tab-backups>
           <div class="tab-content">
             <div class="tab-table">
-              <AppTable :columns="backupColumns" :data="(backups as unknown as Record<string, unknown>[])" :loading="backupLoading">
+              <AppTable :columns="backupColumns" :data="(backups as unknown as Record<string, unknown>[])"
+                :loading="backupLoading">
                 <template #cell-completed_at="{ row }">
                   {{ row.completed_at ? formatRelativeTime(row.completed_at as string) : '--' }}
                 </template>
@@ -1106,22 +1211,12 @@ const permissionOptions = [
                     <AppButton variant="ghost" size="sm" @click="openBackupDetail(row)">
                       详情
                     </AppButton>
-                    <AppButton
-                      v-if="authStore.isAdmin"
-                      variant="ghost"
-                      size="sm"
-                      @click="openRestoreModal(row)"
-                    >
+                    <AppButton v-if="authStore.isAdmin" variant="ghost" size="sm" @click="openRestoreModal(row)">
                       <RotateCcw :size="14" style="margin-right: 2px" />
                       恢复
                     </AppButton>
-                    <AppButton
-                      v-if="row.type === 'cold'"
-                      variant="ghost"
-                      size="sm"
-                      :loading="downloadingBackupId === (row.id as number)"
-                      @click="handleDownload(row)"
-                    >
+                    <AppButton v-if="row.type === 'cold'" variant="ghost" size="sm"
+                      :loading="downloadingBackupId === (row.id as number)" @click="handleDownload(row)">
                       <Download :size="14" style="margin-right: 2px" />
                       下载
                     </AppButton>
@@ -1132,21 +1227,12 @@ const permissionOptions = [
 
             <!-- Pagination -->
             <div v-if="backupTotal > backupPageSize" class="backup-pagination">
-              <AppButton
-                variant="outline"
-                size="sm"
-                :disabled="backupPage <= 1"
-                @click="backupPage--; fetchBackups()"
-              >
+              <AppButton variant="outline" size="sm" :disabled="backupPage <= 1" @click="backupPage--; fetchBackups()">
                 上一页
               </AppButton>
               <span class="text-muted">第 {{ backupPage }} 页 / 共 {{ Math.ceil(backupTotal / backupPageSize) }} 页</span>
-              <AppButton
-                variant="outline"
-                size="sm"
-                :disabled="backupPage >= Math.ceil(backupTotal / backupPageSize)"
-                @click="backupPage++; fetchBackups()"
-              >
+              <AppButton variant="outline" size="sm" :disabled="backupPage >= Math.ceil(backupTotal / backupPageSize)"
+                @click="backupPage++; fetchBackups()">
                 下一页
               </AppButton>
             </div>
@@ -1160,65 +1246,46 @@ const permissionOptions = [
             <div class="audit-filters">
               <div class="audit-filter-item">
                 <label class="audit-filter-label">开始日期</label>
-                <input
-                  type="date"
-                  class="audit-date-input"
-                  v-model="auditStartDate"
-                  @change="auditPage = 1; fetchAuditLogs()"
-                />
+                <input type="date" class="audit-date-input" v-model="auditStartDate"
+                  @change="auditPage = 1; fetchAuditLogs()" />
               </div>
               <div class="audit-filter-item">
                 <label class="audit-filter-label">结束日期</label>
-                <input
-                  type="date"
-                  class="audit-date-input"
-                  v-model="auditEndDate"
-                  @change="auditPage = 1; fetchAuditLogs()"
-                />
+                <input type="date" class="audit-date-input" v-model="auditEndDate"
+                  @change="auditPage = 1; fetchAuditLogs()" />
               </div>
               <div class="audit-filter-item">
                 <label class="audit-filter-label">操作类型</label>
-                <AppSelect
-                  :model-value="auditAction"
-                  :options="actionOptions"
-                  placeholder="全部"
-                  @update:model-value="(v: string | number) => { auditAction = v; auditPage = 1; fetchAuditLogs() }"
-                />
+                <AppSelect :model-value="auditAction" :options="actionOptions" placeholder="全部"
+                  @update:model-value="(v: string | number) => { auditAction = v; auditPage = 1; fetchAuditLogs() }" />
               </div>
             </div>
 
             <!-- Table -->
             <div class="tab-table">
-              <AppTable
-                :columns="auditColumns"
-                :data="(auditLogs as unknown as Record<string, unknown>[])"
-                :loading="auditLoading"
-              >
+              <AppTable :columns="auditColumns" :data="(auditLogs as unknown as Record<string, unknown>[])"
+                :loading="auditLoading">
                 <template #cell-created_at="{ row }">
                   {{ new Date(row.created_at as string).toLocaleString('zh-CN') }}
                 </template>
                 <template #cell-action="{ row }">
-                  <AppBadge variant="default">{{ getActionLabel(row.action as string) }}</AppBadge>
+                  <AppBadge :variant="getActionBadgeVariant(row.action as string)">{{ getActionLabel(row.action as string) }}</AppBadge>
                 </template>
                 <template #cell-user="{ row }">
                   <span>{{ row.user_name || '-' }}</span>
                   <span v-if="row.user_email" class="audit-email">{{ row.user_email }}</span>
                 </template>
                 <template #cell-detail="{ row }">
-                  <span class="audit-detail">{{ formatAuditDetail(row.action as string, row.detail as Record<string, any>) }}</span>
+                  <span class="audit-detail">{{ formatAuditDetail(row.action as string, row.detail as Record<string,
+                      any>) }}</span>
                 </template>
               </AppTable>
             </div>
 
             <!-- Pagination -->
-            <AppPagination
-              v-if="auditTotal > 0"
-              :page="auditPage"
-              :page-size="auditPageSize"
-              :total="auditTotal"
+            <AppPagination v-if="auditTotal > 0" :page="auditPage" :page-size="auditPageSize" :total="auditTotal"
               @update:page="(p: number) => { auditPage = p; fetchAuditLogs() }"
-              @update:page-size="(s: number) => { auditPageSize = s; auditPage = 1; fetchAuditLogs() }"
-            />
+              @update:page-size="(s: number) => { auditPageSize = s; auditPage = 1; fetchAuditLogs() }" />
           </div>
         </template>
 
@@ -1238,12 +1305,8 @@ const permissionOptions = [
                   <AppFormItem label="数据源路径" :required="true" :error="settingsErrors.source_path">
                     <AppInput v-model="settingsForm.source_path" />
                   </AppFormItem>
-                  <AppFormItem
-                    v-if="settingsForm.source_type === 'ssh'"
-                    label="关联远程配置"
-                    :required="true"
-                    :error="settingsErrors.remote_config_id"
-                  >
+                  <AppFormItem v-if="settingsForm.source_type === 'ssh'" label="关联远程配置" :required="true"
+                    :error="settingsErrors.remote_config_id">
                     <AppSelect v-model="settingsForm.remote_config_id" :options="remoteOptions" placeholder="请选择远程配置" />
                   </AppFormItem>
                 </AppFormGroup>
@@ -1266,11 +1329,8 @@ const permissionOptions = [
                       <span class="permission-user__name">{{ u.name }}</span>
                       <span class="permission-user__email">{{ u.email }}</span>
                     </div>
-                    <AppSelect
-                      :model-value="permissionMap[u.id] ?? 'none'"
-                      :options="permissionOptions"
-                      @update:model-value="permissionMap[u.id] = $event as string"
-                    />
+                    <AppSelect :model-value="permissionMap[u.id] ?? 'none'" :options="permissionOptions"
+                      @update:model-value="permissionMap[u.id] = $event as string" />
                   </div>
                 </div>
                 <div class="settings-actions">
@@ -1308,7 +1368,8 @@ const permissionOptions = [
           </AppFormItem>
 
           <!-- Interval input: number + unit -->
-          <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true" :error="policyErrors.schedule_input">
+          <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true"
+            :error="policyErrors.schedule_input">
             <div class="schedule-interval-row">
               <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
               <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
@@ -1316,7 +1377,8 @@ const permissionOptions = [
           </AppFormItem>
 
           <!-- Custom cron input -->
-          <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true" :error="policyErrors.schedule_input">
+          <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true"
+            :error="policyErrors.schedule_input">
             <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
           </AppFormItem>
 
@@ -1324,8 +1386,10 @@ const permissionOptions = [
             <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
           </AppFormItem>
 
-          <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true" :error="policyErrors.retention_value">
-            <AppInput v-model="policyForm.retention_value" type="number" :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
+          <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true"
+            :error="policyErrors.retention_value">
+            <AppInput v-model="policyForm.retention_value" type="number"
+              :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
           </AppFormItem>
 
           <AppFormItem label="启用">
@@ -1344,15 +1408,18 @@ const permissionOptions = [
               <AppSwitch v-model="policyForm.encryption" />
             </AppFormItem>
 
-            <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing" :error="policyErrors.encryption_key">
-              <AppInput v-model="policyForm.encryption_key" type="password" :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
+            <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
+              :error="policyErrors.encryption_key">
+              <AppInput v-model="policyForm.encryption_key" type="password"
+                :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
             </AppFormItem>
 
             <AppFormItem label="分卷">
               <AppSwitch v-model="policyForm.split_enabled" />
             </AppFormItem>
 
-            <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true" :error="policyErrors.split_size_mb">
+            <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
+              :error="policyErrors.split_size_mb">
               <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
             </AppFormItem>
           </template>
@@ -1450,22 +1517,14 @@ const permissionOptions = [
           </div>
 
           <!-- Target path -->
-          <AppFormItem
-            v-if="restoreForm.restore_type === 'custom'"
-            label="目标路径"
-            :required="true"
-            :error="restoreFormErrors.target_path"
-          >
+          <AppFormItem v-if="restoreForm.restore_type === 'custom'" label="目标路径" :required="true"
+            :error="restoreFormErrors.target_path">
             <AppInput v-model="restoreForm.target_path" placeholder="如 /data/restore/" />
           </AppFormItem>
 
           <!-- Encryption key (for encrypted cold backups) -->
-          <AppFormItem
-            v-if="restoreBackupTarget && isEncryptedCold(restoreBackupTarget)"
-            label="加密密钥"
-            :required="true"
-            :error="restoreFormErrors.encryption_key"
-          >
+          <AppFormItem v-if="restoreBackupTarget && isEncryptedCold(restoreBackupTarget)" label="加密密钥" :required="true"
+            :error="restoreFormErrors.encryption_key">
             <AppInput v-model="restoreForm.encryption_key" type="password" placeholder="输入备份加密时使用的密钥" />
           </AppFormItem>
 
@@ -1490,13 +1549,8 @@ const permissionOptions = [
       <template #footer>
         <div class="modal-footer">
           <AppButton variant="outline" size="md" @click="restoreModalVisible = false">取消</AppButton>
-          <AppButton
-            variant="danger"
-            size="md"
-            :loading="restoreSubmitting"
-            :disabled="restoreSubmitDisabled"
-            @click="handleRestoreSubmit"
-          >
+          <AppButton variant="danger" size="md" :loading="restoreSubmitting" :disabled="restoreSubmitDisabled"
+            @click="handleRestoreSubmit">
             确认恢复
           </AppButton>
         </div>
@@ -1513,31 +1567,37 @@ const permissionOptions = [
   flex-direction: column;
   gap: 20px;
 }
+
 .instance-detail-page__header {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .instance-detail-page__title {
   font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
 }
+
 .instance-detail-page__loading {
   text-align: center;
   padding: 60px 0;
   color: var(--text-muted);
 }
+
 .tab-content {
   display: flex;
   flex-direction: column;
   gap: 20px;
   padding-top: 16px;
 }
+
 .tab-header {
   display: flex;
   justify-content: flex-end;
 }
+
 .tab-table {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
@@ -1550,49 +1610,70 @@ const permissionOptions = [
   flex-wrap: wrap;
   gap: 24px;
 }
+
 .overview-info__item {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+
 .overview-info__label {
   font-size: 12px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
 .overview-info__value {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
 }
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
 }
+
 .stat-card {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .stat-icon {
   flex-shrink: 0;
 }
-.stat-icon--primary { color: var(--primary-500); }
-.stat-icon--success { color: var(--success-500); }
-.stat-icon--info { color: var(--primary-600); }
-.stat-icon--muted { color: var(--text-muted); }
+
+.stat-icon--primary {
+  color: var(--primary-500);
+}
+
+.stat-icon--success {
+  color: var(--success-500);
+}
+
+.stat-icon--info {
+  color: var(--primary-600);
+}
+
+.stat-icon--muted {
+  color: var(--text-muted);
+}
+
 .stat-card__content {
   display: flex;
   flex-direction: column;
 }
+
 .stat-card__value {
   font-size: 22px;
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.2;
 }
+
 .stat-card__label {
   font-size: 12px;
   color: var(--text-muted);
@@ -1603,11 +1684,13 @@ const permissionOptions = [
 .mini-table {
   overflow-x: auto;
 }
+
 .mini-table table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
+
 .mini-table th {
   text-align: left;
   padding: 8px 12px;
@@ -1615,11 +1698,13 @@ const permissionOptions = [
   font-weight: 500;
   border-bottom: 1px solid var(--border-default);
 }
+
 .mini-table td {
   padding: 8px 12px;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-default);
 }
+
 .mini-table tr:last-child td {
   border-bottom: none;
 }
@@ -1630,32 +1715,38 @@ const permissionOptions = [
   flex-direction: column;
   gap: 20px;
 }
+
 .dr-card__header {
   display: flex;
   align-items: center;
   gap: 16px;
 }
+
 .dr-card__summary {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+
 .dr-ring {
   position: relative;
   width: 80px;
   height: 80px;
   flex-shrink: 0;
 }
+
 .dr-ring__svg {
   width: 100%;
   height: 100%;
   transform: rotate(-90deg);
 }
+
 .dr-ring__bg {
   fill: none;
   stroke: var(--border-default);
   stroke-width: 3;
 }
+
 .dr-ring__fg {
   fill: none;
   stroke: var(--dr-ring-color);
@@ -1663,6 +1754,7 @@ const permissionOptions = [
   stroke-linecap: round;
   transition: stroke-dasharray 0.6s ease;
 }
+
 .dr-ring__value {
   position: absolute;
   inset: 0;
@@ -1673,49 +1765,58 @@ const permissionOptions = [
   font-weight: 700;
   color: var(--text-primary);
 }
+
 .dr-sub-scores {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px 24px;
 }
+
 .dr-sub-score__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
 }
+
 .dr-sub-score__name {
   font-size: 13px;
   color: var(--text-secondary);
 }
+
 .dr-sub-score__value {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
+
 .dr-sub-score__bar {
   height: 6px;
   background: var(--surface-sunken);
   border-radius: 3px;
   overflow: hidden;
 }
+
 .dr-sub-score__fill {
   height: 100%;
   background: var(--primary-500);
   border-radius: 3px;
   transition: width 0.4s ease;
 }
+
 .dr-deductions {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
+
 .dr-deductions__title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
   margin-bottom: 2px;
 }
+
 .dr-deduction-item {
   display: flex;
   align-items: flex-start;
@@ -1724,6 +1825,7 @@ const permissionOptions = [
   color: var(--text-secondary);
   line-height: 1.4;
 }
+
 .dr-deduction-item__icon {
   flex-shrink: 0;
   color: var(--warning-500);
@@ -1741,10 +1843,12 @@ const permissionOptions = [
   border-radius: 9999px;
   white-space: nowrap;
 }
+
 .policy-type-badge--rolling {
   background: color-mix(in srgb, #3b82f6 15%, transparent);
   color: #3b82f6;
 }
+
 .policy-type-badge--cold {
   background: color-mix(in srgb, #8b5cf6 15%, transparent);
   color: #8b5cf6;
@@ -1755,6 +1859,7 @@ const permissionOptions = [
   display: flex;
   gap: 4px;
 }
+
 .last-exec-time {
   font-size: 12px;
   color: var(--text-muted);
@@ -1767,11 +1872,13 @@ const permissionOptions = [
   justify-content: flex-end;
   margin-top: 16px;
 }
+
 .permission-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
+
 .permission-row {
   display: flex;
   align-items: center;
@@ -1780,19 +1887,23 @@ const permissionOptions = [
   padding: 8px 0;
   border-bottom: 1px solid var(--border-default);
 }
+
 .permission-row:last-child {
   border-bottom: none;
 }
+
 .permission-user {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+
 .permission-user__name {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
 }
+
 .permission-user__email {
   font-size: 12px;
   color: var(--text-muted);
@@ -1803,14 +1914,17 @@ const permissionOptions = [
   color: var(--text-muted);
   font-size: 13px;
 }
+
 .text-error {
   color: var(--error-500);
 }
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
+
 .form-divider {
   font-size: 13px;
   font-weight: 600;
@@ -1819,14 +1933,17 @@ const permissionOptions = [
   border-top: 1px solid var(--border-default);
   margin-top: 4px;
 }
+
 .schedule-interval-row {
   display: flex;
   gap: 8px;
 }
-.schedule-interval-row > :first-child {
+
+.schedule-interval-row> :first-child {
   flex: 1;
 }
-.schedule-interval-row > :last-child {
+
+.schedule-interval-row> :last-child {
   width: 100px;
   flex-shrink: 0;
 }
@@ -1837,28 +1954,34 @@ const permissionOptions = [
   grid-template-columns: 1fr 1fr;
   gap: 12px 24px;
 }
+
 .backup-detail__item {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+
 .backup-detail__item--wide {
   grid-column: 1 / -1;
 }
+
 .backup-detail__label {
   font-size: 12px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
 .backup-detail__value {
   font-size: 13px;
   color: var(--text-primary);
   word-break: break-all;
 }
+
 .backup-detail__value--error {
   color: var(--error-500);
 }
+
 .backup-detail__pre {
   font-size: 12px;
   font-family: monospace;
@@ -1872,6 +1995,7 @@ const permissionOptions = [
   word-break: break-all;
   overflow-x: auto;
 }
+
 .backup-pagination {
   display: flex;
   align-items: center;
@@ -1886,6 +2010,7 @@ const permissionOptions = [
   flex-direction: column;
   gap: 8px;
 }
+
 .restore-type-option {
   display: flex;
   align-items: center;
@@ -1894,9 +2019,11 @@ const permissionOptions = [
   color: var(--text-primary);
   cursor: pointer;
 }
+
 .restore-type-option input[type="radio"] {
   accent-color: var(--primary-500);
 }
+
 .restore-warning {
   background: color-mix(in srgb, var(--warning-500) 10%, transparent);
   color: var(--warning-500);
@@ -1905,6 +2032,7 @@ const permissionOptions = [
   padding: 8px 12px;
   font-size: 13px;
 }
+
 .restore-danger-zone {
   background: color-mix(in srgb, var(--error-500) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--error-500) 20%, transparent);
@@ -1914,12 +2042,14 @@ const permissionOptions = [
   flex-direction: column;
   gap: 12px;
 }
+
 .restore-danger-zone__hint {
   font-size: 13px;
   color: var(--text-secondary);
   margin: 0;
   line-height: 1.5;
 }
+
 .restore-danger-zone__hint code {
   font-weight: 600;
   color: var(--text-primary);
@@ -1927,6 +2057,7 @@ const permissionOptions = [
   padding: 1px 4px;
   border-radius: var(--radius-sm);
 }
+
 .restore-error {
   color: var(--error-500);
   font-size: 13px;
@@ -1943,17 +2074,20 @@ const permissionOptions = [
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
+
 .audit-filter-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 160px;
 }
+
 .audit-filter-label {
   font-size: 13px;
   color: var(--text-secondary);
   font-weight: 500;
 }
+
 .audit-date-input {
   padding: 8px 12px;
   font-size: 14px;
@@ -1966,19 +2100,129 @@ const permissionOptions = [
   transition: border-color 0.15s;
   color-scheme: light;
 }
+
 :root[data-theme="dark"] .audit-date-input {
   color-scheme: dark;
 }
+
 .audit-date-input:focus {
   border-color: var(--primary-500);
 }
+
 .audit-email {
   display: block;
   font-size: 12px;
   color: var(--text-muted);
 }
+
 .audit-detail {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* Stat card clickable */
+.stat-card--clickable {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.stat-card--clickable:hover .stat-card__label {
+  color: var(--primary-500);
+}
+
+/* Overview tasks row */
+.overview-tasks-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 767px) {
+  .overview-tasks-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.instance-task-list,
+.instance-upcoming-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.instance-task-item,
+.instance-upcoming-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+
+.instance-task-item:last-child,
+.instance-upcoming-item:last-child {
+  border-bottom: none;
+}
+
+.instance-task-item__info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.instance-task-item__type {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.instance-task-item__step {
+  flex: 1;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-task-item__progress {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.instance-upcoming-item__info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.instance-upcoming-item__name {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-upcoming-item__time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.py-4 {
+  padding-top: 16px;
+  padding-bottom: 16px;
 }
 </style>

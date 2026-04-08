@@ -23,10 +23,22 @@ export const actionLabels: Record<string, string> = {
   'remote.update': '编辑远程配置',
   'remote.delete': '删除远程配置',
   'system.config.update': '更新系统配置',
+  'risk.create': '风险检测',
+  'risk.escalate': '风险升级',
+  'risk.resolve': '风险解决',
 }
 
 export function getActionLabel(action: string): string {
   return actionLabels[action] ?? action
+}
+
+export function getActionBadgeVariant(action: string): 'success' | 'warning' | 'error' | 'info' | 'default' {
+  if (action.endsWith('.fail') || action === 'backup.cleanup_failed') return 'error'
+  if (action === 'risk.create' || action === 'risk.escalate') return 'error'
+  if (action.endsWith('.delete')) return 'warning'
+  if (action.endsWith('.complete') || action === 'risk.resolve') return 'success'
+  if (action.endsWith('.create') || action.endsWith('.trigger')) return 'info'
+  return 'default'
 }
 
 export const actionOptions = [
@@ -38,9 +50,30 @@ const backupTypeLabels: Record<string, string> = { rolling: '滚动', cold: '冷
 const sourceTypeLabels: Record<string, string> = { local: '本地', ssh: 'SSH' }
 const triggerLabels: Record<string, string> = { manual: '手动', scheduled: '定时' }
 
+const riskSourceLabels: Record<string, string> = {
+  backup_failure: '备份失败',
+  target_unreachable: '目标不可达',
+  low_dr_score: '容灾率低',
+  no_recent_backup: '长期未备份',
+  target_capacity_low: '目标容量不足',
+  backup_overdue: '备份超期',
+}
+
+const severityLabels: Record<string, string> = {
+  critical: '严重',
+  high: '高',
+  medium: '中',
+  low: '低',
+}
+
 function fmt(key: string, val: unknown): string {
   if (val === undefined || val === null || val === '') return ''
   return `${key}: ${val}`
+}
+
+function fmtId(label: string, id: unknown): string {
+  if (id === undefined || id === null) return ''
+  return `${label} (#${id})`
 }
 
 export function formatAuditDetail(action: string, detail: Record<string, any>): string {
@@ -59,19 +92,21 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.name) parts.push(fmt('策略', detail.name))
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
     if (detail.schedule_type) parts.push(fmt('调度', detail.schedule_type))
-    if (detail.target_id) parts.push(fmt('目标ID', detail.target_id))
+    if (detail.target_id) parts.push(fmtId('目标', detail.target_id))
     if (detail.enabled !== undefined) parts.push(fmt('启用', detail.enabled ? '是' : '否'))
     if (detail.retention_type) parts.push(fmt('保留策略', detail.retention_type === 'count' ? '按数量' : '按时间'))
     if (detail.retention_value) parts.push(fmt('保留值', detail.retention_value))
   } else if (action === 'backup.trigger') {
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
     if (detail.trigger_source) parts.push(fmt('触发方式', triggerLabels[detail.trigger_source] ?? detail.trigger_source))
-    if (detail.policy_id) parts.push(fmt('策略ID', detail.policy_id))
-    if (detail.backup_id) parts.push(fmt('备份ID', detail.backup_id))
+    if (detail.policy_name) parts.push(fmt('策略', `${detail.policy_name} (#${detail.policy_id})`))
+    else if (detail.policy_id) parts.push(fmtId('策略', detail.policy_id))
+    if (detail.backup_id) parts.push(fmtId('备份', detail.backup_id))
   } else if (action === 'backup.complete' || action === 'backup.fail') {
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
     if (detail.trigger_source) parts.push(fmt('触发方式', triggerLabels[detail.trigger_source] ?? detail.trigger_source))
-    if (detail.policy_id) parts.push(fmt('策略ID', detail.policy_id))
+    if (detail.policy_name) parts.push(fmt('策略', `${detail.policy_name} (#${detail.policy_id})`))
+    else if (detail.policy_id) parts.push(fmtId('策略', detail.policy_id))
     if (detail.duration_seconds != null) {
       const dur = Number(detail.duration_seconds)
       if (dur >= 60) parts.push(fmt('耗时', `${Math.floor(dur / 60)}分${dur % 60}秒`))
@@ -80,7 +115,7 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.error_message) parts.push(fmt('错误', detail.error_message))
   } else if (action === 'backup.download') {
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
-    if (detail.backup_id) parts.push(fmt('备份ID', detail.backup_id))
+    if (detail.backup_id) parts.push(fmtId('备份', detail.backup_id))
   } else if (action === 'backup.cleanup_failed') {
     // detail may be a plain string from retention cleaner
     return String(detail)
@@ -88,7 +123,9 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.backup_type) parts.push(fmt('备份类型', backupTypeLabels[detail.backup_type] ?? detail.backup_type))
     if (detail.restore_type) parts.push(fmt('恢复类型', detail.restore_type === 'source' ? '原路径' : '自定义'))
     if (detail.target_path) parts.push(fmt('目标路径', detail.target_path))
-    if (detail.backup_id) parts.push(fmt('备份ID', detail.backup_id))
+    if (detail.policy_name) parts.push(fmt('策略', `${detail.policy_name} (#${detail.policy_id})`))
+    else if (detail.policy_id) parts.push(fmtId('策略', detail.policy_id))
+    if (detail.backup_id) parts.push(fmtId('备份', detail.backup_id))
     if (detail.duration_seconds != null) {
       const dur = Number(detail.duration_seconds)
       if (dur >= 60) parts.push(fmt('耗时', `${Math.floor(dur / 60)}分${dur % 60}秒`))
@@ -111,6 +148,16 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.host) parts.push(fmt('主机', detail.host))
     if (detail.port) parts.push(fmt('端口', detail.port))
     if (detail.username) parts.push(fmt('用户名', detail.username))
+  } else if (action.startsWith('risk.')) {
+    if (detail.message) parts.push(detail.message)
+    if (detail.source) parts.push(fmt('来源', riskSourceLabels[detail.source] ?? detail.source))
+    if (detail.severity) parts.push(fmt('级别', severityLabels[detail.severity] ?? detail.severity))
+    if (action === 'risk.escalate') {
+      if (detail.from_severity && detail.to_severity) {
+        parts.push(`${severityLabels[detail.from_severity] ?? detail.from_severity} → ${severityLabels[detail.to_severity] ?? detail.to_severity}`)
+      }
+    }
+    if (detail.risk_event_id) parts.push(fmtId('事件', detail.risk_event_id))
   }
 
   if (parts.length === 0) {

@@ -343,6 +343,11 @@ func (wp *WorkerPool) writeBackupAudit(ctx context.Context, task *model.Task, fa
 		"trigger_source":   backup.TriggerSource,
 		"duration_seconds": backup.DurationSeconds,
 	}
+	if policyID > 0 {
+		if p, err := wp.db.GetPolicyByID(policyID); err == nil && p != nil {
+			detail["policy_name"] = p.Name
+		}
+	}
 	if strings.TrimSpace(backup.ErrorMessage) != "" {
 		detail["error_message"] = backup.ErrorMessage
 	}
@@ -391,6 +396,11 @@ func (wp *WorkerPool) writeRestoreAudit(ctx context.Context, task *model.Task, b
 		"restore_type":     task.RestoreType,
 		"target_path":      task.TargetPath,
 		"duration_seconds": durationSeconds,
+	}
+	if policyID > 0 {
+		if p, err := wp.db.GetPolicyByID(policyID); err == nil && p != nil {
+			detail["policy_name"] = p.Name
+		}
 	}
 	if strings.TrimSpace(task.ErrorMessage) != "" {
 		detail["error_message"] = task.ErrorMessage
