@@ -1,10 +1,6 @@
 services:
   rbs:
-    build:
-      context: .
-      args:
-        GOPROXY: ${RBS_GOPROXY:-https://proxy.golang.org,direct}
-    # image: rbs:latest
+    image: ghcr.io/lunadeertech/rsyncbackupservice:latest
     env_file:
       - .env
     ports:

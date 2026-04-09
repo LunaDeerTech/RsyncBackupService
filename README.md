@@ -1,83 +1,109 @@
-# Rsync Backup Service (RBS)
+<div align="center">
 
-基于 rsync 的自托管备份管理系统，提供滚动增量备份、冷全量备份、恢复、风险检测、通知和权限管理等完整闭环能力，并内置响应式 Web 管理界面。
+<p>
+	<img src="web/public/brand/logo-final.svg" alt="Rsync Backup Service logo" width="96" />
+</p>
 
-## 功能特性
+<h1>Rsync Backup Service (RBS)</h1>
 
-- 滚动增量备份，基于 rsync `--link-dest` 管理快照
-- 冷全量备份，支持压缩、加密和下载
-- 计划调度，支持 Interval 与 Cron 策略
-- 备份恢复，支持滚动备份和加密冷备份恢复
-- 容灾率评估与风险事件检测
-- 邮件通知与测试发送
-- 审计日志与操作留痕
-- 用户权限管理与实例授权
-- 响应式 Web 界面与浅色/深色主题
+<p><strong>让自托管备份，不止能跑，还能看、能管、能恢复。</strong></p>
 
-## 系统要求
+<p>🌀 滚动增量备份 · 🧊 冷全量备份 · ♻️ 恢复与下载 · 🚨 风险预警 · 🔐 权限审计 · ☁️ 云盘支持</p>
 
-- Go 1.22+
-- Node.js 20+
-- npm 10+
-- rsync 3.1+
-- openssh-client，用于 SSH 远程源和目标场景
-- Docker 24+ 与 Docker Compose v2，可选
+<p>
+	<img src="https://img.shields.io/badge/self--hosted-ready-1f6feb?style=for-the-badge" alt="self-hosted ready" />
+	<img src="https://img.shields.io/badge/rsync-powered-2ea043?style=for-the-badge" alt="rsync powered" />
+	<img src="https://img.shields.io/badge/web-dashboard-f59e0b?style=for-the-badge" alt="web dashboard" />
+	<img src="https://img.shields.io/badge/restore-built--in-e85aad?style=for-the-badge" alt="restore built in" />
+	<img src="https://img.shields.io/badge/cloud-support-00bfff?style=for-the-badge" alt="cloud support" />
+</p>
 
-## 快速启动
+</div>
 
-### 二进制运行
+RBS 是一套面向真实运维场景的备份管理系统。它把备份执行、恢复流程、风险感知、权限控制和审计追踪整合进一个 Web 控制台，让备份从“有脚本能跑”升级为“有系统能管”。
 
-1. 复制环境变量模板并修改密钥：
+## ✨ 核心亮点
+
+- 🌀 **备份模式：** 支持滚动增量备份、冷全量备份、本地与 SSH 异地备份，以及面向不同业务场景的多种备份策略。
+- ⏱ **任务调度：** 支持手动触发、Cron / Interval 定时执行、自动保留清理，减少人工值守成本。
+- ♻️ **恢复能力：** 支持原地恢复、自定义路径恢复、加密冷备恢复和下载，让备份真正具备可用性。
+- 🚨 **风险感知：** 支持健康检查、风险事件检测、仪表盘概览和 SMTP 通知，帮助团队更早发现异常。
+- 🔐 **协作控制：** 支持用户管理、实例级权限、远程配置和审计日志，适合长期维护和多人协作。
+- ☁️ **云盘支持：** 支持主流云存储服务，方便异地备份和数据迁移。
+- 🚀 **部署体验：** 支持单服务部署、内嵌 Web 控制台和默认 SQLite，自托管环境上手直接。
+
+## 🎯 适合这些场景
+
+- 想把业务目录、配置目录、文件型数据纳入稳定备份体系
+- 想同时拥有“快速回滚快照”和“长期离线副本”
+- 想统一管理本地与 SSH 远程备份源、备份目标
+- 想把恢复操作、权限控制、审计记录纳入标准流程
+- 想对失败、过久未备份、容量异常等风险持续感知
+
+## 🛠️ 典型使用流程
+
+1. 配置远程连接和备份目标
+2. 创建实例并指定数据源
+3. 配置滚动或冷备份策略
+4. 按计划自动执行，或随时手动触发
+5. 在仪表盘和风险中心持续观察状态
+6. 需要时直接恢复或生成下载链接
+
+## 📌 当前版本重点支持
+
+- 自托管单机部署
+- 本地与 SSH 场景下的备份源和备份目标
+- 单体服务内嵌 Web 控制台
+
+当前版本重点聚焦本地与 SSH 生产场景，云存储接口暂未作为主打能力对外宣传。
+
+## 🚀 快速体验
+
+### 本地构建运行
 
 ```bash
 cp .env.example .env
-```
-
-2. 构建前后端单体二进制：
-
-```bash
 make build
-```
-
-3. 启动服务：
-
-```bash
 ./bin/rbs
 ```
 
-默认监听 `http://127.0.0.1:8080`。首次启动会自动创建数据目录、SQLite 数据库和必要子目录。
+启动前请至少设置好 `.env` 中的 `RBS_JWT_SECRET`。
 
-### 开发模式
+默认访问地址：`http://127.0.0.1:8080`
 
-前后端分离开发：
+### Docker 部署
 
-```bash
-make dev-backend
-make dev-frontend
+创建 `docker-compose.yml` 文件，内容如下：
+
+```yaml
+services:
+	rbs:
+		image: ghcr.io/lunadeertech/rsyncbackupservice:latest
+		env_file:
+			- .env
+		ports:
+			- "8080:8080"
+		volumes:
+			- rbs-data:/data
+		environment:
+			RBS_JWT_SECRET: change_this_to_a_secure_random_string
+			RBS_DATA_DIR: /data
+			RBS_PORT: "8080"
+			RBS_WORKER_POOL_SIZE: "3"
+			RBS_LOG_LEVEL: info
+		restart: unless-stopped
+
+volumes:
+	rbs-data:
 ```
 
-后端在开发模式下设置 `RBS_DEV_MODE=true`，此时不会加载内嵌前端静态资源，便于 Vite 代理 `/api` 请求。
-
-### Docker 运行
-
-1. 准备环境变量：
+修改 `RBS_JWT_SECRET` 为一个安全的随机字符串，并根据需要调整其他环境变量。然后运行：
 
 ```bash
-cp .env.example .env
+docker compose up -d
 ```
 
-2. 修改 `.env` 中的 `RBS_JWT_SECRET`。
-
-3. 构建并启动：
-
-```bash
-docker compose up -d --build
-```
-
-服务默认暴露在 `8080` 端口，持久化数据写入 Docker volume `rbs-data`，容器内路径为 `/data`。
-如果所在环境访问 `proxy.golang.org` 不稳定，可在 `.env` 中调整 `RBS_GOPROXY`，例如改成 `direct` 或内网镜像。
-
-## 常用命令
+## ⚙️ 开发常用命令
 
 ```bash
 make build
@@ -86,63 +112,19 @@ make docker
 make clean
 ```
 
-## 配置说明
+## 🧱 运行环境
 
-### 核心配置
+- Go 1.22+
+- Node.js 20+
+- npm 10+
+- rsync 3.1+
+- openssh-client
+- Docker 24+ 与 Docker Compose v2（可选）
 
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| RBS_JWT_SECRET | 是 | - | JWT 签名密钥，同时用于派生应用内部加密密钥 |
-| RBS_DATA_DIR | 否 | `./data` | 数据存储目录，包含数据库、密钥和中间文件 |
-| RBS_PORT | 否 | `8080` | HTTP 服务监听端口 |
-| RBS_WORKER_POOL_SIZE | 否 | `3` | 后台任务工作池大小 |
-| RBS_LOG_LEVEL | 否 | `info` | 日志级别，支持 `debug`、`info`、`warn`、`error` |
-| RBS_DEV_MODE | 否 | `false` | 开发模式，启用后禁用内嵌前端资源 |
-| RBS_GOPROXY | 否 | `https://proxy.golang.org,direct` | Docker 构建后端镜像时使用的 Go 模块代理 |
+## 📦 部署形态
 
-### SMTP 配置
+RBS 采用 Go 单服务加内嵌 Vue SPA 的交付方式，默认使用 SQLite 持久化数据。部署轻、依赖少、维护直接，是它面向自托管团队的重要优势。
 
-以下变量为可选，用于首个用户密码投递和风险通知邮件发送：
-
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| RBS_SMTP_HOST | 否 | - | SMTP 主机 |
-| RBS_SMTP_PORT | 否 | - | SMTP 端口 |
-| RBS_SMTP_USERNAME | 否 | - | SMTP 用户名 |
-| RBS_SMTP_PASSWORD | 否 | - | SMTP 密码 |
-| RBS_SMTP_FROM | 否 | - | 发件人地址 |
-
-未配置 SMTP 时，系统会把首次生成的登录密码记录到日志中，便于手工交付。
-
-## 数据与部署说明
-
-- 默认数据目录会创建 `keys`、`relay`、`temp`、`logs` 等子目录。
-- SQLite 数据库位于数据目录内，适合单机自托管部署。
-- 生产容器镜像基于 Alpine，运行时包含 `rsync`、`openssh-client`、`ca-certificates` 和 `tzdata`。
-
-## 验证与验收
-
-基础构建与镜像验收建议执行以下命令：
-
-```bash
-make test
-make build
-docker build -t rbs:latest .
-docker compose config
-docker compose up -d
-```
-
-功能验收应覆盖以下场景：
-
-- 首次启动与首个管理员注册
-- 远程配置、目标健康检查、实例与策略创建
-- 手动与调度触发的滚动备份、冷备份与保留清理
-- 滚动恢复、加密冷备份恢复与冷备份下载
-- 风险事件生成/自动解决、容灾率与仪表盘展示
-- SMTP 测试发送与风险通知
-- viewer 权限隔离
-- 响应式布局与主题切换
-
-## 许可证
+## 📄 许可证
 
 本项目采用仓库根目录中的 LICENSE。
