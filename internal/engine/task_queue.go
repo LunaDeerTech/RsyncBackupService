@@ -155,7 +155,10 @@ func (q *TaskQueue) Cancel(taskID int64) error {
 		running, exists := q.running[task.InstanceID]
 		q.mu.Unlock()
 		if !exists || running.taskID != task.ID || running.cancel == nil {
-			return fmt.Errorf("task %d is running but is not managed by the queue", task.ID)
+			// The task is "running" in DB but has no active goroutine managing
+			// it (zombie). Directly mark it as cancelled so it is no longer
+			// stuck.
+			return q.cancelOrphanedTask(task)
 		}
 
 		running.cancel()
@@ -240,6 +243,13 @@ func (q *TaskQueue) Recover() error {
 		if err := q.Enqueue(&activeTasks[index]); err != nil {
 			return err
 		}
+	}
+
+	// Reset any instances stuck in "running" without a corresponding running
+	// task. This can happen when the executor or deferred cleanup failed to
+	// reset the instance status before the service was interrupted.
+	if _, err := q.db.ResetOrphanedRunningInstances(); err != nil {
+		return err
 	}
 
 	return nil
@@ -412,6 +422,50 @@ func (q *TaskQueue) cancelQueuedTask(task *model.Task) error {
 			}
 			q.reloadScheduledPolicy(backup)
 		}
+	}
+
+	q.clearTaskRuntimeData(task.ID)
+	return nil
+}
+
+// cancelOrphanedTask handles a task that is "running" in the DB but has no
+// active goroutine managing it. This can happen when the executor's DB write
+// for the terminal status failed, or a panic occurred during execution. The
+// method directly marks the task and its backup as cancelled and resets the
+// instance status.
+func (q *TaskQueue) cancelOrphanedTask(task *model.Task) error {
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+
+	completedAt := time.Now().UTC()
+	task.Status = "cancelled"
+	task.CompletedAt = &completedAt
+	task.EstimatedEnd = nil
+	task.ErrorMessage = "task cancelled (orphaned)"
+	if err := q.db.UpdateTask(task); err != nil {
+		return err
+	}
+
+	if task.BackupID != nil && taskUsesManagedBackup(task) {
+		backup, err := q.db.GetBackupByID(*task.BackupID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && backup.Status == "running" {
+			backup.Status = "cancelled"
+			backup.CompletedAt = &completedAt
+			backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
+			backup.ErrorMessage = "task cancelled (orphaned)"
+			if err := q.db.UpdateBackup(backup); err != nil {
+				return err
+			}
+			q.reloadScheduledPolicy(backup)
+		}
+	}
+
+	if err := q.db.UpdateInstanceStatus(task.InstanceID, "idle"); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 
 	q.clearTaskRuntimeData(task.ID)

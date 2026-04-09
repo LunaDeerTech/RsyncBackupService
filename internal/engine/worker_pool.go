@@ -214,6 +214,10 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
+		// Safety net: if the executor returned an error but did not update the
+		// task status (e.g. its own DB write failed, or a panic was recovered),
+		// ensure the task does not stay stuck in "running".
+		wp.ensureTaskTerminated(loadedTask, backup, runErr)
 		wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 		wp.handleRiskAfterFailure(runCtx, loadedTask, backup)
 		return runErr
@@ -258,6 +262,30 @@ func (wp *WorkerPool) loadTaskContext(task *model.Task) (*model.Backup, *model.P
 	}
 
 	return backup, policy, instance, target, nil
+}
+
+// ensureTaskTerminated is a safety net called after the executor returns an
+// error. If the executor already updated the task/backup status (the normal
+// path), this is a no-op. If the executor failed to persist the terminal
+// status (e.g. its own DB write failed), we force the task into "failed" so
+// it never stays stuck in "running".
+func (wp *WorkerPool) ensureTaskTerminated(task *model.Task, backup *model.Backup, runErr error) {
+	if task == nil || wp.db == nil {
+		return
+	}
+	// Re-read current state from DB to avoid overwriting an already-persisted
+	// terminal status written by the executor.
+	current, err := wp.db.GetTaskByID(task.ID)
+	if err != nil {
+		slog.Error("ensureTaskTerminated: reload task failed", "task_id", task.ID, "error", err)
+		return
+	}
+	switch current.Status {
+	case "running", "queued":
+		// Task is still in a non-terminal state — force it to failed.
+		_ = wp.failTask(current, backup, runErr)
+		*task = *current
+	}
 }
 
 func (wp *WorkerPool) failTask(task *model.Task, backup *model.Backup, runErr error) error {

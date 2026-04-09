@@ -311,6 +311,28 @@ func (db *DB) UpdateInstanceStatus(id int64, status string) error {
 	return nil
 }
 
+// ResetOrphanedRunningInstances sets status to "idle" for any instance that
+// is marked "running" but has no task in the "running" state. This cleans up
+// instances whose status got stuck due to incomplete error handling.
+func (db *DB) ResetOrphanedRunningInstances() (int64, error) {
+	result, err := db.Exec(
+		`UPDATE instances
+		 SET status = 'idle', updated_at = CURRENT_TIMESTAMP
+		 WHERE status = 'running'
+		   AND id NOT IN (SELECT DISTINCT instance_id FROM tasks WHERE status = 'running')`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reset orphaned running instances: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read result for orphaned instance reset: %w", err)
+	}
+
+	return affected, nil
+}
+
 func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 	stats := &model.InstanceStats{}
 
