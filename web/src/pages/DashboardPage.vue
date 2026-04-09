@@ -16,6 +16,8 @@ import AppCard from '../components/AppCard.vue'
 import AppBadge from '../components/AppBadge.vue'
 import AppEmpty from '../components/AppEmpty.vue'
 import AppProgress from '../components/AppProgress.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import { useCountUp } from '../composables/useCountUp'
 import { useTaskStore } from '../stores/task'
 import {
   getOverview,
@@ -31,6 +33,10 @@ import {
 } from '../api/dashboard'
 import { formatRelativeTime } from '../utils/time'
 import { getDRLevelColor, getDRLevelLabel, getDRLevelBadgeVariant } from '../utils/disaster-recovery'
+import {
+  taskStatusMap, riskSeverityMap, backupTypeMap,
+  getStatusConfig,
+} from '../utils/status-config'
 
 const router = useRouter()
 const taskStore = useTaskStore()
@@ -75,6 +81,17 @@ onMounted(() => {
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
 })
+
+// ── Animated count-up numbers ──
+const runningTasksTarget = computed(() => overview.value?.running_tasks ?? 0)
+const abnormalInstancesTarget = computed(() => overview.value?.abnormal_instances ?? 0)
+const unresolvedRisksTarget = computed(() => overview.value?.unresolved_risks ?? 0)
+const drScoreTarget = computed(() => overview.value ? Math.round(overview.value.system_dr_score) : 0)
+
+const animRunningTasks = useCountUp(runningTasksTarget, 700)
+const animAbnormalInstances = useCountUp(abnormalInstancesTarget, 700)
+const animUnresolvedRisks = useCountUp(unresolvedRisksTarget, 700)
+const animDrScore = useCountUp(drScoreTarget, 900)
 
 // Trend chart helpers
 const showSuccess = ref(true)
@@ -137,15 +154,7 @@ function formatFutureTime(dateStr: string): string {
   return `${minutes} 分钟后`
 }
 
-function severityVariant(severity: string): 'error' | 'warning' | 'info' | 'default' {
-  switch (severity) {
-    case 'critical': return 'error'
-    case 'high': return 'error'
-    case 'medium': return 'warning'
-    case 'low': return 'info'
-    default: return 'default'
-  }
-}
+// severityVariant removed – using StatusBadge with riskSeverityMap now
 
 function sourceLabel(source: string): string {
   switch (source) {
@@ -157,23 +166,7 @@ function sourceLabel(source: string): string {
   }
 }
 
-function backupStatusVariant(status: string): 'success' | 'error' | 'warning' | 'default' {
-  switch (status) {
-    case 'success': return 'success'
-    case 'failed': return 'error'
-    case 'running': return 'warning'
-    default: return 'default'
-  }
-}
-
-function backupStatusLabel(status: string): string {
-  switch (status) {
-    case 'success': return '成功'
-    case 'failed': return '失败'
-    case 'running': return '运行中'
-    default: return status || '无'
-  }
-}
+// backupStatusVariant / backupStatusLabel removed – using StatusBadge with taskStatusMap
 
 function taskTypeLabel(type: string): string {
   switch (type) {
@@ -209,7 +202,7 @@ const quickLinks = [
             <Play :size="20" />
           </div>
           <div class="overview-card__content">
-            <span class="overview-card__value">{{ overview?.running_tasks ?? 0 }}</span>
+            <span class="overview-card__value">{{ animRunningTasks }}</span>
             <span class="overview-card__label">运行中任务</span>
           </div>
           <span v-if="overview?.queued_tasks" class="overview-card__sub">+{{ overview.queued_tasks }} 排队</span>
@@ -223,7 +216,7 @@ const quickLinks = [
             <AlertTriangle :size="20" />
           </div>
           <div class="overview-card__content">
-            <span class="overview-card__value">{{ overview?.abnormal_instances ?? 0 }}</span>
+            <span class="overview-card__value">{{ animAbnormalInstances }}</span>
             <span class="overview-card__label">异常实例</span>
           </div>
         </button>
@@ -236,7 +229,7 @@ const quickLinks = [
             <ShieldAlert :size="20" />
           </div>
           <div class="overview-card__content">
-            <span class="overview-card__value">{{ overview?.unresolved_risks ?? 0 }}</span>
+            <span class="overview-card__value">{{ animUnresolvedRisks }}</span>
             <span class="overview-card__label">待处理风险</span>
           </div>
         </button>
@@ -247,7 +240,7 @@ const quickLinks = [
             <Shield :size="20" />
           </div>
           <div class="overview-card__content">
-            <span class="overview-card__value">{{ overview ? Math.round(overview.system_dr_score) : '-' }}</span>
+            <span class="overview-card__value">{{ loading ? '-' : animDrScore }}</span>
             <span class="overview-card__label">系统容灾率</span>
           </div>
           <AppBadge v-if="overview?.system_dr_level" :variant="getDRLevelBadgeVariant(overview.system_dr_level)">
@@ -287,9 +280,7 @@ const quickLinks = [
             <div v-else class="task-summary">
               <div v-for="t in taskStore.activeTasks" :key="t.id" class="task-summary__row task-summary__row--detail task-summary__row--clickable" @click="router.push(`/instances/${t.instance_id}`)">
                 <div class="task-summary__info">
-                  <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">
-                    {{ t.status === 'running' ? '运行中' : '排队中' }}
-                  </AppBadge>
+                  <StatusBadge :config="getStatusConfig(taskStatusMap, t.status)" />
                   <span class="task-summary__name">{{ t.instance_name }}</span>
                   <span class="task-summary__type">{{ taskTypeLabel(t.type) }}</span>
                 </div>
@@ -308,7 +299,7 @@ const quickLinks = [
             </div>
             <div v-else class="risk-list">
               <div v-for="risk in risks" :key="risk.id" class="risk-item">
-                <AppBadge :variant="severityVariant(risk.severity)">{{ risk.severity }}</AppBadge>
+                <StatusBadge :config="getStatusConfig(riskSeverityMap, risk.severity)" />
                 <span class="risk-item__source">{{ sourceLabel(risk.source) }}</span>
                 <span class="risk-item__target">{{ risk.instance_name || risk.target_name }}</span>
                 <span class="risk-item__msg">{{ risk.message }}</span>
@@ -412,7 +403,7 @@ const quickLinks = [
                   <span class="upcoming-item__name">{{ task.instance_name }}</span>
                   <span class="upcoming-item__policy">{{ task.policy_name }}</span>
                 </div>
-                <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
+                <StatusBadge :config="getStatusConfig(backupTypeMap, task.type)" />
                 <span class="upcoming-item__time">
                   <Clock :size="12" />
                   {{ formatFutureTime(task.next_run_at) }}
@@ -444,9 +435,7 @@ const quickLinks = [
             <div class="focus-card__meta">
               <span>风险 {{ inst.unresolved_risks }}</span>
               <span>·</span>
-              <AppBadge :variant="backupStatusVariant(inst.last_backup_status)">
-                {{ backupStatusLabel(inst.last_backup_status) }}
-              </AppBadge>
+              <StatusBadge :config="getStatusConfig(taskStatusMap, inst.last_backup_status)" size="sm" />
               <span v-if="inst.last_backup_time" class="focus-card__time">{{ formatRelativeTime(inst.last_backup_time) }}</span>
             </div>
           </button>
@@ -1045,26 +1034,4 @@ const quickLinks = [
 
 /* Utilities */
 .py-4 { padding-top: 16px; padding-bottom: 16px; }
-
-/* Policy type badge */
-.policy-type-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
-  border-radius: 9999px;
-  white-space: nowrap;
-}
-
-.policy-type-badge--rolling {
-  background: color-mix(in srgb, #3b82f6 15%, transparent);
-  color: #3b82f6;
-}
-
-.policy-type-badge--cold {
-  background: color-mix(in srgb, #8b5cf6 15%, transparent);
-  color: #8b5cf6;
-}
 </style>

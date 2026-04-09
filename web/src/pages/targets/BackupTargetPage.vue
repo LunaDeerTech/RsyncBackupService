@@ -17,10 +17,14 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
-import AppBadge from '../../components/AppBadge.vue'
 import AppProgress from '../../components/AppProgress.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
+import StatusBadge from '../../components/StatusBadge.vue'
 import { Plus, Pencil, HeartPulse, Trash2 } from 'lucide-vue-next'
+import {
+  healthStatusMap, backupTypeMap,
+  getStatusConfig,
+} from '../../utils/status-config'
 
 const toast = useToastStore()
 const { confirm } = useConfirm()
@@ -90,28 +94,13 @@ const remoteOptions = computed(() =>
   remotes.value.map((r) => ({ label: r.name, value: r.id })),
 )
 
-const backupTypeLabel: Record<string, string> = {
-  rolling: '滚动',
-  cold: '冷备',
-}
-
 const storageTypeLabel: Record<string, string> = {
   local: '本地',
   ssh: 'SSH',
   cloud: '云存储',
 }
 
-const healthStatusVariant: Record<string, 'success' | 'warning' | 'error'> = {
-  healthy: 'success',
-  degraded: 'warning',
-  unreachable: 'error',
-}
-
-const healthStatusLabel: Record<string, string> = {
-  healthy: '健康',
-  degraded: '异常',
-  unreachable: '不可达',
-}
+// healthStatusVariant / healthStatusLabel removed – using StatusBadge
 
 function capacityPercent(row: BackupTarget): number | null {
   if (row.total_capacity_bytes == null || row.used_capacity_bytes == null || row.total_capacity_bytes === 0) {
@@ -283,7 +272,7 @@ async function handleHealthCheck(row: Record<string, unknown>) {
     if (idx !== -1) {
       targets.value[idx] = updated
     }
-    const status = healthStatusLabel[updated.health_status] ?? updated.health_status
+    const status = getStatusConfig(healthStatusMap, updated.health_status).label || updated.health_status
     toast.success(`健康检查完成：${status}`)
   } catch (e) {
     if (e instanceof ApiBusinessError) {
@@ -334,9 +323,7 @@ async function handleDelete(row: Record<string, unknown>) {
     <div class="backup-target-page__table">
       <AppTable :columns="columns" :data="targets" :loading="loading">
         <template #cell-backup_type="{ row }">
-          <span class="backup-type-badge" :class="`backup-type-badge--${row.backup_type}`">
-            {{ backupTypeLabel[row.backup_type as string] ?? row.backup_type }}
-          </span>
+          <StatusBadge :config="getStatusConfig(backupTypeMap, row.backup_type as string)" />
         </template>
 
         <template #cell-storage_type="{ row }">
@@ -362,9 +349,7 @@ async function handleDelete(row: Record<string, unknown>) {
         </template>
 
         <template #cell-health_status="{ row }">
-          <AppBadge :variant="healthStatusVariant[row.health_status as string] ?? 'default'">
-            {{ healthStatusLabel[row.health_status as string] ?? row.health_status }}
-          </AppBadge>
+          <StatusBadge :config="getStatusConfig(healthStatusMap, row.health_status as string)" />
         </template>
 
         <template #cell-last_health_check="{ row }">
@@ -514,23 +499,5 @@ async function handleDelete(row: Record<string, unknown>) {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-muted);
-}
-.backup-type-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
-  border-radius: 9999px;
-  white-space: nowrap;
-}
-.backup-type-badge--rolling {
-  background: color-mix(in srgb, #3b82f6 15%, transparent);
-  color: #3b82f6;
-}
-.backup-type-badge--cold {
-  background: color-mix(in srgb, #8b5cf6 15%, transparent);
-  color: #8b5cf6;
 }
 </style>

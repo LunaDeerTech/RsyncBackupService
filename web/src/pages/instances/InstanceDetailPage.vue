@@ -10,6 +10,7 @@ import { getUpcomingTasks as fetchUpcomingTasksAPI, type UpcomingTask } from '..
 import { listTasks, type TaskItem } from '../../api/tasks'
 import { useTaskStore } from '../../stores/task'
 import { useElapsedTime } from '../../composables/useElapsedTime'
+import { useCountUp } from '../../composables/useCountUp'
 import AppProgress from '../../components/AppProgress.vue'
 import type { AuditLog, AuditLogParams } from '../../api/audit'
 import { listTargets } from '../../api/targets'
@@ -44,7 +45,12 @@ import AppSwitch from '../../components/AppSwitch.vue'
 import AppEmpty from '../../components/AppEmpty.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import AppPagination from '../../components/AppPagination.vue'
+import StatusBadge from '../../components/StatusBadge.vue'
 import { getDRLevelLabel, getDRLevelBadgeVariant, getDRLevelRingColor } from '../../utils/disaster-recovery'
+import {
+  taskStatusMap, instanceStatusMap, backupTypeMap,
+  getStatusConfig,
+} from '../../utils/status-config'
 import {
   ArrowLeft, Play, Plus, Pencil, Trash2, Save,
   Database, CheckCircle, HardDrive, Download, RotateCcw,
@@ -250,12 +256,7 @@ const policyColumns: TableColumn[] = [
   { key: 'actions', title: '操作', width: '140px' },
 ]
 
-const backupStatusVariant: Record<string, 'success' | 'error' | 'info' | 'warning' | 'default'> = {
-  success: 'success',
-  failed: 'error',
-  running: 'info',
-  pending: 'warning',
-}
+// backupStatusVariant/backupStatusLabel removed – using StatusBadge with taskStatusMap
 
 const backupColumns: TableColumn[] = [
   { key: 'started_at', title: '备份时间' },
@@ -267,12 +268,7 @@ const backupColumns: TableColumn[] = [
   { key: 'actions', title: '操作', width: '200px' },
 ]
 
-const backupStatusLabel: Record<string, string> = {
-  success: '成功',
-  failed: '失败',
-  running: '运行中',
-  pending: '等待中',
-}
+// backupStatusLabel removed – using StatusBadge now
 
 const excludePatternHelpText = EXCLUDE_PATTERN_HELP_EXAMPLES.join('\n')
 
@@ -287,14 +283,29 @@ const leadingTask = computed(() => instanceTasks.value.find(t => t.status === 'r
 const leadingTaskStartTime = computed(() => leadingTask.value?.started_at ?? null)
 const elapsedTime = useElapsedTime(leadingTaskStartTime)
 
-function formatEstimatedRemaining(estimatedEnd: string | undefined): string {
-  if (!estimatedEnd) return '--'
-  const diff = new Date(estimatedEnd).getTime() - Date.now()
-  if (diff <= 0) return '即将完成'
-  const m = Math.floor(diff / 60000)
+function formatEstimatedRemaining(task: TaskItem): string {
+  if (!task.started_at || task.progress == null || task.progress <= 0) return '--'
+  if (task.progress >= 100) return '即将完成'
+  const elapsedMs = Date.now() - new Date(task.started_at).getTime()
+  if (elapsedMs <= 0) return '--'
+  const totalEstMs = elapsedMs / (task.progress / 100)
+  const remainMs = totalEstMs - elapsedMs
+  if (remainMs <= 0) return '即将完成'
+  const m = Math.floor(remainMs / 60000)
   const h = Math.floor(m / 60)
-  if (h > 0) return `${h} 小时 ${m % 60} 分钟`
-  return `${m} 分钟`
+  if (h > 0) return `约 ${h} 小时 ${m % 60} 分钟`
+  if (m > 0) return `约 ${m} 分钟`
+  return '不到 1 分钟'
+}
+
+function formatEstimatedEnd(task: TaskItem): string {
+  if (!task.started_at || task.progress == null || task.progress <= 0) return '--'
+  if (task.progress >= 100) return '即将完成'
+  const elapsedMs = Date.now() - new Date(task.started_at).getTime()
+  if (elapsedMs <= 0) return '--'
+  const totalEstMs = elapsedMs / (task.progress / 100)
+  const etaDate = new Date(new Date(task.started_at).getTime() + totalEstMs)
+  return etaDate.toLocaleString('zh-CN')
 }
 
 function formatDateTime(dateStr: string | undefined): string {
@@ -475,13 +486,7 @@ function taskTypeLabel(type: string): string {
   return type === 'rolling' ? '滚动备份' : type === 'cold' ? '冷备份' : type
 }
 
-function taskStatusLabel(status: string): string {
-  switch (status) {
-    case 'running': return '运行中'
-    case 'queued': return '排队中'
-    default: return status
-  }
-}
+// taskStatusLabel removed – using StatusBadge now
 
 onMounted(async () => {
   await fetchInstance()
@@ -527,6 +532,16 @@ const successRateColor = computed(() => {
   if (successRate.value >= 70) return 'var(--warning-500)'
   return 'var(--error-500)'
 })
+
+// ── Countup animations ──
+const animSuccessCount = useCountUp(computed(() => stats.value?.success_backup_count ?? 0))
+const animSuccessRate = useCountUp(computed(() => successRate.value ?? 0))
+const animDrTotal = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.total) : 0))
+const animDrFreshness = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.freshness) : 0))
+const animDrRecovery = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.recovery_points) : 0))
+const animDrRedundancy = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.redundancy) : 0))
+const animDrStability = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.stability) : 0))
+const animTotalSizeBytes = useCountUp(computed(() => stats.value?.total_backup_size_bytes ?? 0), 800)
 
 const sourceTypeLabel: Record<string, string> = { local: '本地', ssh: 'SSH' }
 
@@ -1042,9 +1057,7 @@ const permissionOptions = [
                       <div class="overview-info__item">
                         <span class="overview-info__label">状态</span>
                         <span>
-                          <AppBadge :variant="instance.status === 'running' ? 'info' : 'default'">
-                            {{ instance.status === 'running' ? '运行中' : '空闲' }}
-                          </AppBadge>
+                          <StatusBadge :config="getStatusConfig(instanceStatusMap, instance.status)" />
                         </span>
                       </div>
                       <div v-if="drScore && drScore.deductions && drScore.deductions.length > 0" class="hero-card__deductions">
@@ -1064,10 +1077,10 @@ const permissionOptions = [
                         <svg viewBox="0 0 36 36" class="dr-ring__svg">
                           <path class="dr-ring__bg"
                             d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                          <path class="dr-ring__fg" :stroke-dasharray="`${Math.round(drScore.total)}, 100`"
+                          <path class="dr-ring__fg" :stroke-dasharray="`${animDrTotal}, 100`"
                             d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
                         </svg>
-                        <span class="dr-ring__value">{{ Math.round(drScore.total) }}</span>
+                        <span class="dr-ring__value">{{ animDrTotal }}</span>
                       </div>
                       <AppBadge :variant="getDRLevelBadgeVariant(drScore.level)">
                         {{ getDRLevelLabel(drScore.level) }}
@@ -1080,37 +1093,37 @@ const permissionOptions = [
                     <div class="dr-sub-score">
                       <div class="dr-sub-score__header">
                         <span class="dr-sub-score__name">备份新鲜度</span>
-                        <span class="dr-sub-score__value">{{ Math.round(drScore.freshness) }}</span>
+                        <span class="dr-sub-score__value">{{ animDrFreshness }}</span>
                       </div>
                       <div class="dr-sub-score__bar">
-                        <div class="dr-sub-score__fill" :style="{ width: drScore.freshness + '%' }" />
+                        <div class="dr-sub-score__fill" :style="{ width: animDrFreshness + '%' }" />
                       </div>
                     </div>
                     <div class="dr-sub-score">
                       <div class="dr-sub-score__header">
                         <span class="dr-sub-score__name">恢复点可用性</span>
-                        <span class="dr-sub-score__value">{{ Math.round(drScore.recovery_points) }}</span>
+                        <span class="dr-sub-score__value">{{ animDrRecovery }}</span>
                       </div>
                       <div class="dr-sub-score__bar">
-                        <div class="dr-sub-score__fill" :style="{ width: drScore.recovery_points + '%' }" />
+                        <div class="dr-sub-score__fill" :style="{ width: animDrRecovery + '%' }" />
                       </div>
                     </div>
                     <div class="dr-sub-score">
                       <div class="dr-sub-score__header">
                         <span class="dr-sub-score__name">冗余与隔离度</span>
-                        <span class="dr-sub-score__value">{{ Math.round(drScore.redundancy) }}</span>
+                        <span class="dr-sub-score__value">{{ animDrRedundancy }}</span>
                       </div>
                       <div class="dr-sub-score__bar">
-                        <div class="dr-sub-score__fill" :style="{ width: drScore.redundancy + '%' }" />
+                        <div class="dr-sub-score__fill" :style="{ width: animDrRedundancy + '%' }" />
                       </div>
                     </div>
                     <div class="dr-sub-score">
                       <div class="dr-sub-score__header">
                         <span class="dr-sub-score__name">执行稳定性</span>
-                        <span class="dr-sub-score__value">{{ Math.round(drScore.stability) }}</span>
+                        <span class="dr-sub-score__value">{{ animDrStability }}</span>
                       </div>
                       <div class="dr-sub-score__bar">
-                        <div class="dr-sub-score__fill" :style="{ width: drScore.stability + '%' }" />
+                        <div class="dr-sub-score__fill" :style="{ width: animDrStability + '%' }" />
                       </div>
                     </div>
                   </div>
@@ -1122,7 +1135,7 @@ const permissionOptions = [
                 <AppCard>
                   <button class="stat-card stat-card--clickable" @click="activeTab = 'backups'">
                     <div class="stat-card__content">
-                      <span class="stat-card__value">{{ stats?.success_backup_count ?? 0 }}</span>
+                      <span class="stat-card__value">{{ animSuccessCount }}</span>
                       <span class="stat-card__label">可用备份</span>
                       <span class="stat-card__sub">共 {{ stats?.backup_count ?? 0 }} 次备份</span>
                     </div>
@@ -1133,7 +1146,7 @@ const permissionOptions = [
                   <button class="stat-card stat-card--clickable" @click="activeTab = 'audit'">
                     <div class="stat-card__content">
                       <span class="stat-card__value" :style="{ color: successRateColor }">
-                        {{ successRate !== null ? successRate + '%' : '--' }}
+                        {{ successRate !== null ? animSuccessRate + '%' : '--' }}
                       </span>
                       <span class="stat-card__label">成功率</span>
                       <span class="stat-card__sub">成功 {{ stats?.success_backup_count ?? 0 }} / 失败 {{ stats?.failure_backup_count ?? 0 }}</span>
@@ -1144,7 +1157,7 @@ const permissionOptions = [
                 <AppCard>
                   <div class="stat-card">
                     <div class="stat-card__content">
-                      <span class="stat-card__value">{{ formatBytes(stats?.total_backup_size_bytes) }}</span>
+                      <span class="stat-card__value">{{ formatBytes(animTotalSizeBytes) }}</span>
                       <span class="stat-card__label">总备份大小</span>
                     </div>
                     <HardDrive :size="22" class="stat-icon stat-icon--info" />
@@ -1159,9 +1172,7 @@ const permissionOptions = [
                         </span>
                         <span class="stat-card__label">最近备份</span>
                         <span class="stat-card__sub">
-                          <AppBadge size="sm" :variant="backupStatusVariant[stats.last_backup.status] ?? 'default'">
-                            {{ backupStatusLabel[stats.last_backup.status] ?? stats.last_backup.status }}
-                          </AppBadge>
+                          <StatusBadge :config="getStatusConfig(taskStatusMap, stats.last_backup.status)" size="sm" />
                           {{ policyTypeLabel[stats.last_backup.type] ?? stats.last_backup.type }}
                           · {{ formatBytes(stats.last_backup.backup_size_bytes) }}
                         </span>
@@ -1180,7 +1191,7 @@ const permissionOptions = [
             <!-- Row 2: Upcoming tasks & Current tasks -->
             <div class="overview-tasks-row">
               <!-- Upcoming tasks for this instance -->
-              <AppCard title="即将执行的任务">
+              <AppCard title="即将执行的任务" class="overview-tasks-row__upcoming">
                 <div v-if="instanceUpcoming.length === 0" class="py-4">
                   <AppEmpty message="暂无计划任务" />
                 </div>
@@ -1188,7 +1199,7 @@ const permissionOptions = [
                   <div v-for="task in instanceUpcoming" :key="task.policy_id" class="instance-upcoming-item">
                     <div class="instance-upcoming-item__info">
                       <span class="instance-upcoming-item__name">{{ task.policy_name }}</span>
-                      <span class="policy-type-badge" :class="`policy-type-badge--${task.type}`">{{ taskTypeLabel(task.type) }}</span>
+                      <StatusBadge :config="getStatusConfig(backupTypeMap, task.type)" />
                     </div>
                     <span class="instance-upcoming-item__time">
                       <Clock :size="12" />
@@ -1207,7 +1218,7 @@ const permissionOptions = [
                   <div v-for="t in instanceTasks" :key="t.id" class="task-progress-card">
                     <div class="task-progress-header">
                       <div class="task-progress-header__left">
-                        <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'">{{ taskStatusLabel(t.status) }}</AppBadge>
+                        <StatusBadge :config="getStatusConfig(taskStatusMap, t.status)" />
                         <span class="task-progress-header__type">{{ taskTypeLabel(t.type) }}</span>
                       </div>
                       <AppButton
@@ -1237,11 +1248,11 @@ const permissionOptions = [
                         </div>
                         <div class="task-progress-meta__item">
                           <span class="task-progress-meta__label">预计完成</span>
-                          <span class="task-progress-meta__value">{{ formatDateTime(t.estimated_end) }}</span>
+                          <span class="task-progress-meta__value">{{ formatEstimatedEnd(t) }}</span>
                         </div>
                         <div class="task-progress-meta__item">
                           <span class="task-progress-meta__label">预计剩余</span>
-                          <span class="task-progress-meta__value">{{ formatEstimatedRemaining(t.estimated_end) }}</span>
+                          <span class="task-progress-meta__value">{{ formatEstimatedRemaining(t) }}</span>
                         </div>
                       </div>
                     </div>
@@ -1267,9 +1278,7 @@ const permissionOptions = [
             <div class="tab-table">
               <AppTable :columns="policyColumns" :data="policies" :loading="policyLoading">
                 <template #cell-type="{ row }">
-                  <span class="policy-type-badge" :class="`policy-type-badge--${row.type}`">
-                    {{ policyTypeLabel[row.type as string] ?? row.type }}
-                  </span>
+                  <StatusBadge :config="getStatusConfig(backupTypeMap, row.type as string)" />
                 </template>
 
                 <template #cell-target_name="{ row }">
@@ -1287,9 +1296,7 @@ const permissionOptions = [
 
                 <template #cell-last_execution="{ row }">
                   <template v-if="row.last_execution_time">
-                    <AppBadge :variant="backupStatusVariant[row.last_execution_status as string] ?? 'default'">
-                      {{ backupStatusLabel[row.last_execution_status as string] ?? row.last_execution_status }}
-                    </AppBadge>
+                    <StatusBadge :config="getStatusConfig(taskStatusMap, row.last_execution_status as string)" />
                     <span class="last-exec-time">{{ formatRelativeTime(row.last_execution_time as string) }}</span>
                   </template>
                   <span v-else class="text-muted">未执行</span>
@@ -1328,9 +1335,7 @@ const permissionOptions = [
                 </template>
 
                 <template #cell-type="{ row }">
-                  <span class="policy-type-badge" :class="`policy-type-badge--${row.type}`">
-                    {{ policyTypeLabel[row.type as string] ?? row.type }}
-                  </span>
+                  <StatusBadge :config="getStatusConfig(backupTypeMap, row.type as string)" />
                 </template>
 
                 <template #cell-backup_size_bytes="{ row }">
@@ -1643,17 +1648,13 @@ const permissionOptions = [
           <div class="backup-detail__item">
             <span class="backup-detail__label">类型</span>
             <span class="backup-detail__value">
-              <span class="policy-type-badge" :class="`policy-type-badge--${backupDetailTarget.type}`">
-                {{ policyTypeLabel[backupDetailTarget.type] ?? backupDetailTarget.type }}
-              </span>
+              <StatusBadge :config="getStatusConfig(backupTypeMap, backupDetailTarget.type)" />
             </span>
           </div>
           <div class="backup-detail__item">
             <span class="backup-detail__label">状态</span>
             <span class="backup-detail__value">
-              <AppBadge :variant="backupStatusVariant[backupDetailTarget.status] ?? 'default'">
-                {{ backupStatusLabel[backupDetailTarget.status] ?? backupDetailTarget.status }}
-              </AppBadge>
+              <StatusBadge :config="getStatusConfig(taskStatusMap, backupDetailTarget.status)" />
             </span>
           </div>
           <div class="backup-detail__item">
@@ -2129,27 +2130,7 @@ const permissionOptions = [
   transition: width 0.4s ease;
 }
 
-/* Policy type badge */
-.policy-type-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
-  border-radius: 9999px;
-  white-space: nowrap;
-}
-
-.policy-type-badge--rolling {
-  background: color-mix(in srgb, #3b82f6 15%, transparent);
-  color: #3b82f6;
-}
-
-.policy-type-badge--cold {
-  background: color-mix(in srgb, #8b5cf6 15%, transparent);
-  color: #8b5cf6;
-}
+/* Disaster Recovery ring & sub-scores */
 
 /* Actions */
 .actions-cell {
@@ -2529,6 +2510,12 @@ const permissionOptions = [
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  align-items: start;
+}
+
+/* Prevent the upcoming card from stretching with the current-tasks card */
+.overview-tasks-row__upcoming {
+  align-self: start;
 }
 
 @media (max-width: 767px) {
@@ -2678,4 +2665,5 @@ const permissionOptions = [
   padding-top: 16px;
   padding-bottom: 16px;
 }
+
 </style>

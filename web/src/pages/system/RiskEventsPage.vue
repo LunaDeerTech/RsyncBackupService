@@ -8,7 +8,11 @@ import type { TableColumn } from '../../components/AppTable.vue'
 import AppTable from '../../components/AppTable.vue'
 import AppPagination from '../../components/AppPagination.vue'
 import AppSelect from '../../components/AppSelect.vue'
-import AppBadge from '../../components/AppBadge.vue'
+import StatusBadge from '../../components/StatusBadge.vue'
+import {
+  riskSeverityMap, riskResolvedMap,
+  getStatusConfig,
+} from '../../utils/status-config'
 
 const router = useRouter()
 const toast = useToastStore()
@@ -27,9 +31,9 @@ const total = ref(0)
 
 const severityOptions = [
   { label: '全部等级', value: '' },
-  { label: 'Info', value: 'info' },
-  { label: 'Warning', value: 'warning' },
-  { label: 'Critical', value: 'critical' },
+  { label: '信息', value: 'info' },
+  { label: '警告', value: 'warning' },
+  { label: '严重', value: 'critical' },
 ]
 
 const resolvedOptions = [
@@ -60,23 +64,7 @@ function sourceLabel(source: string): string {
   return riskSourceLabels[source] ?? source
 }
 
-function severityVariant(severity: string): 'info' | 'warning' | 'error' | 'default' {
-  switch (severity) {
-    case 'critical': return 'error'
-    case 'warning': return 'warning'
-    case 'info': return 'info'
-    default: return 'default'
-  }
-}
-
-function severityLabel(severity: string): string {
-  switch (severity) {
-    case 'critical': return 'Critical'
-    case 'warning': return 'Warning'
-    case 'info': return 'Info'
-    default: return severity
-  }
-}
+// severityVariant / severityLabel removed – using StatusBadge
 
 const columns: TableColumn[] = [
   { key: 'severity', title: '严重等级', width: '100px' },
@@ -171,9 +159,7 @@ function goToInstance(id: number) {
     <div class="risk-events-page__table">
       <AppTable :columns="columns" :data="risks as unknown as Record<string, unknown>[]" :loading="loading">
         <template #cell-severity="{ row }">
-          <AppBadge :variant="severityVariant(row.severity as string)">
-            {{ severityLabel(row.severity as string) }}
-          </AppBadge>
+          <StatusBadge :config="getStatusConfig(riskSeverityMap, row.severity as string)" />
         </template>
 
         <template #cell-source="{ row }">
@@ -194,8 +180,8 @@ function goToInstance(id: number) {
         </template>
 
         <template #cell-status="{ row }">
-          <AppBadge v-if="row.resolved" variant="success">已解决</AppBadge>
-          <AppBadge v-else variant="warning">未解决</AppBadge>
+          <StatusBadge v-if="row.resolved" :config="getStatusConfig(riskResolvedMap, 'resolved')" />
+          <StatusBadge v-else :config="getStatusConfig(riskResolvedMap, 'unresolved')" />
           <div v-if="row.resolved && row.resolved_at" class="risk-events-page__resolved-at">
             {{ formatRelativeTime(row.resolved_at as string) }}
           </div>

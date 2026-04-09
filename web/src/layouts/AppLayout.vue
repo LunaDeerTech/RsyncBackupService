@@ -15,10 +15,11 @@ import {
   Activity,
 } from 'lucide-vue-next'
 import ThemeToggle from '../components/ThemeToggle.vue'
-import AppBadge from '../components/AppBadge.vue'
 import AppProgress from '../components/AppProgress.vue'
+import StatusBadge from '../components/StatusBadge.vue'
 import { useAuthStore } from '../stores/auth'
 import { useTaskStore } from '../stores/task'
+import { taskStatusMap, getStatusConfig } from '../utils/status-config'
 
 const authStore = useAuthStore()
 const { isAdmin, user, isAuthenticated } = storeToRefs(authStore)
@@ -221,9 +222,7 @@ watch(() => route.path, () => {
                 <div v-else class="task-panel__list">
                   <div v-for="t in taskStore.activeTasks" :key="t.id" class="task-panel__item">
                     <div class="task-panel__item-header">
-                      <AppBadge :variant="t.status === 'running' ? 'info' : 'warning'" class="task-panel__badge">
-                        {{ t.status === 'running' ? '运行中' : '排队中' }}
-                      </AppBadge>
+                      <StatusBadge :config="getStatusConfig(taskStatusMap, t.status)" class="task-panel__badge" />
                       <span class="task-panel__item-name">{{ t.instance_name }}</span>
                       <span class="task-panel__item-type">{{ taskTypeLabel(t.type) }}</span>
                     </div>

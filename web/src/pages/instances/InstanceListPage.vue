@@ -20,9 +20,13 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
-import AppBadge from '../../components/AppBadge.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
+import StatusBadge from '../../components/StatusBadge.vue'
 import { getDRLevelColor } from '../../utils/disaster-recovery'
+import {
+  taskStatusMap, instanceStatusMap,
+  getStatusConfig,
+} from '../../utils/status-config'
 import { Plus, Eye, Trash2, CircleHelp } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -86,25 +90,7 @@ const remoteOptions = computed(() =>
   remotes.value.map((r) => ({ label: r.name, value: r.id })),
 )
 
-const statusVariant: Record<string, 'default' | 'info'> = {
-  idle: 'default',
-  running: 'info',
-}
-
-const statusLabel: Record<string, string> = {
-  idle: '空闲',
-  running: '运行中',
-}
-
-const backupStatusVariant: Record<string, 'success' | 'error'> = {
-  success: 'success',
-  failed: 'error',
-}
-
-const backupStatusLabel: Record<string, string> = {
-  success: '成功',
-  failed: '失败',
-}
+// statusVariant / statusLabel / backupStatusVariant / backupStatusLabel removed – using StatusBadge
 
 const excludePatternHelpText = EXCLUDE_PATTERN_HELP_EXAMPLES.join('\n')
 
@@ -268,9 +254,7 @@ function goToDetail(row: Record<string, unknown>) {
         </template>
 
         <template #cell-status="{ row }">
-          <AppBadge :variant="statusVariant[row.status as string] ?? 'default'">
-            {{ statusLabel[row.status as string] ?? row.status }}
-          </AppBadge>
+          <StatusBadge :config="getStatusConfig(instanceStatusMap, row.status as string)" />
         </template>
 
         <template #cell-dr_score="{ row }">
@@ -282,12 +266,10 @@ function goToDetail(row: Record<string, unknown>) {
         </template>
 
         <template #cell-last_backup_status="{ row }">
-          <AppBadge
+          <StatusBadge
             v-if="row.last_backup_status"
-            :variant="backupStatusVariant[row.last_backup_status as string] ?? 'default'"
-          >
-            {{ backupStatusLabel[row.last_backup_status as string] ?? row.last_backup_status }}
-          </AppBadge>
+            :config="getStatusConfig(taskStatusMap, row.last_backup_status as string)"
+          />
           <span v-else class="text-muted">无记录</span>
         </template>
 
