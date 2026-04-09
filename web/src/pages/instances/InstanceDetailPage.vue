@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions, listInstancePermissions } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
 import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
-import type { RestoreRequest } from '../../api/backups'
+import type { RestoreRequest, BackupDownloadPart } from '../../api/backups'
 import { listInstanceAuditLogs } from '../../api/audit'
 import { getUpcomingTasks as fetchUpcomingTasksAPI, type UpcomingTask } from '../../api/dashboard'
 import { listTasks, type TaskItem } from '../../api/tasks'
@@ -169,6 +169,12 @@ const restoreFormErrors = reactive({
 
 // ── Download state ──
 const downloadingBackupId = ref<number | null>(null)
+const splitDownloadModalVisible = ref(false)
+const splitDownloadParts = ref<BackupDownloadPart[]>([])
+const splitDownloadTitle = ref('')
+const downloadingSplitAll = ref(false)
+const downloadingSplitPartUrl = ref<string | null>(null)
+const copyingSplitLinks = ref(false)
 
 // ── Audit ──
 const auditLogs = ref<AuditLog[]>([])
@@ -899,18 +905,112 @@ async function handleDownload(row: Record<string, unknown>) {
   downloadingBackupId.value = row.id as number
   try {
     const res = await downloadBackup(instanceId.value, row.id as number)
-    const url = res.url
-    const a = document.createElement('a')
-    a.href = url
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    if (res.mode === 'split') {
+      splitDownloadTitle.value = res.file_name || `备份 #${row.id as number}`
+      splitDownloadParts.value = res.parts ?? []
+      splitDownloadModalVisible.value = true
+      if (splitDownloadParts.value.length === 0) {
+        toast.warning('未检测到可下载的分卷文件')
+      }
+      return
+    }
+    triggerBrowserDownload(res.url)
   } catch (e) {
     if (e instanceof ApiBusinessError) toast.error(e.message)
     else toast.error('获取下载链接失败')
   } finally {
     downloadingBackupId.value = null
+  }
+}
+
+function triggerBrowserDownload(url: string) {
+  const a = document.createElement('a')
+  a.href = url
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+function closeSplitDownloadModal() {
+  if (downloadingSplitAll.value) return
+  splitDownloadModalVisible.value = false
+  splitDownloadTitle.value = ''
+  splitDownloadParts.value = []
+  downloadingSplitPartUrl.value = null
+  copyingSplitLinks.value = false
+}
+
+async function handleDownloadSplitPart(part: BackupDownloadPart) {
+  downloadingSplitPartUrl.value = part.url
+  try {
+    triggerBrowserDownload(part.url)
+  } finally {
+    window.setTimeout(() => {
+      if (downloadingSplitPartUrl.value === part.url) {
+        downloadingSplitPartUrl.value = null
+      }
+    }, 300)
+  }
+}
+
+async function handleDownloadAllSplitParts() {
+  if (splitDownloadParts.value.length === 0) return
+  downloadingSplitAll.value = true
+  try {
+    for (const part of splitDownloadParts.value) {
+      downloadingSplitPartUrl.value = part.url
+      triggerBrowserDownload(part.url)
+      await new Promise((resolve) => window.setTimeout(resolve, 350))
+    }
+    toast.info('已按顺序触发全部分卷下载，请留意浏览器的多文件下载权限提示')
+  } finally {
+    downloadingSplitAll.value = false
+    downloadingSplitPartUrl.value = null
+  }
+}
+
+function resolveDownloadURL(url: string) {
+  if (/^https?:\/\//.test(url)) {
+    return url
+  }
+  return new URL(url, window.location.origin).toString()
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const succeeded = document.execCommand('copy')
+  document.body.removeChild(textarea)
+
+  if (!succeeded) {
+    throw new Error('copy failed')
+  }
+}
+
+async function handleCopyAllSplitLinks() {
+  if (splitDownloadParts.value.length === 0) return
+  copyingSplitLinks.value = true
+  try {
+    const payload = splitDownloadParts.value
+      .map((part) => `${part.name}\n${resolveDownloadURL(part.url)}`)
+      .join('\n\n')
+    await copyTextToClipboard(payload)
+    toast.success('全部分卷下载链接已复制')
+  } catch {
+    toast.error('复制下载链接失败')
+  } finally {
+    copyingSplitLinks.value = false
   }
 }
 
@@ -1694,6 +1794,54 @@ const permissionOptions = [
       </template>
     </AppModal>
 
+    <!-- Split Download Modal -->
+    <AppModal v-model:visible="splitDownloadModalVisible" title="分卷下载" width="640px" :close-on-overlay="!downloadingSplitAll">
+      <div class="split-download-modal">
+        <div class="split-download-modal__hero">
+          <div>
+            <p class="split-download-modal__eyebrow">检测到分卷冷备份</p>
+            <h4 class="split-download-modal__title">{{ splitDownloadTitle }}</h4>
+          </div>
+          <div class="split-download-modal__summary">
+            <span class="split-download-modal__summary-value">{{ splitDownloadParts.length }}</span>
+            <span class="split-download-modal__summary-label">个分卷</span>
+          </div>
+        </div>
+        <p class="split-download-modal__hint">你可以逐个下载，也可以使用一键下载按顺序拉取全部分卷。</p>
+        <div class="split-download-list">
+          <div v-for="part in splitDownloadParts" :key="part.url" class="split-download-item">
+            <div class="split-download-item__meta">
+              <span class="split-download-item__index">第 {{ part.index }} 卷</span>
+              <span class="split-download-item__name">{{ part.name }}</span>
+            </div>
+            <div class="split-download-item__actions">
+              <span class="split-download-item__size">{{ formatBytes(part.size_bytes) }}</span>
+              <AppButton
+                variant="outline"
+                size="sm"
+                :loading="downloadingSplitPartUrl === part.url"
+                :disabled="downloadingSplitAll"
+                @click="handleDownloadSplitPart(part)"
+              >
+                下载此卷
+              </AppButton>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="modal-footer split-download-modal__footer">
+          <AppButton variant="outline" size="md" :disabled="downloadingSplitAll" @click="closeSplitDownloadModal">关闭</AppButton>
+          <AppButton variant="outline" size="md" :loading="copyingSplitLinks" :disabled="downloadingSplitAll || splitDownloadParts.length === 0" @click="handleCopyAllSplitLinks">
+            复制全部下载链接
+          </AppButton>
+          <AppButton variant="primary" size="md" :loading="downloadingSplitAll" :disabled="splitDownloadParts.length === 0" @click="handleDownloadAllSplitParts">
+            一键下载全部
+          </AppButton>
+        </div>
+      </template>
+    </AppModal>
+
     <!-- Restore Confirm Modal -->
     <AppModal v-model:visible="restoreModalVisible" title="恢复备份" width="520px">
       <form @submit.prevent="handleRestoreSubmit">
@@ -2370,6 +2518,129 @@ const permissionOptions = [
   justify-content: center;
   gap: 12px;
   padding: 12px 0;
+}
+
+.split-download-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.split-download-modal__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand-primary) 8%, var(--surface-raised)) 0%, var(--surface-raised) 100%);
+}
+
+.split-download-modal__eyebrow {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.split-download-modal__title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.split-download-modal__summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 88px;
+}
+
+.split-download-modal__summary-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-primary);
+}
+
+.split-download-modal__summary-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.split-download-modal__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.split-download-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.split-download-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.split-download-item__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.split-download-item__index {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.split-download-item__name {
+  font-size: 14px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.split-download-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.split-download-item__size {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.split-download-modal__footer {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .split-download-modal__hero,
+  .split-download-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .split-download-modal__summary {
+    align-items: flex-start;
+  }
+
+  .split-download-item__actions {
+    justify-content: space-between;
+  }
 }
 
 /* Restore modal */

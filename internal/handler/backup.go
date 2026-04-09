@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +28,8 @@ import (
 
 const backupErrorNotFound = 40407
 
+var downloadSplitPartPattern = regexp.MustCompile(`\.part\d+$`)
+
 type restoreBackupRequest struct {
 	RestoreType   string `json:"restore_type"`
 	TargetPath    string `json:"target_path,omitempty"`
@@ -38,6 +42,20 @@ type DownloadToken struct {
 	BackupID  int64
 	FilePath  string
 	ExpiresAt time.Time
+}
+
+type backupDownloadPart struct {
+	Index     int    `json:"index"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+type backupDownloadResponse struct {
+	Mode     string               `json:"mode"`
+	URL      string               `json:"url,omitempty"`
+	FileName string               `json:"file_name,omitempty"`
+	Parts    []backupDownloadPart `json:"parts,omitempty"`
 }
 
 type DownloadTokenManager struct {
@@ -286,7 +304,11 @@ func (h *Handler) GenerateBackupDownloadURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	token := h.downloadTokens.Generate(backup.ID, backup.SnapshotPath)
+	downloadResponse, err := h.buildBackupDownloadResponse(backup)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
+		return
+	}
 
 	h.writeCurrentUserAudit(r, instanceID, audit.ActionBackupDownload, map[string]any{
 		"backup_id":   backup.ID,
@@ -295,9 +317,7 @@ func (h *Handler) GenerateBackupDownloadURL(w http.ResponseWriter, r *http.Reque
 		"instance_id": instanceID,
 	})
 
-	JSON(w, http.StatusOK, map[string]any{
-		"url": "/api/v1/download/" + token,
-	})
+	JSON(w, http.StatusOK, downloadResponse)
 }
 
 func (h *Handler) DownloadBackupByToken(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +347,6 @@ func (h *Handler) DownloadBackupByToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.downloadTokens.Revoke(token)
 	if err := streamLocalBackupArtifact(w, r, info.FilePath); err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
 	}
@@ -379,26 +398,163 @@ func backupRequestIDs(r *http.Request) (int64, int64, error) {
 	return instanceID, backupID, nil
 }
 
-func streamLocalBackupArtifact(w http.ResponseWriter, r *http.Request, artifactPath string) error {
-	info, err := os.Stat(artifactPath)
-	if err != nil {
-		return fmt.Errorf("open backup artifact %q: %w", artifactPath, err)
+func (h *Handler) buildBackupDownloadResponse(backup *model.Backup) (backupDownloadResponse, error) {
+	if backup == nil {
+		return backupDownloadResponse{}, fmt.Errorf("backup is required")
 	}
-	if info.IsDir() {
-		fileName := filepath.Base(artifactPath) + ".tar.gz"
-		w.Header().Set("Content-Type", "application/gzip")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
-		return streamDirectoryAsTarGz(w, artifactPath)
+	artifactPath := strings.TrimSpace(backup.SnapshotPath)
+	if artifactPath == "" {
+		return backupDownloadResponse{}, fmt.Errorf("backup artifact path is required")
 	}
 
-	file, err := os.Open(artifactPath)
+	if basePath, ok := downloadSplitBasePath(artifactPath); ok {
+		parts, err := listSplitDownloadParts(basePath)
+		if err != nil {
+			return backupDownloadResponse{}, err
+		}
+		responseParts := make([]backupDownloadPart, 0, len(parts))
+		for index, partPath := range parts {
+			token := h.downloadTokens.Generate(backup.ID, partPath)
+			info, err := os.Stat(partPath)
+			if err != nil {
+				return backupDownloadResponse{}, fmt.Errorf("stat split download part %q: %w", partPath, err)
+			}
+			responseParts = append(responseParts, backupDownloadPart{
+				Index:     index + 1,
+				Name:      filepath.Base(partPath),
+				URL:       "/api/v1/download/" + token,
+				SizeBytes: info.Size(),
+			})
+		}
+		return backupDownloadResponse{
+			Mode:     "split",
+			FileName: filepath.Base(basePath),
+			Parts:    responseParts,
+		}, nil
+	}
+
+	token := h.downloadTokens.Generate(backup.ID, artifactPath)
+	return backupDownloadResponse{
+		Mode:     "single",
+		URL:      "/api/v1/download/" + token,
+		FileName: filepath.Base(artifactPath),
+	}, nil
+}
+
+func streamLocalBackupArtifact(w http.ResponseWriter, r *http.Request, artifactPath string) error {
+	prepared, cleanup, err := prepareLocalBackupDownload(artifactPath)
 	if err != nil {
-		return fmt.Errorf("open backup artifact %q: %w", artifactPath, err)
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	info, err := os.Stat(prepared.FilePath)
+	if err != nil {
+		return fmt.Errorf("stat prepared backup artifact %q: %w", prepared.FilePath, err)
+	}
+
+	file, err := os.Open(prepared.FilePath)
+	if err != nil {
+		return fmt.Errorf("open prepared backup artifact %q: %w", prepared.FilePath, err)
 	}
 	defer file.Close()
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifactPath)))
-	http.ServeContent(w, r, filepath.Base(artifactPath), info.ModTime(), file)
+	if prepared.ContentType != "" {
+		w.Header().Set("Content-Type", prepared.ContentType)
+	}
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", prepared.FileName))
+	http.ServeContent(w, r, prepared.FileName, info.ModTime(), file)
 	return nil
+}
+
+type preparedBackupDownload struct {
+	FilePath    string
+	FileName    string
+	ContentType string
+}
+
+func prepareLocalBackupDownload(artifactPath string) (*preparedBackupDownload, func(), error) {
+	trimmed := strings.TrimSpace(artifactPath)
+	if trimmed == "" {
+		return nil, nil, fmt.Errorf("backup artifact path is required")
+	}
+
+	info, err := os.Stat(trimmed)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open backup artifact %q: %w", trimmed, err)
+	}
+	if info.IsDir() {
+		tarballPath, cleanup, err := buildDirectoryDownload(trimmed)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &preparedBackupDownload{
+			FilePath:    tarballPath,
+			FileName:    filepath.Base(trimmed) + ".tar.gz",
+			ContentType: "application/gzip",
+		}, cleanup, nil
+	}
+
+	return &preparedBackupDownload{
+		FilePath: trimmed,
+		FileName: filepath.Base(trimmed),
+	}, nil, nil
+}
+
+func downloadSplitBasePath(artifactPath string) (string, bool) {
+	trimmed := strings.TrimSpace(artifactPath)
+	if !downloadSplitPartPattern.MatchString(trimmed) {
+		return "", false
+	}
+	return strings.TrimSuffix(trimmed, filepath.Ext(trimmed)), true
+}
+
+func listSplitDownloadParts(basePath string) ([]string, error) {
+	parts, err := filepath.Glob(basePath + ".part*")
+	if err != nil {
+		return nil, fmt.Errorf("glob split download parts for %q: %w", basePath, err)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("split download parts for %q not found", basePath)
+	}
+	parts = filterExistingDownloadParts(parts)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("split download parts for %q not found", basePath)
+	}
+	sort.Strings(parts)
+	return parts, nil
+}
+
+func filterExistingDownloadParts(parts []string) []string {
+	filtered := make([]string, 0, len(parts))
+	for _, partPath := range parts {
+		if downloadSplitPartPattern.MatchString(partPath) {
+			filtered = append(filtered, partPath)
+		}
+	}
+	return filtered
+}
+
+func buildDirectoryDownload(root string) (string, func(), error) {
+	tempFile, err := os.CreateTemp("", "rbs-download-dir-*.tar.gz")
+	if err != nil {
+		return "", nil, fmt.Errorf("create directory download temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	if err := streamDirectoryAsTarGz(tempFile, root); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return "", nil, fmt.Errorf("package backup directory %q: %w", root, err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", nil, fmt.Errorf("close directory download temp file %q: %w", tempPath, err)
+	}
+	return tempPath, func() {
+		_ = os.Remove(tempPath)
+	}, nil
 }
 
 func streamDirectoryAsTarGz(w io.Writer, root string) error {

@@ -18,10 +18,31 @@ export interface RestoreRequest {
   encryption_key?: string
 }
 
+export interface BackupDownloadPart {
+  index: number
+  name: string
+  url: string
+  size_bytes?: number
+}
+
+export interface SingleBackupDownloadResponse {
+  mode: 'single'
+  url: string
+  file_name?: string
+}
+
+export interface SplitBackupDownloadResponse {
+  mode: 'split'
+  file_name?: string
+  parts: BackupDownloadPart[]
+}
+
+export type BackupDownloadResponse = SingleBackupDownloadResponse | SplitBackupDownloadResponse
+
 export function restoreBackup(instanceId: number, backupId: number, data: RestoreRequest) {
   return apiClient.post<void>(`/instances/${instanceId}/backups/${backupId}/restore`, data)
 }
 
 export function downloadBackup(instanceId: number, backupId: number) {
-  return apiClient.get<{ url: string }>(`/instances/${instanceId}/backups/${backupId}/download`)
+  return apiClient.get<BackupDownloadResponse>(`/instances/${instanceId}/backups/${backupId}/download`)
 }
