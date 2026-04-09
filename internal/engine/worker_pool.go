@@ -214,6 +214,7 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
+		wp.ensureTaskTerminated(loadedTask, backup)
 		wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 		wp.handleRiskAfterFailure(runCtx, loadedTask, backup)
 		return runErr
@@ -291,6 +292,47 @@ func (wp *WorkerPool) failTask(task *model.Task, backup *model.Backup, runErr er
 	wp.handleRiskAfterFailure(context.Background(), task, backup)
 
 	return runErr
+}
+
+func (wp *WorkerPool) ensureTaskTerminated(task *model.Task, backup *model.Backup) {
+	if wp == nil || wp.db == nil || task == nil {
+		return
+	}
+
+	current, err := wp.db.GetTaskByID(task.ID)
+	if err != nil {
+		slog.Error("ensure task terminated: load task failed", "task_id", task.ID, "error", err)
+		return
+	}
+	if current.Status != "running" && current.Status != "queued" {
+		return
+	}
+
+	completedAt := time.Now().UTC()
+	current.Status = "failed"
+	current.CompletedAt = &completedAt
+	current.EstimatedEnd = nil
+	if current.ErrorMessage == "" {
+		current.ErrorMessage = "task terminated unexpectedly"
+	}
+	if err := wp.db.UpdateTask(current); err != nil {
+		slog.Error("ensure task terminated: update task failed", "task_id", task.ID, "error", err)
+	}
+
+	if current.BackupID != nil && taskUsesManagedBackup(current) {
+		b, err := wp.db.GetBackupByID(*current.BackupID)
+		if err == nil && (b.Status == "running" || b.Status == "queued") {
+			b.Status = "failed"
+			b.CompletedAt = &completedAt
+			b.DurationSeconds = elapsedSeconds(b.StartedAt, completedAt)
+			if b.ErrorMessage == "" {
+				b.ErrorMessage = "task terminated unexpectedly"
+			}
+			if err := wp.db.UpdateBackup(b); err != nil {
+				slog.Error("ensure task terminated: update backup failed", "task_id", task.ID, "backup_id", b.ID, "error", err)
+			}
+		}
+	}
 }
 
 func (wp *WorkerPool) writeExecutionAudit(ctx context.Context, task *model.Task, backup *model.Backup, policy *model.Policy) {

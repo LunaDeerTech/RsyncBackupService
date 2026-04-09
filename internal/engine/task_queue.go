@@ -159,7 +159,7 @@ func (q *TaskQueue) Cancel(taskID int64) error {
 		}
 
 		running.cancel()
-		return nil
+		return q.cancelRunningTask(task)
 	default:
 		return fmt.Errorf("task %d cannot be cancelled from status %q", task.ID, task.Status)
 	}
@@ -231,6 +231,10 @@ func (q *TaskQueue) Recover() error {
 		if err := q.db.UpdateInstanceStatus(task.InstanceID, "idle"); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+	}
+
+	if err := q.db.ResetAllRunningInstances(); err != nil {
+		return fmt.Errorf("reset stale instance statuses: %w", err)
 	}
 
 	for index := range activeTasks {
@@ -415,5 +419,38 @@ func (q *TaskQueue) cancelQueuedTask(task *model.Task) error {
 	}
 
 	q.clearTaskRuntimeData(task.ID)
+	return nil
+}
+
+func (q *TaskQueue) cancelRunningTask(task *model.Task) error {
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+
+	completedAt := time.Now().UTC()
+	task.Status = "cancelled"
+	task.CompletedAt = &completedAt
+	task.EstimatedEnd = nil
+	task.ErrorMessage = "task cancelled by user"
+	if err := q.db.UpdateTask(task); err != nil {
+		return err
+	}
+
+	if task.BackupID != nil && taskUsesManagedBackup(task) {
+		backup, err := q.db.GetBackupByID(*task.BackupID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && backup.Status == "running" {
+			backup.Status = "cancelled"
+			backup.CompletedAt = &completedAt
+			backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
+			backup.ErrorMessage = "task cancelled by user"
+			if err := q.db.UpdateBackup(backup); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }

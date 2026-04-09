@@ -311,6 +311,14 @@ func (db *DB) UpdateInstanceStatus(id int64, status string) error {
 	return nil
 }
 
+func (db *DB) ResetAllRunningInstances() error {
+	_, err := db.Exec(`UPDATE instances SET status = 'idle', updated_at = CURRENT_TIMESTAMP WHERE status = 'running'`)
+	if err != nil {
+		return fmt.Errorf("reset running instances: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 	stats := &model.InstanceStats{}
 
