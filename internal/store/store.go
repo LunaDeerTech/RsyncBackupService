@@ -209,6 +209,9 @@ func New(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
 
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
 	if err := sqlDB.Ping(); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("ping sqlite database: %w", err)
@@ -222,6 +225,11 @@ func New(dataDir string) (*DB, error) {
 	if !strings.EqualFold(journalMode, "wal") {
 		sqlDB.Close()
 		return nil, fmt.Errorf("unexpected journal mode %q", journalMode)
+	}
+
+	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
 
 	if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON;"); err != nil {

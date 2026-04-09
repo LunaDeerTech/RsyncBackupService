@@ -35,6 +35,26 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 		t.Fatalf("journal mode = %q, want %q", journalMode, "wal")
 	}
 
+	var busyTimeout int
+	if err := db.QueryRow("PRAGMA busy_timeout;").Scan(&busyTimeout); err != nil {
+		t.Fatalf("busy timeout query error = %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy timeout = %d, want %d", busyTimeout, 5000)
+	}
+
+	var foreignKeys int
+	if err := db.QueryRow("PRAGMA foreign_keys;").Scan(&foreignKeys); err != nil {
+		t.Fatalf("foreign keys query error = %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("foreign keys = %d, want %d", foreignKeys, 1)
+	}
+
+	if db.Stats().MaxOpenConnections != 1 {
+		t.Fatalf("max open connections = %d, want %d", db.Stats().MaxOpenConnections, 1)
+	}
+
 	expectedTables := []string{
 		"audit_logs",
 		"backup_targets",
@@ -82,7 +102,7 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 	if err := db.QueryRow(`SELECT value FROM system_configs WHERE key = 'schema_version'`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("query schema version error = %v", err)
 	}
-	if schemaVersion != "3" {
-		t.Fatalf("schema version = %q, want %q", schemaVersion, "3")
+	if schemaVersion != "4" {
+		t.Fatalf("schema version = %q, want %q", schemaVersion, "4")
 	}
 }

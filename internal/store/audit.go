@@ -59,23 +59,12 @@ func (db *DB) CreateAuditLog(log *model.AuditLog) error {
 		return fmt.Errorf("read created audit log id: %w", err)
 	}
 
-	created, err := scanAuditLogWithUser(db.QueryRow(
-		`SELECT `+auditLogColumns+`
-		 FROM audit_logs a
-		 LEFT JOIN users u ON u.id = a.user_id
-		 WHERE a.id = ?`,
-		logID,
-	))
-	if err != nil {
-		return fmt.Errorf("load created audit log: %w", err)
+	log.ID = logID
+	log.Action = strings.TrimSpace(log.Action)
+	log.Detail = json.RawMessage(detail)
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
 	}
-
-	log.ID = created.ID
-	log.InstanceID = created.InstanceID
-	log.UserID = created.UserID
-	log.Action = created.Action
-	log.Detail = created.Detail
-	log.CreatedAt = created.CreatedAt
 	return nil
 }
 
