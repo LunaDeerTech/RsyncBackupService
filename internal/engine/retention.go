@@ -452,7 +452,7 @@ func (rc *RetentionCleaner) shouldRefreshLatestLink(ctx context.Context, policy 
 		return false, err
 	}
 
-	latestLinkPath := joinStoragePath(strings.ToLower(strings.TrimSpace(target.StorageType)), target.StoragePath, instance.Name, "latest")
+	latestLinkPath := joinStoragePath(strings.ToLower(strings.TrimSpace(target.StorageType)), target.StoragePath, backupInstanceStorageKey(instance), "latest")
 	switch strings.ToLower(strings.TrimSpace(target.StorageType)) {
 	case "local":
 		currentTarget, err := rc.readlink(latestLinkPath)
@@ -481,7 +481,7 @@ func (rc *RetentionCleaner) shouldRefreshLatestLink(ctx context.Context, policy 
 }
 
 func (rc *RetentionCleaner) setLatestLink(ctx context.Context, instance *model.Instance, target *model.BackupTarget, remote *model.RemoteConfig, replacementPath string) error {
-	latestLinkPath := joinStoragePath(strings.ToLower(strings.TrimSpace(target.StorageType)), target.StoragePath, instance.Name, "latest")
+	latestLinkPath := joinStoragePath(strings.ToLower(strings.TrimSpace(target.StorageType)), target.StoragePath, backupInstanceStorageKey(instance), "latest")
 	replacementPath = strings.TrimSpace(replacementPath)
 
 	switch strings.ToLower(strings.TrimSpace(target.StorageType)) {

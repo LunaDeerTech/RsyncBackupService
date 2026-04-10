@@ -119,7 +119,8 @@ func (e *ColdBackupExecutor) Execute(ctx context.Context, task *model.Task, poli
 		return err
 	}
 
-	runName, runDir, err := e.allocateRunDirectory(ctx, target, targetRemote, instance.Name)
+	storageKey := backupInstanceStorageKey(instance)
+	runName, runDir, err := e.allocateRunDirectory(ctx, target, targetRemote, storageKey)
 	if err != nil {
 		return err
 	}
@@ -362,16 +363,19 @@ func (e *ColdBackupExecutor) loadRemoteConfig(endpointType string, remoteConfigI
 	return remote, nil
 }
 
-func (e *ColdBackupExecutor) allocateRunDirectory(ctx context.Context, target *model.BackupTarget, remote *model.RemoteConfig, instanceName string) (string, string, error) {
+func (e *ColdBackupExecutor) allocateRunDirectory(ctx context.Context, target *model.BackupTarget, remote *model.RemoteConfig, instanceStorageKey string) (string, string, error) {
 	basePath := strings.TrimSpace(target.StoragePath)
 	if basePath == "" {
 		return "", "", fmt.Errorf("target storage path is required")
+	}
+	if strings.TrimSpace(instanceStorageKey) == "" {
+		return "", "", fmt.Errorf("instance storage key is required")
 	}
 
 	storageType := normalizeRsyncType(target.StorageType)
 	for attempt := 0; attempt < 100; attempt++ {
 		runName := e.snapshotName(attempt)
-		runDir := joinStoragePath(storageType, basePath, instanceName, runName)
+		runDir := joinStoragePath(storageType, basePath, instanceStorageKey, runName)
 		available, err := e.runDirectoryAvailable(ctx, storageType, runDir, remote)
 		if err != nil {
 			return "", "", err
@@ -381,7 +385,7 @@ func (e *ColdBackupExecutor) allocateRunDirectory(ctx context.Context, target *m
 		}
 	}
 
-	return "", "", fmt.Errorf("allocate unique cold backup target path for instance %q: too many collisions", instanceName)
+	return "", "", fmt.Errorf("allocate unique cold backup target path for instance %q: too many collisions", instanceStorageKey)
 }
 
 func (e *ColdBackupExecutor) snapshotName(attempt int) string {

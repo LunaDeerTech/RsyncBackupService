@@ -88,7 +88,8 @@ func (e *RollingBackupExecutor) Execute(ctx context.Context, task *model.Task, p
 		return err
 	}
 
-	snapshotPath, latestLinkPath, err := e.allocateSnapshotPaths(ctx, target, targetRemote, instance.Name)
+	storageKey := backupInstanceStorageKey(instance)
+	snapshotPath, latestLinkPath, err := e.allocateSnapshotPaths(ctx, target, targetRemote, storageKey)
 	if err != nil {
 		return err
 	}
@@ -158,6 +159,7 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 	if normalizeRsyncType(instance.SourceType) != "ssh" || normalizeRsyncType(target.StorageType) != "ssh" {
 		return fmt.Errorf("relay mode requires ssh source and ssh target")
 	}
+	storageKey := backupInstanceStorageKey(instance)
 
 	sourceRemote, err := e.loadRemoteConfig(instance.SourceType, instance.RemoteConfigID, "source")
 	if err != nil {
@@ -168,7 +170,7 @@ func (e *RollingBackupExecutor) ExecuteRelay(ctx context.Context, task *model.Ta
 		return err
 	}
 
-	snapshotPath, latestLinkPath, err := e.allocateSnapshotPaths(ctx, target, targetRemote, instance.Name)
+	snapshotPath, latestLinkPath, err := e.allocateSnapshotPaths(ctx, target, targetRemote, storageKey)
 	if err != nil {
 		return err
 	}
@@ -441,7 +443,7 @@ func (e *RollingBackupExecutor) findLatestLinkDest(policy *model.Policy, instanc
 	if linkDest == "" {
 		return "", nil
 	}
-	if !snapshotPathBelongsToTarget(target, instance.Name, linkDest) {
+	if !snapshotPathBelongsToTarget(target, instance, linkDest) {
 		return "", nil
 	}
 
@@ -741,15 +743,27 @@ func joinStoragePath(storageType, parts0, part1, part2 string) string {
 	return filepath.Join(strings.TrimSpace(parts0), part1, part2)
 }
 
-func snapshotPathBelongsToTarget(target *model.BackupTarget, instanceName, snapshotPath string) bool {
+func backupInstanceStorageKey(instance *model.Instance) string {
+	if instance == nil || instance.ID <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(instance.ID, 10)
+}
+
+func snapshotPathBelongsToTarget(target *model.BackupTarget, instance *model.Instance, snapshotPath string) bool {
+	storageKey := backupInstanceStorageKey(instance)
+	if strings.TrimSpace(storageKey) == "" {
+		return false
+	}
+
 	storageType := normalizeRsyncType(target.StorageType)
 	if storageType == "ssh" {
-		root := pathpkg.Clean(pathpkg.Join(strings.TrimSpace(target.StoragePath), instanceName))
+		root := pathpkg.Clean(pathpkg.Join(strings.TrimSpace(target.StoragePath), storageKey))
 		candidate := pathpkg.Clean(snapshotPath)
 		return candidate == root || strings.HasPrefix(candidate, root+"/")
 	}
 
-	root := filepath.Clean(filepath.Join(strings.TrimSpace(target.StoragePath), instanceName))
+	root := filepath.Clean(filepath.Join(strings.TrimSpace(target.StoragePath), storageKey))
 	candidate := filepath.Clean(snapshotPath)
 	separator := string(os.PathSeparator)
 	return candidate == root || strings.HasPrefix(candidate, root+separator)

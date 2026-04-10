@@ -65,7 +65,8 @@ func TestColdBackupExecutorExecuteDirectoryModeMovesSnapshotAndCleansTemp(t *tes
 	if backup.Status != "success" {
 		t.Fatalf("backup.Status = %q, want success", backup.Status)
 	}
-	wantSnapshot := filepath.Join(targetRoot, instance.Name, "20260407-130000", instance.Name+"-20260407-130000")
+	storageKey := backupInstanceStorageKey(instance)
+	wantSnapshot := filepath.Join(targetRoot, storageKey, "20260407-130000", instance.Name+"-20260407-130000")
 	if backup.SnapshotPath != wantSnapshot {
 		t.Fatalf("backup.SnapshotPath = %q, want %q", backup.SnapshotPath, wantSnapshot)
 	}
@@ -150,11 +151,12 @@ func TestColdBackupExecutorExecuteCompressedEncryptedSplitStoresParts(t *testing
 	if backup.Status != "success" {
 		t.Fatalf("backup.Status = %q, want success", backup.Status)
 	}
-	wantPrefix := filepath.Join(targetRoot, instance.Name, "20260407-140000", instance.Name+"-20260407-140000.tar.gz.enc.part001")
+	storageKey := backupInstanceStorageKey(instance)
+	wantPrefix := filepath.Join(targetRoot, storageKey, "20260407-140000", instance.Name+"-20260407-140000.tar.gz.enc.part001")
 	if backup.SnapshotPath != wantPrefix {
 		t.Fatalf("backup.SnapshotPath = %q, want %q", backup.SnapshotPath, wantPrefix)
 	}
-	partMatches, err := filepath.Glob(filepath.Join(targetRoot, instance.Name, "20260407-140000", instance.Name+"-20260407-140000.tar.gz.enc.part*"))
+	partMatches, err := filepath.Glob(filepath.Join(targetRoot, storageKey, "20260407-140000", instance.Name+"-20260407-140000.tar.gz.enc.part*"))
 	if err != nil {
 		t.Fatalf("Glob(parts) error = %v", err)
 	}

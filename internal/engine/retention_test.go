@@ -25,15 +25,16 @@ func TestRetentionCleanerCleanByCountDeletesOldRollingBackupsAndRepairsLatest(t 
 	oldestTime := time.Date(2026, 4, 4, 8, 0, 0, 0, time.UTC)
 	middleTime := oldestTime.Add(24 * time.Hour)
 	latestTime := middleTime.Add(24 * time.Hour)
+	storageKey := backupInstanceStorageKey(instance)
 
-	oldest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260404-080000"), oldestTime)
-	middle := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260405-080000"), middleTime)
-	latest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260406-080000"), latestTime)
+	oldest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260404-080000"), oldestTime)
+	middle := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260405-080000"), middleTime)
+	latest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260406-080000"), latestTime)
 
 	mustMkdirAll(t, oldest.SnapshotPath)
 	mustMkdirAll(t, middle.SnapshotPath)
 	mustMkdirAll(t, latest.SnapshotPath)
-	latestLinkPath := filepath.Join(target.StoragePath, instance.Name, "latest")
+	latestLinkPath := filepath.Join(target.StoragePath, storageKey, "latest")
 	mustMkdirAll(t, filepath.Dir(latestLinkPath))
 	if err := os.Symlink(oldest.SnapshotPath, latestLinkPath); err != nil {
 		t.Fatalf("Symlink(old latest) error = %v", err)
@@ -80,10 +81,11 @@ func TestRetentionCleanerCleanByTimeDeletesExpiredColdSplitBackupAndKeepsLastSuc
 	}
 
 	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
-	expiredRunDir := filepath.Join(target.StoragePath, instance.Name, "20260405-010000")
+	storageKey := backupInstanceStorageKey(instance)
+	expiredRunDir := filepath.Join(target.StoragePath, storageKey, "20260405-010000")
 	expiredPart1 := filepath.Join(expiredRunDir, "mysql-prod-20260405-010000.tar.gz.enc.part001")
 	expiredPart2 := filepath.Join(expiredRunDir, "mysql-prod-20260405-010000.tar.gz.enc.part002")
-	keptRunDir := filepath.Join(target.StoragePath, instance.Name, "20260407-010000")
+	keptRunDir := filepath.Join(target.StoragePath, storageKey, "20260407-010000")
 	keptFile := filepath.Join(keptRunDir, "mysql-prod-20260407-010000.tar.gz.enc")
 
 	expired := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "cold", expiredPart1, now.Add(-48*time.Hour))
@@ -123,9 +125,10 @@ func TestRetentionCleanerContinuesWhenArtifactDeletionFailsAndWritesAuditLog(t *
 	}
 
 	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
-	first := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260404-010000"), now.Add(-72*time.Hour))
-	second := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260405-010000"), now.Add(-48*time.Hour))
-	latest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260406-010000"), now.Add(-24*time.Hour))
+	storageKey := backupInstanceStorageKey(instance)
+	first := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260404-010000"), now.Add(-72*time.Hour))
+	second := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260405-010000"), now.Add(-48*time.Hour))
+	latest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260406-010000"), now.Add(-24*time.Hour))
 	mustMkdirAll(t, first.SnapshotPath)
 	mustMkdirAll(t, second.SnapshotPath)
 	mustMkdirAll(t, latest.SnapshotPath)
@@ -159,7 +162,8 @@ func TestWorkerPoolProcessTaskTriggersRetentionAfterSuccess(t *testing.T) {
 	}
 
 	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
-	oldBackup := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, instance.Name, "20260406-010000"), now.Add(-time.Hour))
+	storageKey := backupInstanceStorageKey(instance)
+	oldBackup := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", filepath.Join(target.StoragePath, storageKey, "20260406-010000"), now.Add(-time.Hour))
 	mustMkdirAll(t, oldBackup.SnapshotPath)
 
 	queue := NewTaskQueue(1, db)
@@ -173,7 +177,7 @@ func TestWorkerPoolProcessTaskTriggersRetentionAfterSuccess(t *testing.T) {
 		completedAt := now
 		backup.Type = policy.Type
 		backup.Status = "success"
-		backup.SnapshotPath = filepath.Join(target.StoragePath, instance.Name, "20260407-120000")
+		backup.SnapshotPath = filepath.Join(target.StoragePath, backupInstanceStorageKey(instance), "20260407-120000")
 		backup.CompletedAt = &completedAt
 		if err := db.UpdateBackup(backup); err != nil {
 			return err

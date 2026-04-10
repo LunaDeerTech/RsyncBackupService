@@ -19,9 +19,9 @@ import (
 
 func TestRollingBackupExecutorAllocateSnapshotPathsAddsCollisionSuffix(t *testing.T) {
 	targetRoot := t.TempDir()
-	instanceName := "mysql-prod"
+	instanceStorageKey := "42"
 	baseTime := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
-	collidingPath := filepath.Join(targetRoot, instanceName, baseTime.Format("20060102-150405"))
+	collidingPath := filepath.Join(targetRoot, instanceStorageKey, baseTime.Format("20060102-150405"))
 	if err := os.MkdirAll(collidingPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(collision) error = %v", err)
 	}
@@ -33,16 +33,16 @@ func TestRollingBackupExecutorAllocateSnapshotPathsAddsCollisionSuffix(t *testin
 	snapshotPath, latestPath, err := executor.allocateSnapshotPaths(context.Background(), &model.BackupTarget{
 		StorageType: "local",
 		StoragePath: targetRoot,
-	}, nil, instanceName)
+	}, nil, instanceStorageKey)
 	if err != nil {
 		t.Fatalf("allocateSnapshotPaths() error = %v", err)
 	}
 
-	wantSnapshot := filepath.Join(targetRoot, instanceName, "20260407-120000-01")
+	wantSnapshot := filepath.Join(targetRoot, instanceStorageKey, "20260407-120000-01")
 	if snapshotPath != wantSnapshot {
 		t.Fatalf("snapshotPath = %q, want %q", snapshotPath, wantSnapshot)
 	}
-	wantLatest := filepath.Join(targetRoot, instanceName, "latest")
+	wantLatest := filepath.Join(targetRoot, instanceStorageKey, "latest")
 	if latestPath != wantLatest {
 		t.Fatalf("latestPath = %q, want %q", latestPath, wantLatest)
 	}
@@ -106,7 +106,8 @@ func TestRollingBackupExecutorExecuteLocalToLocalCreatesLatestAndRecordsSuccess(
 	if err != nil {
 		t.Fatalf("GetBackupByID() error = %v", err)
 	}
-	wantSnapshot := filepath.Join(targetRoot, instance.Name, "20260407-120000")
+	storageKey := backupInstanceStorageKey(instance)
+	wantSnapshot := filepath.Join(targetRoot, storageKey, "20260407-120000")
 	if backup.Status != "success" {
 		t.Fatalf("backup.Status = %q, want success", backup.Status)
 	}
@@ -137,7 +138,7 @@ func TestRollingBackupExecutorExecuteLocalToLocalCreatesLatestAndRecordsSuccess(
 		t.Fatalf("task.CurrentStep = %q, want %q", loadedTask.CurrentStep, rollingTaskDoneStep)
 	}
 
-	latestPath := filepath.Join(targetRoot, instance.Name, "latest")
+	latestPath := filepath.Join(targetRoot, storageKey, "latest")
 	resolvedLatest, err := os.Readlink(latestPath)
 	if err != nil {
 		t.Fatalf("Readlink(latest) error = %v", err)
