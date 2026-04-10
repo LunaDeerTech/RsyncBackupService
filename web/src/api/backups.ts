@@ -13,6 +13,7 @@ export function getBackup(instanceId: number, backupId: number) {
 export interface RestoreRequest {
   restore_type: 'source' | 'custom'
   target_path?: string
+  remote_config_id?: number
   instance_name: string
   password: string
   encryption_key?: string

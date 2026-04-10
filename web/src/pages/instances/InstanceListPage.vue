@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { listInstances, createInstance, deleteInstance } from '../../api/instances'
+import { listInstances, createInstance } from '../../api/instances'
 import { listRemotes } from '../../api/remotes'
 import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
-import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
 import { formatRelativeTime } from '../../utils/time'
 import { EXCLUDE_PATTERN_HELP_EXAMPLES, normalizeExcludePatternsInput } from '../../utils/exclude-patterns'
@@ -20,19 +19,17 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
-import AppConfirm from '../../components/AppConfirm.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import { getDRLevelColor } from '../../utils/disaster-recovery'
 import {
   taskStatusMap, instanceStatusMap,
   getStatusConfig,
 } from '../../utils/status-config'
-import { Plus, Eye, Trash2, CircleHelp } from 'lucide-vue-next'
+import { Plus, Eye, CircleHelp, List, LayoutGrid } from 'lucide-vue-next'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const toast = useToastStore()
-const { confirm } = useConfirm()
 
 // ── List state ──
 const instances = ref<InstanceListItem[]>([])
@@ -40,6 +37,14 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+
+// ── View mode ──
+const isMobile = ref(window.innerWidth < 768)
+const viewMode = ref<'list' | 'card'>(isMobile.value ? 'card' : 'list')
+
+function handleResize() {
+  isMobile.value = window.innerWidth < 768
+}
 
 // ── Modal state ──
 const modalVisible = ref(false)
@@ -122,6 +127,11 @@ onMounted(() => {
   if (authStore.isAdmin) {
     fetchRemotes()
   }
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 
 function onPageChange(p: number) {
@@ -203,29 +213,6 @@ async function handleSubmit() {
   }
 }
 
-// ── Delete ──
-async function handleDelete(row: Record<string, unknown>) {
-  const ok = await confirm({
-    title: '删除实例',
-    message: `确定要删除「${row.name}」吗？将删除所有关联的策略、备份和任务，此操作不可撤销。`,
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!ok) return
-
-  try {
-    await deleteInstance(row.id as number)
-    toast.success('实例已删除')
-    await fetchList()
-  } catch (e) {
-    if (e instanceof ApiBusinessError) {
-      toast.error(e.message)
-    } else {
-      toast.error('删除失败')
-    }
-  }
-}
-
 function goToDetail(row: Record<string, unknown>) {
   router.push(`/instances/${row.id}`)
 }
@@ -236,14 +223,24 @@ function goToDetail(row: Record<string, unknown>) {
     <!-- Header -->
     <div class="instance-list-page__header">
       <h2 class="instance-list-page__title">备份实例</h2>
-      <AppButton v-if="authStore.isAdmin" variant="primary" size="sm" @click="openCreateModal">
-        <Plus :size="16" style="margin-right: 4px" />
-        新增实例
-      </AppButton>
+      <div class="instance-list-page__header-actions">
+        <div class="view-mode-toggle">
+          <button class="view-mode-btn" :class="{ 'view-mode-btn--active': viewMode === 'list' }" @click="viewMode = 'list'" title="列表视图">
+            <List :size="16" />
+          </button>
+          <button class="view-mode-btn" :class="{ 'view-mode-btn--active': viewMode === 'card' }" @click="viewMode = 'card'" title="卡片视图">
+            <LayoutGrid :size="16" />
+          </button>
+        </div>
+        <AppButton v-if="authStore.isAdmin" variant="primary" size="sm" @click="openCreateModal">
+          <Plus :size="16" style="margin-right: 4px" />
+          新增实例
+        </AppButton>
+      </div>
     </div>
 
-    <!-- Table -->
-    <div class="instance-list-page__table">
+    <!-- Table View -->
+    <div v-if="viewMode === 'list'" class="instance-list-page__table">
       <AppTable :columns="columns" :data="instances" :loading="loading">
         <template #cell-name="{ row }">
           <a class="instance-name-link" @click.prevent="goToDetail(row)">{{ row.name }}</a>
@@ -283,18 +280,55 @@ function goToDetail(row: Record<string, unknown>) {
             <AppButton variant="ghost" size="sm" @click="goToDetail(row)">
               <Eye :size="14" />
             </AppButton>
-            <AppButton
-              v-if="authStore.isAdmin"
-              variant="ghost"
-              size="sm"
-              :disabled="row.status === 'running'"
-              @click="handleDelete(row)"
-            >
-              <Trash2 :size="14" class="text-error" />
-            </AppButton>
           </div>
         </template>
       </AppTable>
+    </div>
+
+    <!-- Card View -->
+    <div v-if="viewMode === 'card'" class="instance-card-grid">
+      <div v-if="loading" class="instance-card-grid__loading">加载中…</div>
+      <template v-else-if="instances.length > 0">
+        <div
+          v-for="inst in instances" :key="inst.id"
+          class="instance-card"
+          @click="goToDetail(inst as unknown as Record<string, unknown>)"
+        >
+          <div class="instance-card__header">
+            <span class="instance-card__name">{{ inst.name }}</span>
+            <StatusBadge :config="getStatusConfig(instanceStatusMap, inst.status)" />
+          </div>
+          <div class="instance-card__body">
+            <div class="instance-card__field">
+              <span class="instance-card__label">数据源</span>
+              <span class="instance-card__value">{{ sourceTypeLabel[inst.source_type] ?? inst.source_type }}: {{ inst.source_path }}</span>
+            </div>
+            <div class="instance-card__row">
+              <div class="instance-card__field instance-card__field--half">
+                <span class="instance-card__label">容灾率</span>
+                <span v-if="inst.dr_score != null" class="instance-card__value">
+                  <span class="dr-score-dot" :style="{ background: getDRLevelColor(inst.dr_level ?? '') }" />
+                  {{ Math.round(inst.dr_score) }}
+                </span>
+                <span v-else class="instance-card__value text-muted">—</span>
+              </div>
+              <div class="instance-card__field instance-card__field--half">
+                <span class="instance-card__label">上次备份</span>
+                <span class="instance-card__value">
+                  <template v-if="inst.last_backup_status">
+                    <StatusBadge :config="getStatusConfig(taskStatusMap, inst.last_backup_status)" size="sm" />
+                  </template>
+                  <span v-if="inst.last_backup_time" class="instance-card__time">{{ formatRelativeTime(inst.last_backup_time) }}</span>
+                  <span v-else class="text-muted">无记录</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div v-else class="instance-card-grid__empty">
+        <span class="text-muted">暂无实例</span>
+      </div>
     </div>
 
     <!-- Pagination -->
@@ -364,8 +398,6 @@ function goToDetail(row: Record<string, unknown>) {
         </div>
       </template>
     </AppModal>
-
-    <AppConfirm />
   </div>
 </template>
 
@@ -379,6 +411,11 @@ function goToDetail(row: Record<string, unknown>) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.instance-list-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .instance-list-page__title {
   font-size: 20px;
@@ -454,5 +491,122 @@ function goToDetail(row: Record<string, unknown>) {
   outline: none;
   border-color: var(--primary-500);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-500) 18%, transparent);
+}
+
+/* View mode toggle */
+.view-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.view-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--surface-base);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.view-mode-btn:hover {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+}
+.view-mode-btn--active {
+  background: var(--primary-50);
+  color: var(--primary-600);
+}
+.view-mode-btn + .view-mode-btn {
+  border-left: 1px solid var(--border-default);
+}
+
+/* Card grid */
+.instance-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+.instance-card-grid__loading,
+.instance-card-grid__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+.instance-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.instance-card:hover {
+  border-color: var(--primary-300);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-500) 10%, transparent);
+}
+.instance-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px 0;
+}
+.instance-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instance-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  flex: 1;
+}
+.instance-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.instance-card__field--half {
+  flex: 1;
+  min-width: 0;
+}
+.instance-card__row {
+  display: flex;
+  gap: 16px;
+}
+.instance-card__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.instance-card__value {
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instance-card__time {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 767px) {
+  .instance-card-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"rsync-backup-service/internal/model"
@@ -204,7 +205,14 @@ func (h *Handler) ListDashboardUpcomingTasks(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	JSON(w, http.StatusOK, map[string]any{"items": h.scheduler.GetUpcomingTasks(24 * time.Hour)})
+	within := 24 * time.Hour
+	if v := r.URL.Query().Get("within_hours"); v != "" {
+		if hours, err := strconv.Atoi(v); err == nil && hours > 0 && hours <= 720 {
+			within = time.Duration(hours) * time.Hour
+		}
+	}
+
+	JSON(w, http.StatusOK, map[string]any{"items": h.scheduler.GetUpcomingTasks(within)})
 }
 
 func (h *Handler) loadDashboardScoredInstances(ctx context.Context) ([]dashboardScoredInstance, error) {

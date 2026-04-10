@@ -191,7 +191,10 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 		t.Fatalf("updated.ExcludePatterns = %#v, want updated patterns", updated.ExcludePatterns)
 	}
 
-	deleteResponse := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instance.ID), nil, mustAccessTokenForUser(t, admin, "secret"))
+	deleteResponse := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instance.ID), map[string]string{
+		"instance_name": "mysql-main",
+		"password":      "AdminPass123",
+	}, mustAccessTokenForUser(t, admin, "secret"))
 	if deleteResponse.Code != http.StatusOK {
 		t.Fatalf("DELETE /api/v1/instances/{id} status = %d, want %d, body = %s", deleteResponse.Code, http.StatusOK, deleteResponse.Body.String())
 	}
@@ -241,7 +244,10 @@ func TestInstanceValidationAndIdleRestrictions(t *testing.T) {
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, updateRunning, http.StatusBadRequest, authErrorInvalidRequest, "only idle instances can be edited")
 
-	deleteRunning := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(running.ID), nil, mustAccessTokenForUser(t, admin, "secret"))
+	deleteRunning := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(running.ID), map[string]string{
+		"instance_name": "running-instance",
+		"password":      "AdminPass123",
+	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, deleteRunning, http.StatusBadRequest, authErrorInvalidRequest, "only idle instances can be deleted")
 
 	permissionsResponse := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/instances/"+itoa(running.ID)+"/permissions", map[string]any{

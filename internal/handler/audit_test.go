@@ -100,7 +100,10 @@ func TestInstanceHandlersWriteAuditLogs(t *testing.T) {
 		t.Fatalf("PUT /api/v1/instances/{id} status = %d, want %d, body = %s", updateResponse.Code, http.StatusOK, updateResponse.Body.String())
 	}
 
-	deleteResponse := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instance.ID), nil, mustAccessTokenForUser(t, admin, "secret"))
+	deleteResponse := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instance.ID), map[string]string{
+		"instance_name": "mysql-main",
+		"password":      "AdminPass123",
+	}, mustAccessTokenForUser(t, admin, "secret"))
 	if deleteResponse.Code != http.StatusOK {
 		t.Fatalf("DELETE /api/v1/instances/{id} status = %d, want %d, body = %s", deleteResponse.Code, http.StatusOK, deleteResponse.Body.String())
 	}

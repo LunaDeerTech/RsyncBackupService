@@ -205,9 +205,10 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 			return wp.failTask(loadedTask, backup, fmt.Errorf("restore executor is unavailable"))
 		}
 		restoreReq := &RestoreRequest{
-			RestoreType:   loadedTask.RestoreType,
-			TargetPath:    loadedTask.TargetPath,
-			EncryptionKey: wp.queue.restoreEncryptionKey(loadedTask.ID),
+			RestoreType:    loadedTask.RestoreType,
+			TargetPath:     loadedTask.TargetPath,
+			RemoteConfigID: loadedTask.RemoteConfigID,
+			EncryptionKey:  wp.queue.restoreEncryptionKey(loadedTask.ID),
 		}
 		runErr = wp.restore.Execute(runCtx, loadedTask, backup, restoreReq, nil)
 	default:

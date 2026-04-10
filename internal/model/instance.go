@@ -77,6 +77,7 @@ type InstanceStats struct {
 	SuccessBackupCount   int64              `json:"success_backup_count"`
 	FailureBackupCount   int64              `json:"failure_backup_count"`
 	TotalBackupSizeBytes int64              `json:"total_backup_size_bytes"`
+	TotalBackupDiskBytes int64              `json:"total_backup_disk_bytes"`
 	PolicyCount          int64              `json:"policy_count"`
 	LastBackup           *Backup            `json:"last_backup,omitempty"`
 	RecentTrend          []BackupTrendPoint `json:"recent_trend"`

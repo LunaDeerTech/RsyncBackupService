@@ -74,6 +74,7 @@ export interface InstanceStats {
   success_backup_count: number
   failure_backup_count: number
   total_backup_size_bytes: number
+  total_backup_disk_bytes: number
   policy_count: number
   last_backup?: Backup
   recent_trend: BackupTrendPoint[]

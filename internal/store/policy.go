@@ -11,7 +11,7 @@ import (
 
 const (
 	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retention_type, retention_value, created_at, updated_at`
-	taskColumns   = `id, instance_id, backup_id, type, restore_type, target_path, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
+	taskColumns   = `id, instance_id, backup_id, type, restore_type, target_path, remote_config_id, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
 )
 
 type policyScanner interface {
@@ -535,13 +535,14 @@ func (db *DB) CreateTask(task *model.Task) error {
 	}
 
 	result, err := db.Exec(
-		`INSERT INTO tasks (instance_id, backup_id, type, restore_type, target_path, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO tasks (instance_id, backup_id, type, restore_type, target_path, remote_config_id, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		task.InstanceID,
 		task.BackupID,
 		task.Type,
 		task.RestoreType,
 		task.TargetPath,
+		task.RemoteConfigID,
 		task.Status,
 		task.Progress,
 		task.CurrentStep,
@@ -865,14 +866,15 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 
 func scanTask(scanner taskScanner) (*model.Task, error) {
 	var (
-		task         model.Task
-		backupID     sql.NullInt64
-		restoreType  string
-		targetPath   string
-		startedAt    sql.NullString
-		completedAt  sql.NullString
-		estimatedEnd sql.NullString
-		rawCreatedAt string
+		task           model.Task
+		backupID       sql.NullInt64
+		restoreType    string
+		targetPath     string
+		remoteConfigID sql.NullInt64
+		startedAt      sql.NullString
+		completedAt    sql.NullString
+		estimatedEnd   sql.NullString
+		rawCreatedAt   string
 	)
 
 	if err := scanner.Scan(
@@ -882,6 +884,7 @@ func scanTask(scanner taskScanner) (*model.Task, error) {
 		&task.Type,
 		&restoreType,
 		&targetPath,
+		&remoteConfigID,
 		&task.Status,
 		&task.Progress,
 		&task.CurrentStep,
@@ -900,6 +903,9 @@ func scanTask(scanner taskScanner) (*model.Task, error) {
 	}
 	if backupID.Valid {
 		task.BackupID = &backupID.Int64
+	}
+	if remoteConfigID.Valid {
+		task.RemoteConfigID = &remoteConfigID.Int64
 	}
 	task.RestoreType = restoreType
 	task.TargetPath = targetPath

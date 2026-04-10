@@ -33,9 +33,10 @@ const (
 )
 
 type RestoreRequest struct {
-	RestoreType   string
-	TargetPath    string
-	EncryptionKey string
+	RestoreType    string
+	TargetPath     string
+	RemoteConfigID *int64
+	EncryptionKey  string
 }
 
 type RestoreExecutor struct {
@@ -323,6 +324,13 @@ func (e *RestoreExecutor) resolveRestoreTarget(instance *model.Instance, request
 		}
 		return instance.SourcePath, instance.SourceType, true, remote, nil
 	case "custom":
+		if request.RemoteConfigID != nil {
+			remote, err := e.loadRemoteConfig("ssh", request.RemoteConfigID, "restore target")
+			if err != nil {
+				return "", "", false, nil, err
+			}
+			return request.TargetPath, "ssh", false, remote, nil
+		}
 		return request.TargetPath, "local", false, nil, nil
 	default:
 		return "", "", false, nil, fmt.Errorf("restore_type must be source or custom")

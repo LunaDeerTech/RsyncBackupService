@@ -31,11 +31,12 @@ const backupErrorNotFound = 40407
 var downloadSplitPartPattern = regexp.MustCompile(`\.part\d+$`)
 
 type restoreBackupRequest struct {
-	RestoreType   string `json:"restore_type"`
-	TargetPath    string `json:"target_path,omitempty"`
-	InstanceName  string `json:"instance_name"`
-	Password      string `json:"password"`
-	EncryptionKey string `json:"encryption_key,omitempty"`
+	RestoreType    string `json:"restore_type"`
+	TargetPath     string `json:"target_path,omitempty"`
+	RemoteConfigID *int64 `json:"remote_config_id,omitempty"`
+	InstanceName   string `json:"instance_name"`
+	Password       string `json:"password"`
+	EncryptionKey  string `json:"encryption_key,omitempty"`
 }
 
 type DownloadToken struct {
@@ -223,6 +224,17 @@ func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "target_path: "+err.Error())
 			return
 		}
+		if request.RemoteConfigID != nil {
+			remote, err := h.db.GetRemoteConfigByID(*request.RemoteConfigID)
+			if err != nil {
+				Error(w, http.StatusBadRequest, authErrorInvalidRequest, "remote_config_id: remote config not found")
+				return
+			}
+			if remote.Type != "ssh" {
+				Error(w, http.StatusBadRequest, authErrorInvalidRequest, "remote_config_id: only SSH remote configs are supported for restore")
+				return
+			}
+		}
 	default:
 		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "restore_type must be source or custom")
 		return
@@ -241,15 +253,16 @@ func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := &model.Task{
-		InstanceID:   instance.ID,
-		BackupID:     &backup.ID,
-		Type:         "restore",
-		RestoreType:  restoreType,
-		TargetPath:   targetPath,
-		Status:       "queued",
-		Progress:     0,
-		CurrentStep:  "queued",
-		ErrorMessage: "",
+		InstanceID:     instance.ID,
+		BackupID:       &backup.ID,
+		Type:           "restore",
+		RestoreType:    restoreType,
+		TargetPath:     targetPath,
+		RemoteConfigID: request.RemoteConfigID,
+		Status:         "queued",
+		Progress:       0,
+		CurrentStep:    "queued",
+		ErrorMessage:   "",
 	}
 	if err := h.db.CreateTask(task); err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to create restore task")

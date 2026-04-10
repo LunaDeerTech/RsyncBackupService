@@ -318,11 +318,12 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 		`SELECT COUNT(*),
 		        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
 		        COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
-		        COALESCE(SUM(actual_size_bytes), 0)
+		        COALESCE(SUM(actual_size_bytes), 0),
+		        COALESCE(SUM(backup_size_bytes), 0)
 		 FROM backups
 		 WHERE instance_id = ?`,
 		instanceID,
-	).Scan(&stats.BackupCount, &stats.SuccessBackupCount, &stats.FailureBackupCount, &stats.TotalBackupSizeBytes); err != nil {
+	).Scan(&stats.BackupCount, &stats.SuccessBackupCount, &stats.FailureBackupCount, &stats.TotalBackupSizeBytes, &stats.TotalBackupDiskBytes); err != nil {
 		return nil, fmt.Errorf("get instance %d backup stats: %w", instanceID, err)
 	}
 

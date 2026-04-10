@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 4
+const latestSchemaVersion = 5
 
 type DB struct {
 	*sql.DB
@@ -192,6 +192,12 @@ var migrations = []migration{
 		version: 4,
 		statements: []string{
 			`ALTER TABLE instances ADD COLUMN exclude_patterns TEXT NOT NULL DEFAULT ''`,
+		},
+	},
+	{
+		version: 5,
+		statements: []string{
+			`ALTER TABLE tasks ADD COLUMN remote_config_id INTEGER`,
 		},
 	},
 }

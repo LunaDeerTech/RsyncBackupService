@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"rsync-backup-service/internal/audit"
+	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/util"
@@ -274,11 +275,36 @@ func (h *Handler) DeleteInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var request struct {
+		InstanceName string `json:"instance_name"`
+		Password     string `json:"password"`
+	}
+	if !decodeRequestBody(w, r, &request) {
+		return
+	}
+
 	instance, err := h.db.GetInstanceByID(instanceID)
 	if err != nil {
 		writeInstanceError(w, err, "failed to query instance")
 		return
 	}
+
+	if strings.TrimSpace(request.InstanceName) != instance.Name {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "instance_name does not match the target instance")
+		return
+	}
+
+	claims := middleware.MustGetUser(r.Context())
+	user, err := h.db.GetUserByID(claims.UserID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to query user")
+		return
+	}
+	if !authcrypto.CheckPassword(strings.TrimSpace(request.Password), user.PasswordHash) {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "password is incorrect")
+		return
+	}
+
 	if instance.Status != "idle" {
 		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "only idle instances can be deleted")
 		return

@@ -86,6 +86,6 @@ export function getFocusInstances() {
   return apiClient.get<FocusInstance[]>('/dashboard/focus-instances')
 }
 
-export function getUpcomingTasks() {
-  return apiClient.get<{ items: UpcomingTask[] }>('/dashboard/upcoming-tasks')
+export function getUpcomingTasks(params?: { within_hours?: number }) {
+  return apiClient.get<{ items: UpcomingTask[] }>('/dashboard/upcoming-tasks', { params })
 }

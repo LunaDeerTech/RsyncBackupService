@@ -31,8 +31,8 @@ export function updateInstance(id: number, data: UpdateInstanceRequest) {
   return apiClient.put<Instance>(`/instances/${id}`, data)
 }
 
-export function deleteInstance(id: number) {
-  return apiClient.delete<void>(`/instances/${id}`)
+export function deleteInstance(id: number, data: { instance_name: string; password: string }) {
+  return apiClient.delete<void>(`/instances/${id}`, { data })
 }
 
 export function updateInstancePermissions(id: number, permissions: PermissionItem[]) {

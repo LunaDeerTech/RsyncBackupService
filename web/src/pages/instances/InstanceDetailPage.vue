@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions, listInstancePermissions } from '../../api/instances'
+import { getInstance, getInstanceStats, getDisasterRecovery, updateInstance, updateInstancePermissions, listInstancePermissions, deleteInstance } from '../../api/instances'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../api/policies'
 import { listBackups, restoreBackup, downloadBackup } from '../../api/backups'
 import type { RestoreRequest, BackupDownloadPart } from '../../api/backups'
@@ -156,12 +156,15 @@ const restoreError = ref('')
 const restoreForm = reactive({
   restore_type: 'source' as 'source' | 'custom',
   target_path: '',
+  target_location: 'local' as 'local' | 'remote',
+  remote_config_id: undefined as number | undefined,
   instance_name: '',
   password: '',
   encryption_key: '',
 })
 const restoreFormErrors = reactive({
   target_path: '',
+  remote_config_id: '',
   instance_name: '',
   password: '',
   encryption_key: '',
@@ -222,6 +225,64 @@ const filteredAddPermUsers = computed(() => {
   return available.filter(u => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
 })
 
+// ── Delete instance state ──
+const deleteModalVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteForm = reactive({ instance_name: '', password: '' })
+const deleteFormErrors = reactive({ instance_name: '', password: '' })
+
+function openDeleteModal() {
+  deleteForm.instance_name = ''
+  deleteForm.password = ''
+  deleteFormErrors.instance_name = ''
+  deleteFormErrors.password = ''
+  deleteModalVisible.value = true
+}
+function validateDeleteForm(): boolean {
+  let valid = true
+  deleteFormErrors.instance_name = ''
+  deleteFormErrors.password = ''
+  if (!deleteForm.instance_name.trim()) {
+    deleteFormErrors.instance_name = '请输入实例名称'
+    valid = false
+  } else if (instance.value && deleteForm.instance_name.trim() !== instance.value.name) {
+    deleteFormErrors.instance_name = '实例名称不匹配'
+    valid = false
+  }
+  if (!deleteForm.password.trim()) {
+    deleteFormErrors.password = '请输入当前密码'
+    valid = false
+  }
+  return valid
+}
+async function handleDeleteInstance() {
+  if (!validateDeleteForm()) return
+  deleteSubmitting.value = true
+  try {
+    await deleteInstance(instanceId.value, {
+      instance_name: deleteForm.instance_name.trim(),
+      password: deleteForm.password.trim(),
+    })
+    deleteModalVisible.value = false
+    toast.success('实例已删除')
+    router.push({ name: 'instances' })
+  } catch (e) {
+    if (e instanceof ApiBusinessError) {
+      if (e.message.includes('password')) {
+        deleteFormErrors.password = '密码错误'
+      } else if (e.message.includes('instance_name')) {
+        deleteFormErrors.instance_name = '实例名称不匹配'
+      } else {
+        toast.error(e.message)
+      }
+    } else {
+      toast.error('删除实例失败')
+    }
+  } finally {
+    deleteSubmitting.value = false
+  }
+}
+
 // ── Computed: policy form helpers ──
 const policyTypeOptions = [
   { label: '滚动备份', value: 'rolling' },
@@ -248,6 +309,12 @@ const sourceTypeOptions = [
 
 const remoteOptions = computed(() =>
   remotes.value.map((r) => ({ label: r.name, value: r.id })),
+)
+
+const sshRemoteOptions = computed(() =>
+  remotes.value
+    .filter((r) => r.type === 'ssh')
+    .map((r) => ({ label: `${r.name} (${r.host})`, value: r.id })),
 )
 
 const policyTypeLabel: Record<string, string> = { rolling: '滚动', cold: '冷备' }
@@ -470,8 +537,8 @@ async function handleCancelTask(taskId: number) {
 
 async function fetchInstanceUpcoming() {
   try {
-    const res = await fetchUpcomingTasksAPI()
-    instanceUpcoming.value = (res.items ?? []).filter(t => t.instance_id === instanceId.value)
+    const res = await fetchUpcomingTasksAPI({ within_hours: 168 })
+    instanceUpcoming.value = (res.items ?? []).filter(t => t.instance_id === instanceId.value).slice(0, 3)
   } catch {
     // silent
   }
@@ -548,6 +615,7 @@ const animDrRecovery = useCountUp(computed(() => drScore.value ? Math.round(drSc
 const animDrRedundancy = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.redundancy) : 0))
 const animDrStability = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.stability) : 0))
 const animTotalSizeBytes = useCountUp(computed(() => stats.value?.total_backup_size_bytes ?? 0), 800)
+const animTotalDiskBytes = useCountUp(computed(() => stats.value?.total_backup_disk_bytes ?? 0), 800)
 
 const sourceTypeLabel: Record<string, string> = { local: '本地', ssh: 'SSH' }
 
@@ -829,12 +897,17 @@ function openRestoreModal(row: Record<string, unknown>) {
   restoreBackupTarget.value = row
   restoreForm.restore_type = 'source'
   restoreForm.target_path = ''
+  restoreForm.target_location = 'local'
+  restoreForm.remote_config_id = undefined
   restoreForm.instance_name = ''
   restoreForm.password = ''
   restoreForm.encryption_key = ''
   restoreError.value = ''
   Object.keys(restoreFormErrors).forEach((k) => (restoreFormErrors as Record<string, string>)[k] = '')
   restoreModalVisible.value = true
+  if (authStore.isAdmin && remotes.value.length === 0) {
+    fetchRemotes()
+  }
 }
 
 const restoreSubmitDisabled = computed(() => {
@@ -848,6 +921,10 @@ function validateRestoreForm(): boolean {
 
   if (restoreForm.restore_type === 'custom' && !restoreForm.target_path.trim()) {
     restoreFormErrors.target_path = '目标路径不能为空'
+    valid = false
+  }
+  if (restoreForm.restore_type === 'custom' && restoreForm.target_location === 'remote' && !restoreForm.remote_config_id) {
+    restoreFormErrors.remote_config_id = '请选择远程配置'
     valid = false
   }
   if (!restoreForm.instance_name.trim()) {
@@ -880,6 +957,9 @@ async function handleRestoreSubmit() {
     }
     if (restoreForm.restore_type === 'custom') {
       data.target_path = restoreForm.target_path.trim()
+      if (restoreForm.target_location === 'remote' && restoreForm.remote_config_id) {
+        data.remote_config_id = restoreForm.remote_config_id
+      }
     }
     if (isEncryptedCold(restoreBackupTarget.value)) {
       data.encryption_key = restoreForm.encryption_key
@@ -1259,6 +1339,7 @@ const permissionOptions = [
                     <div class="stat-card__content">
                       <span class="stat-card__value">{{ formatBytes(animTotalSizeBytes) }}</span>
                       <span class="stat-card__label">总备份大小</span>
+                      <span class="stat-card__sub">实际占用 · {{ formatBytes(animTotalDiskBytes) }}</span>
                     </div>
                     <HardDrive :size="22" class="stat-icon stat-icon--info" />
                   </div>
@@ -1617,6 +1698,27 @@ const permissionOptions = [
               </template>
               <AppEmpty v-else message="暂无已授权用户，点击上方按钮添加" />
             </AppCard>
+
+            <AppCard title="危险操作">
+              <div class="danger-zone">
+                <div class="danger-zone__panel">
+                  <div class="danger-zone__info">
+                    <div class="danger-zone__heading">
+                      <AlertTriangle :size="16" class="danger-zone__icon" />
+                      <span class="danger-zone__label">删除实例</span>
+                    </div>
+                    <span class="danger-zone__desc">删除后所有关联的策略、备份记录和审计日志将被永久移除，此操作不可撤销。</span>
+                  </div>
+                  <AppButton variant="danger" size="md" @click="openDeleteModal" :disabled="instance?.status !== 'idle'">
+                    <Trash2 :size="16" style="margin-right: 4px" />
+                    删除实例
+                  </AppButton>
+                </div>
+                <p v-if="instance?.status !== 'idle'" class="danger-zone__hint">
+                  <Clock :size="14" /> 仅空闲状态的实例可以删除
+                </p>
+              </div>
+            </AppCard>
           </div>
         </template>
       </AppTabs>
@@ -1860,16 +1962,47 @@ const permissionOptions = [
             </div>
           </AppFormItem>
 
-          <!-- Warning for source restore -->
-          <div v-if="restoreForm.restore_type === 'source'" class="restore-warning">
-            ⚠ 将覆盖源路径的现有数据
+          <!-- Source restore: show original path -->
+          <div v-if="restoreForm.restore_type === 'source'" class="restore-source-info">
+            <div class="restore-source-info__path">
+              <span class="restore-source-info__label">原始位置</span>
+              <span class="restore-source-info__value">
+                <template v-if="instance?.source_type === 'ssh'">[SSH] </template>
+                {{ instance?.source_path }}
+              </span>
+            </div>
+            <div class="restore-warning">
+              ⚠ 将覆盖源路径的现有数据
+            </div>
           </div>
 
-          <!-- Target path -->
-          <AppFormItem v-if="restoreForm.restore_type === 'custom'" label="目标路径" :required="true"
-            :error="restoreFormErrors.target_path">
-            <AppInput v-model="restoreForm.target_path" placeholder="如 /data/restore/" />
-          </AppFormItem>
+          <!-- Custom restore: target location selector -->
+          <template v-if="restoreForm.restore_type === 'custom'">
+            <AppFormItem label="目标位置">
+              <div class="restore-type-group">
+                <label class="restore-type-option">
+                  <input type="radio" v-model="restoreForm.target_location" value="local" />
+                  <span>本机路径</span>
+                </label>
+                <label class="restore-type-option">
+                  <input type="radio" v-model="restoreForm.target_location" value="remote" />
+                  <span>远程主机 (SSH)</span>
+                </label>
+              </div>
+            </AppFormItem>
+
+            <AppFormItem v-if="restoreForm.target_location === 'remote'" label="远程配置" :required="true"
+              :error="restoreFormErrors.remote_config_id">
+              <AppSelect v-model="restoreForm.remote_config_id"
+                :options="sshRemoteOptions"
+                placeholder="请选择 SSH 远程配置" />
+            </AppFormItem>
+
+            <AppFormItem label="目标路径" :required="true" :error="restoreFormErrors.target_path">
+              <AppInput v-model="restoreForm.target_path"
+                :placeholder="restoreForm.target_location === 'remote' ? '远程主机上的路径，如 /data/restore/' : '如 /data/restore/'" />
+            </AppFormItem>
+          </template>
 
           <!-- Encryption key (for encrypted cold backups) -->
           <AppFormItem v-if="restoreBackupTarget && isEncryptedCold(restoreBackupTarget)" label="加密密钥" :required="true"
@@ -1907,6 +2040,28 @@ const permissionOptions = [
     </AppModal>
 
     <AppConfirm />
+
+    <!-- Delete Instance Modal -->
+    <AppModal v-model:visible="deleteModalVisible" title="删除实例" width="480px">
+      <div class="delete-modal__warning">
+        <AlertTriangle :size="20" />
+        <span>此操作将永久删除实例 <strong>{{ instance?.name }}</strong> 及其所有关联数据，不可撤销。</span>
+      </div>
+      <AppFormGroup>
+        <AppFormItem label="实例名称确认" :required="true" :error="deleteFormErrors.instance_name">
+          <AppInput v-model="deleteForm.instance_name" :placeholder="`请输入 ${instance?.name ?? ''} 以确认`" />
+        </AppFormItem>
+        <AppFormItem label="当前密码" :required="true" :error="deleteFormErrors.password">
+          <AppInput v-model="deleteForm.password" type="password" placeholder="请输入你的登录密码" />
+        </AppFormItem>
+      </AppFormGroup>
+      <template #footer>
+        <AppButton variant="outline" size="md" @click="deleteModalVisible = false">取消</AppButton>
+        <AppButton variant="danger" size="md" :loading="deleteSubmitting" @click="handleDeleteInstance">
+          确认删除
+        </AppButton>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -2672,6 +2827,37 @@ const permissionOptions = [
   font-size: 13px;
 }
 
+.restore-source-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.restore-source-info__path {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.restore-source-info__label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.restore-source-info__value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-all;
+  font-family: monospace;
+}
+
 .restore-danger-zone {
   background: color-mix(in srgb, var(--error-500) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--error-500) 20%, transparent);
@@ -2935,6 +3121,80 @@ const permissionOptions = [
 .py-4 {
   padding-top: 16px;
   padding-bottom: 16px;
+}
+
+/* Danger Zone */
+.danger-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.danger-zone__panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+.danger-zone__info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.danger-zone__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.danger-zone__icon {
+  color: var(--color-error);
+  flex-shrink: 0;
+}
+.danger-zone__label {
+  font-weight: 600;
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+}
+.danger-zone__desc {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.danger-zone__hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .danger-zone__panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Delete Modal */
+.delete-modal__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.delete-modal__warning svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 </style>
