@@ -3,6 +3,9 @@ import type { ThemeMode } from '../types/theme'
 const THEME_STORAGE_KEY = 'rbs-theme'
 const ACCESS_TOKEN_STORAGE_KEY = 'rbs-access-token'
 const REFRESH_TOKEN_STORAGE_KEY = 'rbs-refresh-token'
+const LIST_VIEW_MODES_STORAGE_KEY = 'rbs-list-view-modes'
+
+export type StoredListViewMode = 'list' | 'card'
 
 function canUseStorage() {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
@@ -30,6 +33,10 @@ function setStoredValue(key: string, value: string | null) {
   window.localStorage.setItem(key, value)
 }
 
+function isStoredListViewMode(value: unknown): value is StoredListViewMode {
+  return value === 'list' || value === 'card'
+}
+
 export function getStoredTheme(): ThemeMode | null {
   if (!canUseStorage()) {
     return null
@@ -45,6 +52,46 @@ export function setStoredTheme(theme: ThemeMode) {
   }
 
   window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+}
+
+export function getStoredListViewModes(): Record<string, StoredListViewMode> {
+  if (!canUseStorage()) {
+    return {}
+  }
+
+  const rawValue = window.localStorage.getItem(LIST_VIEW_MODES_STORAGE_KEY)
+  if (!rawValue) {
+    return {}
+  }
+
+  try {
+    const parsedValue = JSON.parse(rawValue)
+    if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+      return {}
+    }
+
+    return Object.entries(parsedValue).reduce<Record<string, StoredListViewMode>>((accumulator, [key, value]) => {
+      if (isStoredListViewMode(value)) {
+        accumulator[key] = value
+      }
+      return accumulator
+    }, {})
+  } catch {
+    return {}
+  }
+}
+
+export function setStoredListViewModes(viewModes: Record<string, StoredListViewMode>) {
+  if (!canUseStorage()) {
+    return
+  }
+
+  if (Object.keys(viewModes).length === 0) {
+    window.localStorage.removeItem(LIST_VIEW_MODES_STORAGE_KEY)
+    return
+  }
+
+  window.localStorage.setItem(LIST_VIEW_MODES_STORAGE_KEY, JSON.stringify(viewModes))
 }
 
 export function getAccessToken() {

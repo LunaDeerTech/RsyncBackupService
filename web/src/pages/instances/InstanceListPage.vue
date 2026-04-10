@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { listInstances, createInstance } from '../../api/instances'
 import { listRemotes } from '../../api/remotes'
 import { useAuthStore } from '../../stores/auth'
+import { useListViewPreferenceStore, type ListViewMode } from '../../stores/list-view-preference'
 import { useToastStore } from '../../stores/toast'
 import { ApiBusinessError } from '../../api/client'
 import { formatRelativeTime } from '../../utils/time'
@@ -30,6 +31,7 @@ import { Plus, Eye, CircleHelp, List, LayoutGrid } from 'lucide-vue-next'
 const router = useRouter()
 const authStore = useAuthStore()
 const toast = useToastStore()
+const listViewPreferenceStore = useListViewPreferenceStore()
 
 // ── List state ──
 const instances = ref<InstanceListItem[]>([])
@@ -39,12 +41,15 @@ const pageSize = ref(10)
 const total = ref(0)
 
 // ── View mode ──
-const isMobile = ref(window.innerWidth < 768)
-const viewMode = ref<'list' | 'card'>(isMobile.value ? 'card' : 'list')
+const INSTANCE_LIST_VIEW_KEY = 'instance-list'
+const inferredViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
 
-function handleResize() {
-  isMobile.value = window.innerWidth < 768
-}
+listViewPreferenceStore.initializeViewMode(INSTANCE_LIST_VIEW_KEY, inferredViewMode)
+
+const viewMode = computed({
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(INSTANCE_LIST_VIEW_KEY) ?? inferredViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(INSTANCE_LIST_VIEW_KEY, mode),
+})
 
 // ── Modal state ──
 const modalVisible = ref(false)
@@ -127,11 +132,6 @@ onMounted(() => {
   if (authStore.isAdmin) {
     fetchRemotes()
   }
-  window.addEventListener('resize', handleResize)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
 })
 
 function onPageChange(p: number) {
