@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { listInstances, createInstance } from '../../api/instances'
 import { listRemotes } from '../../api/remotes'
 import { useAuthStore } from '../../stores/auth'
-import { useListViewPreferenceStore, type ListViewMode } from '../../stores/list-view-preference'
+import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
 import { useToastStore } from '../../stores/toast'
 import { ApiBusinessError } from '../../api/client'
 import { formatRelativeTime } from '../../utils/time'
@@ -20,13 +20,14 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
+import ListViewToggle from '../../components/ListViewToggle.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import { getDRLevelColor } from '../../utils/disaster-recovery'
 import {
   taskStatusMap, instanceStatusMap,
   getStatusConfig,
 } from '../../utils/status-config'
-import { Plus, Eye, CircleHelp, List, LayoutGrid } from 'lucide-vue-next'
+import { Plus, Eye, CircleHelp } from 'lucide-vue-next'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -41,14 +42,13 @@ const pageSize = ref(10)
 const total = ref(0)
 
 // ── View mode ──
-const INSTANCE_LIST_VIEW_KEY = 'instance-list'
 const inferredViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
 
-listViewPreferenceStore.initializeViewMode(INSTANCE_LIST_VIEW_KEY, inferredViewMode)
+listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredViewMode)
 
 const viewMode = computed({
-  get: (): ListViewMode => listViewPreferenceStore.getViewMode(INSTANCE_LIST_VIEW_KEY) ?? inferredViewMode,
-  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(INSTANCE_LIST_VIEW_KEY, mode),
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY) ?? inferredViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, mode),
 })
 
 // ── Modal state ──
@@ -224,14 +224,7 @@ function goToDetail(row: Record<string, unknown>) {
     <div class="instance-list-page__header">
       <h2 class="instance-list-page__title">备份实例</h2>
       <div class="instance-list-page__header-actions">
-        <div class="view-mode-toggle">
-          <button class="view-mode-btn" :class="{ 'view-mode-btn--active': viewMode === 'list' }" @click="viewMode = 'list'" title="列表视图">
-            <List :size="16" />
-          </button>
-          <button class="view-mode-btn" :class="{ 'view-mode-btn--active': viewMode === 'card' }" @click="viewMode = 'card'" title="卡片视图">
-            <LayoutGrid :size="16" />
-          </button>
-        </div>
+        <ListViewToggle v-model="viewMode" />
         <AppButton v-if="authStore.isAdmin" variant="primary" size="sm" @click="openCreateModal">
           <Plus :size="16" style="margin-right: 4px" />
           新增实例
@@ -491,37 +484,6 @@ function goToDetail(row: Record<string, unknown>) {
   outline: none;
   border-color: var(--primary-500);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-500) 18%, transparent);
-}
-
-/* View mode toggle */
-.view-mode-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-.view-mode-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  background: var(--surface-base);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.view-mode-btn:hover {
-  background: var(--surface-sunken);
-  color: var(--text-primary);
-}
-.view-mode-btn--active {
-  background: var(--primary-50);
-  color: var(--primary-600);
-}
-.view-mode-btn + .view-mode-btn {
-  border-left: 1px solid var(--border-default);
 }
 
 /* Card grid */

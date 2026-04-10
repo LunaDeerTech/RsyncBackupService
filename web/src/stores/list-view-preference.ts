@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { getStoredListViewModes, setStoredListViewModes, type StoredListViewMode } from '../utils/storage'
 
 export type ListViewMode = StoredListViewMode
+export const SHARED_LIST_VIEW_PREFERENCE_KEY = 'shared-list-view'
 
 export const useListViewPreferenceStore = defineStore('list-view-preference', () => {
   const viewModes = ref<Record<string, ListViewMode>>(getStoredListViewModes())

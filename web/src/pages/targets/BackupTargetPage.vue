@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { listTargets, createTarget, updateTarget, deleteTarget, healthCheck } from '../../api/targets'
 import { listRemotes } from '../../api/remotes'
+import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
 import { useToastStore } from '../../stores/toast'
 import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
@@ -17,6 +18,7 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
+import ListViewToggle from '../../components/ListViewToggle.vue'
 import AppProgress from '../../components/AppProgress.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
@@ -28,6 +30,7 @@ import {
 
 const toast = useToastStore()
 const { confirm } = useConfirm()
+const listViewPreferenceStore = useListViewPreferenceStore()
 
 // ── List state ──
 const targets = ref<BackupTarget[]>([])
@@ -35,6 +38,14 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const inferredViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
+
+listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredViewMode)
+
+const viewMode = computed({
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY) ?? inferredViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, mode),
+})
 
 // ── Modal state ──
 const modalVisible = ref(false)
@@ -322,14 +333,17 @@ async function handleDelete(row: Record<string, unknown>) {
   <div class="backup-target-page">
     <!-- Header -->
     <div class="backup-target-page__header">
-      <AppButton variant="primary" size="sm" @click="openCreateModal">
-        <Plus :size="16" style="margin-right: 4px" />
-        新增备份目标
-      </AppButton>
+      <div class="backup-target-page__header-actions">
+        <ListViewToggle v-model="viewMode" />
+        <AppButton variant="primary" size="sm" @click="openCreateModal">
+          <Plus :size="16" style="margin-right: 4px" />
+          新增备份目标
+        </AppButton>
+      </div>
     </div>
 
     <!-- Table -->
-    <div class="backup-target-page__table">
+    <div v-if="viewMode === 'list'" class="backup-target-page__table">
       <AppTable :columns="columns" :data="targets" :loading="loading">
         <template #cell-backup_type="{ row }">
           <StatusBadge :config="getStatusConfig(backupTypeMap, row.backup_type as string)" />
@@ -384,6 +398,74 @@ async function handleDelete(row: Record<string, unknown>) {
           </div>
         </template>
       </AppTable>
+    </div>
+
+    <div v-else class="backup-target-card-grid">
+      <div v-if="loading" class="backup-target-card-grid__loading">加载中…</div>
+      <template v-else-if="targets.length > 0">
+        <div v-for="target in targets" :key="target.id" class="backup-target-card">
+          <div class="backup-target-card__header">
+            <span class="backup-target-card__name">{{ target.name }}</span>
+            <div class="backup-target-card__badge-group">
+              <StatusBadge :config="getStatusConfig(healthStatusMap, target.health_status)" />
+              <StatusBadge :config="getStatusConfig(backupTypeMap, target.backup_type)" />
+            </div>
+          </div>
+
+          <div class="backup-target-card__body">
+            <div class="backup-target-card__meta-row">
+              <div class="backup-target-card__field backup-target-card__field--half">
+                <span class="backup-target-card__label">存储类型</span>
+                <span class="backup-target-card__value">{{ storageTypeLabel[target.storage_type] ?? target.storage_type }}</span>
+              </div>
+              <div class="backup-target-card__field backup-target-card__field--half">
+                <span class="backup-target-card__label">存储路径</span>
+                <span class="backup-target-card__value">{{ target.storage_path }}</span>
+              </div>
+            </div>
+            <div class="backup-target-card__meta-row">
+              <div class="backup-target-card__field backup-target-card__field--half">
+                <span class="backup-target-card__label">容量使用</span>
+                <div v-if="capacityPercent(target) != null" class="backup-target-card__capacity">
+                  <AppProgress
+                    :value="capacityPercent(target)!"
+                    :variant="capacityVariant(capacityPercent(target))"
+                    size="sm"
+                  />
+                  <span class="capacity-text">
+                    {{ formatBytes(target.used_capacity_bytes as number) }} / {{ formatBytes(target.total_capacity_bytes as number) }}
+                  </span>
+                </div>
+                <span v-else class="capacity-na">未检测</span>
+              </div>
+              <div class="backup-target-card__field backup-target-card__field--half">
+                <span class="backup-target-card__label">上次检查</span>
+                <span class="backup-target-card__value">{{ formatTime(target.last_health_check) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="backup-target-card__footer">
+            <div class="backup-target-page__actions">
+              <AppButton variant="ghost" size="sm" @click="openEditModal(target as unknown as Record<string, unknown>)">
+                <Pencil :size="14" />
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :loading="checkingIds.has(target.id)"
+                @click="handleHealthCheck(target as unknown as Record<string, unknown>)"
+              >
+                <HeartPulse :size="14" />
+              </AppButton>
+              <AppButton variant="ghost" size="sm" @click="handleDelete(target as unknown as Record<string, unknown>)">
+                <Trash2 :size="14" class="text-error" />
+              </AppButton>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div v-else class="backup-target-card-grid__empty">暂无备份目标</div>
     </div>
 
     <!-- Pagination -->
@@ -474,10 +556,87 @@ async function handleDelete(row: Record<string, unknown>) {
   align-items: center;
   justify-content: flex-end;
 }
+.backup-target-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .backup-target-page__table {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+.backup-target-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.backup-target-card-grid__loading,
+.backup-target-card-grid__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+.backup-target-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+.backup-target-card__header,
+.backup-target-card__meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.backup-target-card__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+.backup-target-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.backup-target-card__badge-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.backup-target-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.backup-target-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.backup-target-card__field--half {
+  flex: 1;
+}
+.backup-target-card__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.backup-target-card__value {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.backup-target-card__capacity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .backup-target-page__actions {
   display: flex;
@@ -509,5 +668,20 @@ async function handleDelete(row: Record<string, unknown>) {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+@media (max-width: 767px) {
+  .backup-target-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-target-card__meta-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .backup-target-card__header {
+    align-items: flex-start;
+  }
 }
 </style>

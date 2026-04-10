@@ -3,6 +3,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { listUsers, createUser, updateUser, deleteUser } from '../../api/users'
 import { getRegistrationStatus, updateRegistrationStatus } from '../../api/system'
 import { useAuthStore } from '../../stores/auth'
+import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
 import { useToastStore } from '../../stores/toast'
 import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
@@ -17,12 +18,14 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
+import ListViewToggle from '../../components/ListViewToggle.vue'
 import AppBadge from '../../components/AppBadge.vue'
 import AppSwitch from '../../components/AppSwitch.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import { Plus, Pencil, Trash2 } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
+const listViewPreferenceStore = useListViewPreferenceStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
 
@@ -32,6 +35,14 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const inferredViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
+
+listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredViewMode)
+
+const viewMode = computed({
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY) ?? inferredViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, mode),
+})
 
 // ── Registration toggle ──
 const registrationEnabled = ref(false)
@@ -263,6 +274,7 @@ function isSelf(row: Record<string, unknown>): boolean {
             @update:model-value="handleRegistrationToggle"
           />
         </div>
+        <ListViewToggle v-model="viewMode" />
         <AppButton variant="primary" size="sm" @click="openCreateModal">
           <Plus :size="16" style="margin-right: 4px" />
           新增用户
@@ -271,7 +283,7 @@ function isSelf(row: Record<string, unknown>): boolean {
     </div>
 
     <!-- Table -->
-    <div class="user-mgmt__table">
+    <div v-if="viewMode === 'list'" class="user-mgmt__table">
       <AppTable :columns="columns" :data="users as unknown as Record<string, unknown>[]" :loading="loading">
         <template #cell-role="{ row }">
           <AppBadge :variant="roleVariant(row.role as string)">
@@ -300,6 +312,51 @@ function isSelf(row: Record<string, unknown>): boolean {
           </div>
         </template>
       </AppTable>
+    </div>
+
+    <div v-else class="user-mgmt-card-grid">
+      <div v-if="loading" class="user-mgmt-card-grid__loading">加载中…</div>
+      <template v-else-if="users.length > 0">
+        <div v-for="user in users" :key="user.id" class="user-mgmt-card">
+          <div class="user-mgmt-card__header">
+            <div class="user-mgmt-card__identity">
+              <span class="user-mgmt-card__name">{{ user.name || '未设置名称' }}</span>
+              <span class="user-mgmt-card__email">{{ user.email }}</span>
+            </div>
+            <AppBadge :variant="roleVariant(user.role)">
+              {{ roleLabel(user.role) }}
+            </AppBadge>
+          </div>
+
+          <div class="user-mgmt-card__body">
+            <div class="user-mgmt-card__field">
+              <span class="user-mgmt-card__label">创建时间</span>
+              <span class="user-mgmt-card__value">{{ user.created_at ? formatRelativeTime(user.created_at) : '—' }}</span>
+            </div>
+            <div class="user-mgmt-card__field">
+              <span class="user-mgmt-card__label">身份说明</span>
+              <span class="user-mgmt-card__value">{{ isSelf(user as unknown as Record<string, unknown>) ? '当前登录用户' : '普通成员记录' }}</span>
+            </div>
+          </div>
+
+          <div class="user-mgmt-card__footer">
+            <div class="user-mgmt__actions">
+              <AppButton variant="ghost" size="sm" @click="openEditModal(user as unknown as Record<string, unknown>)">
+                <Pencil :size="14" />
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :disabled="isSelf(user as unknown as Record<string, unknown>)"
+                @click="handleDelete(user as unknown as Record<string, unknown>)"
+              >
+                <Trash2 :size="14" class="text-error" />
+              </AppButton>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div v-else class="user-mgmt-card-grid__empty">暂无用户</div>
     </div>
 
     <!-- Pagination -->
@@ -403,6 +460,89 @@ function isSelf(row: Record<string, unknown>): boolean {
   overflow: hidden;
 }
 
+.user-mgmt-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.user-mgmt-card-grid__loading,
+.user-mgmt-card-grid__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.user-mgmt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.user-mgmt-card__header,
+.user-mgmt-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-mgmt-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-mgmt-card__footer {
+  justify-content: flex-end;
+}
+
+.user-mgmt-card__identity,
+.user-mgmt-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-mgmt-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-mgmt-card__email {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.user-mgmt-card__body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.user-mgmt-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.user-mgmt-card__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.user-mgmt-card__value {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
 .user-mgmt__actions {
   display: flex;
   gap: 4px;
@@ -426,5 +566,15 @@ function isSelf(row: Record<string, unknown>): boolean {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 767px) {
+  .user-mgmt-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .user-mgmt-card__body {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

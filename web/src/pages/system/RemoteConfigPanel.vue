@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { listRemotes, createRemote, updateRemote, deleteRemote, testRemoteConnection } from '../../api/remotes'
+import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
 import { useToastStore } from '../../stores/toast'
 import { useConfirm } from '../../composables/useConfirm'
 import { ApiBusinessError } from '../../api/client'
@@ -14,11 +15,13 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
+import ListViewToggle from '../../components/ListViewToggle.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
 import { Plus, Pencil, Plug, Trash2 } from 'lucide-vue-next'
 
 const toast = useToastStore()
 const { confirm } = useConfirm()
+const listViewPreferenceStore = useListViewPreferenceStore()
 
 // ── List state ──
 const remotes = ref<RemoteConfig[]>([])
@@ -26,6 +29,14 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const inferredViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
+
+listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredViewMode)
+
+const viewMode = computed({
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY) ?? inferredViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, mode),
+})
 
 // ── Modal state ──
 const modalVisible = ref(false)
@@ -290,14 +301,17 @@ async function handleDelete(row: Record<string, unknown>) {
   <div class="remote-config-page">
     <!-- Header -->
     <div class="remote-config-page__header">
-      <AppButton variant="primary" size="sm" @click="openCreateModal">
-        <Plus :size="16" style="margin-right: 4px" />
-        新增远程配置
-      </AppButton>
+      <div class="remote-config-page__header-actions">
+        <ListViewToggle v-model="viewMode" />
+        <AppButton variant="primary" size="sm" @click="openCreateModal">
+          <Plus :size="16" style="margin-right: 4px" />
+          新增远程配置
+        </AppButton>
+      </div>
     </div>
 
     <!-- Table -->
-    <div class="remote-config-page__table">
+    <div v-if="viewMode === 'list'" class="remote-config-page__table">
       <AppTable :columns="columns" :data="tableData" :loading="loading">
         <template #cell-type="{ row }">
           {{ row.type_label }}
@@ -325,6 +339,58 @@ async function handleDelete(row: Record<string, unknown>) {
           </div>
         </template>
       </AppTable>
+    </div>
+
+    <div v-else class="remote-config-card-grid">
+      <div v-if="loading" class="remote-config-card-grid__loading">加载中…</div>
+      <template v-else-if="tableData.length > 0">
+        <div v-for="remote in tableData" :key="remote.id" class="remote-config-card">
+          <div class="remote-config-card__header">
+            <span class="remote-config-card__name">{{ remote.name }}</span>
+            <span class="remote-config-card__type">{{ remote.type_label }}</span>
+          </div>
+
+          <div class="remote-config-card__body">
+            <div class="remote-config-card__field">
+              <span class="remote-config-card__label">主机</span>
+              <span class="remote-config-card__value">{{ remote.host || '—' }}</span>
+            </div>
+            <div class="remote-config-card__field">
+              <span class="remote-config-card__label">端口</span>
+              <span class="remote-config-card__value">{{ remote.port || '—' }}</span>
+            </div>
+            <div class="remote-config-card__field">
+              <span class="remote-config-card__label">用户名</span>
+              <span class="remote-config-card__value">{{ remote.username || '—' }}</span>
+            </div>
+            <div class="remote-config-card__field">
+              <span class="remote-config-card__label">创建时间</span>
+              <span class="remote-config-card__value">{{ remote.created_at_display }}</span>
+            </div>
+          </div>
+
+          <div class="remote-config-card__footer">
+            <div class="remote-config-page__actions">
+              <AppButton variant="ghost" size="sm" @click="openEditModal(remote as unknown as Record<string, unknown>)">
+                <Pencil :size="14" />
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :disabled="remote.type === 'cloud'"
+                :loading="testingIds.has(remote.id)"
+                @click="handleTest(remote as unknown as Record<string, unknown>)"
+              >
+                <Plug :size="14" />
+              </AppButton>
+              <AppButton variant="ghost" size="sm" @click="handleDelete(remote as unknown as Record<string, unknown>)">
+                <Trash2 :size="14" class="text-error" />
+              </AppButton>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div v-else class="remote-config-card-grid__empty">暂无远程配置</div>
     </div>
 
     <!-- Pagination -->
@@ -436,10 +502,83 @@ async function handleDelete(row: Record<string, unknown>) {
   align-items: center;
   justify-content: flex-end;
 }
+.remote-config-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .remote-config-page__table {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+.remote-config-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.remote-config-card-grid__loading,
+.remote-config-card-grid__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+.remote-config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+.remote-config-card__header,
+.remote-config-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.remote-config-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.remote-config-card__footer {
+  justify-content: flex-end;
+}
+.remote-config-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.remote-config-card__type {
+  font-size: 12px;
+  color: var(--primary-600);
+  background: var(--primary-50);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+.remote-config-card__body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.remote-config-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.remote-config-card__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.remote-config-card__value {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 .remote-config-page__actions {
   display: flex;
@@ -482,5 +621,15 @@ async function handleDelete(row: Record<string, unknown>) {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+@media (max-width: 767px) {
+  .remote-config-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .remote-config-card__body {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

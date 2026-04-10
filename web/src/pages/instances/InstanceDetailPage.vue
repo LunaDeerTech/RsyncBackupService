@@ -9,6 +9,7 @@ import { listInstanceAuditLogs } from '../../api/audit'
 import { getUpcomingTasks as fetchUpcomingTasksAPI, type UpcomingTask } from '../../api/dashboard'
 import { listTasks, type TaskItem } from '../../api/tasks'
 import { useTaskStore } from '../../stores/task'
+import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
 import { useElapsedTime } from '../../composables/useElapsedTime'
 import { useCountUp } from '../../composables/useCountUp'
 import AppProgress from '../../components/AppProgress.vue'
@@ -39,6 +40,7 @@ import AppFormItem from '../../components/AppFormItem.vue'
 import AppInput from '../../components/AppInput.vue'
 import AppSelect from '../../components/AppSelect.vue'
 import AppButton from '../../components/AppButton.vue'
+import ListViewToggle from '../../components/ListViewToggle.vue'
 import AppBadge from '../../components/AppBadge.vue'
 import AppCard from '../../components/AppCard.vue'
 import AppSwitch from '../../components/AppSwitch.vue'
@@ -60,6 +62,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const listViewPreferenceStore = useListViewPreferenceStore()
 const toast = useToastStore()
 const { confirm } = useConfirm()
 const instanceId = computed(() => Number(route.params.id))
@@ -95,6 +98,14 @@ const policyEditing = ref(false)
 const policyEditingId = ref<number | null>(null)
 const policySubmitting = ref(false)
 const targets = ref<BackupTarget[]>([])
+const inferredPolicyViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
+
+listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredPolicyViewMode)
+
+const policyViewMode = computed({
+  get: (): ListViewMode => listViewPreferenceStore.getViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY) ?? inferredPolicyViewMode,
+  set: (mode: ListViewMode) => listViewPreferenceStore.setViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, mode),
+})
 
 const intervalUnitOptions = [
   { label: '秒', value: 'seconds' },
@@ -1449,14 +1460,15 @@ const permissionOptions = [
         <!-- ═══ Policies Tab ═══ -->
         <template #tab-policies>
           <div class="tab-content">
-            <div class="tab-header" v-if="authStore.isAdmin">
-              <AppButton variant="primary" size="sm" @click="openCreatePolicy">
+            <div class="tab-header">
+              <ListViewToggle v-model="policyViewMode" />
+              <AppButton v-if="authStore.isAdmin" variant="primary" size="sm" @click="openCreatePolicy">
                 <Plus :size="16" style="margin-right: 4px" />
                 新增策略
               </AppButton>
             </div>
 
-            <div class="tab-table">
+            <div v-if="policyViewMode === 'list'" class="tab-table">
               <AppTable :columns="policyColumns" :data="policies" :loading="policyLoading">
                 <template #cell-type="{ row }">
                   <StatusBadge :config="getStatusConfig(backupTypeMap, row.type as string)" />
@@ -1497,6 +1509,64 @@ const permissionOptions = [
                   </div>
                 </template>
               </AppTable>
+            </div>
+
+            <div v-else class="policy-card-grid">
+              <div v-if="policyLoading" class="policy-card-grid__loading">加载中…</div>
+              <template v-else-if="policies.length > 0">
+                <div v-for="policy in policies" :key="policy.id" class="policy-card">
+                  <div class="policy-card__header">
+                    <span class="policy-card__name">{{ policy.name }}</span>
+                    <AppSwitch
+                      :model-value="policy.enabled"
+                      :disabled="!authStore.isAdmin"
+                      @update:model-value="handleTogglePolicy(policy as unknown as Record<string, unknown>, $event)"
+                    />
+                  </div>
+
+                  <div class="policy-card__body">
+                    <div class="policy-card__meta-row">
+                      <div class="policy-card__field policy-card__field--half">
+                        <span class="policy-card__label">目标</span>
+                        <span class="policy-card__value">{{ getTargetName(policy.target_id) }}</span>
+                      </div>
+                      <div class="policy-card__field policy-card__field--half">
+                        <span class="policy-card__label">策略类型</span>
+                        <StatusBadge :config="getStatusConfig(backupTypeMap, policy.type)" />
+                      </div>
+                    </div>
+                    <div class="policy-card__meta-row">
+                      <div class="policy-card__field policy-card__field--half">
+                        <span class="policy-card__label">调度</span>
+                        <span class="policy-card__value">{{ formatScheduleValue(policy.schedule_type, policy.schedule_value) }}</span>
+                      </div>
+                      <div class="policy-card__field policy-card__field--half">
+                        <span class="policy-card__label">上次执行</span>
+                        <div v-if="policy.last_execution_time" class="policy-card__execution">
+                          <StatusBadge :config="getStatusConfig(taskStatusMap, policy.last_execution_status as string)" />
+                          <span class="policy-card__value">{{ formatRelativeTime(policy.last_execution_time) }}</span>
+                        </div>
+                        <span v-else class="text-muted">未执行</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="authStore.isAdmin" class="policy-card__footer">
+                    <div class="actions-cell">
+                      <AppButton variant="ghost" size="sm" @click="openEditPolicy(policy as unknown as Record<string, unknown>)">
+                        <Pencil :size="14" />
+                      </AppButton>
+                      <AppButton variant="ghost" size="sm" @click="handleTriggerPolicy(policy as unknown as Record<string, unknown>)">
+                        <Play :size="14" />
+                      </AppButton>
+                      <AppButton variant="ghost" size="sm" @click="handleDeletePolicy(policy as unknown as Record<string, unknown>)">
+                        <Trash2 :size="14" class="text-error" />
+                      </AppButton>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="policy-card-grid__empty">暂无策略</div>
             </div>
           </div>
         </template>
@@ -2113,13 +2183,105 @@ const permissionOptions = [
 
 .tab-header {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .tab-table {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+
+.policy-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.policy-card-grid__loading,
+.policy-card-grid__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.policy-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.policy-card__header,
+.policy-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.policy-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.policy-card__footer {
+  justify-content: flex-end;
+}
+
+.policy-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.policy-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.policy-card__field--half {
+  flex: 1;
+}
+
+.policy-card__meta-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.policy-card__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.policy-card__value {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.policy-card__execution {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* Overview – Top row: hero card + stats 2×2 */
@@ -2445,6 +2607,20 @@ const permissionOptions = [
   font-size: 12px;
   color: var(--text-muted);
   margin-left: 6px;
+}
+
+@media (max-width: 767px) {
+  .policy-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .policy-card__header {
+    align-items: flex-start;
+  }
+
+  .policy-card__meta-row {
+    flex-direction: column;
+  }
 }
 
 /* Settings */
