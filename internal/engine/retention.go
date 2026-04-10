@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
@@ -268,19 +269,23 @@ func (rc *RetentionCleaner) loadTargetRemote(target *model.BackupTarget) (*model
 	if target == nil {
 		return nil, fmt.Errorf("backup target is nil")
 	}
-	if strings.ToLower(strings.TrimSpace(target.StorageType)) != "ssh" {
+	storageType := strings.ToLower(strings.TrimSpace(target.StorageType))
+	if storageType != "ssh" && storageType != "openlist" {
 		return nil, nil
 	}
 	if target.RemoteConfigID == nil {
-		return nil, fmt.Errorf("ssh target %d is missing remote config", target.ID)
+		return nil, fmt.Errorf("%s target %d is missing remote config", storageType, target.ID)
 	}
 
 	remote, err := rc.db.GetRemoteConfigByID(*target.RemoteConfigID)
 	if err != nil {
 		return nil, err
 	}
-	if remote.Type != "ssh" {
+	if storageType == "ssh" && remote.Type != "ssh" {
 		return nil, fmt.Errorf("target remote config %d must be ssh", remote.ID)
+	}
+	if storageType == "openlist" && !openlist.IsRemoteConfig(*remote) {
+		return nil, fmt.Errorf("target remote config %d must be openlist", remote.ID)
 	}
 
 	return remote, nil
@@ -327,6 +332,15 @@ func (rc *RetentionCleaner) deleteRollingArtifacts(ctx context.Context, storageT
 			return fmt.Errorf("remove remote rolling snapshot %q: %w (%s)", snapshotPath, err, strings.TrimSpace(stderr))
 		}
 		_, _, _ = runSSHCommand(ctx, client, "rmdir "+shellQuote(pathpkg.Dir(snapshotPath))+" >/dev/null 2>&1 || true")
+		return nil
+	case "openlist":
+		session, err := rc.openListSession(ctx, remote)
+		if err != nil {
+			return err
+		}
+		if err := session.RemovePath(ctx, snapshotPath); err != nil && !errors.Is(err, openlist.ErrNotFound) {
+			return fmt.Errorf("remove openlist cold artifact %q: %w", snapshotPath, err)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported target storage type %q", storageType)
@@ -400,6 +414,25 @@ func (rc *RetentionCleaner) deleteSplitColdArtifacts(ctx context.Context, storag
 		}
 		_, _, _ = runSSHCommand(ctx, client, "rm -f "+shellQuote(snapshotPath))
 		_, _, _ = runSSHCommand(ctx, client, "rmdir "+shellQuote(pathpkg.Dir(snapshotPath))+" >/dev/null 2>&1 || true")
+		return nil
+	case "openlist":
+		session, err := rc.openListSession(ctx, remote)
+		if err != nil {
+			return err
+		}
+		for partIndex := 1; ; partIndex++ {
+			partPath := fmt.Sprintf("%s.part%03d", basePath, partIndex)
+			if err := session.RemovePath(ctx, partPath); err != nil {
+				if errors.Is(err, openlist.ErrNotFound) {
+					if partIndex == 1 {
+						break
+					}
+					break
+				}
+				return fmt.Errorf("remove openlist split cold artifact %q: %w", partPath, err)
+			}
+		}
+		_ = session.RemovePath(ctx, snapshotPath)
 		return nil
 	default:
 		return fmt.Errorf("unsupported target storage type %q", storageType)
@@ -540,6 +573,17 @@ func (rc *RetentionCleaner) connectSSH(ctx context.Context, remote *model.Remote
 	return client, nil
 }
 
+func (rc *RetentionCleaner) openListSession(ctx context.Context, remote *model.RemoteConfig) (*openlist.Session, error) {
+	if remote == nil {
+		return nil, fmt.Errorf("openlist remote config is required")
+	}
+	config, err := openlist.ParseConfig(*remote)
+	if err != nil {
+		return nil, err
+	}
+	return openlist.NewClient(nil).Open(ctx, config)
+}
+
 func (rc *RetentionCleaner) removeEmptyLocalDir(dir string) {
 	if rc == nil || strings.TrimSpace(dir) == "" {
 		return
@@ -556,7 +600,7 @@ func splitPartBasePath(snapshotPath, storageType string) (string, bool) {
 	if !coldSplitPartPattern.MatchString(trimmed) {
 		return "", false
 	}
-	if strings.ToLower(strings.TrimSpace(storageType)) == "ssh" {
+	if strings.ToLower(strings.TrimSpace(storageType)) == "ssh" || strings.ToLower(strings.TrimSpace(storageType)) == "openlist" {
 		return strings.TrimSuffix(trimmed, pathpkg.Ext(trimmed)), true
 	}
 	return strings.TrimSuffix(trimmed, filepath.Ext(trimmed)), true

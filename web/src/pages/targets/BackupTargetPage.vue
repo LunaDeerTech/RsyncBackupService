@@ -45,7 +45,7 @@ const submitting = ref(false)
 const form = reactive({
   name: '',
   backup_type: 'rolling' as 'rolling' | 'cold',
-  storage_type: 'local' as 'local' | 'ssh' | 'cloud',
+  storage_type: 'local' as 'local' | 'ssh' | 'openlist' | 'cloud',
   storage_path: '',
   remote_config_id: undefined as number | undefined,
 })
@@ -85,20 +85,29 @@ const storageTypeOptions = computed(() => {
     { label: 'SSH 远程', value: 'ssh' },
   ]
   if (form.backup_type === 'cold') {
-    options.push({ label: '云存储（即将支持）', value: 'cloud' })
+    options.push({ label: 'OpenList', value: 'openlist' })
+  }
+  if (isEditing.value && form.storage_type === 'cloud') {
+    options.push({ label: '更多云存储（即将支持）', value: 'cloud' })
   }
   return options
 })
 
-const remoteOptions = computed(() =>
-  remotes.value.map((r) => ({ label: r.name, value: r.id })),
-)
+const remoteOptions = computed(() => {
+  const expectedType = form.storage_type === 'ssh' ? 'ssh' : form.storage_type === 'openlist' ? 'openlist' : ''
+  return remotes.value
+    .filter((remote) => !expectedType || remote.type === expectedType)
+    .map((remote) => ({ label: remote.name, value: remote.id }))
+})
 
 const storageTypeLabel: Record<string, string> = {
   local: '本地',
   ssh: 'SSH',
-  cloud: '云存储',
+  openlist: 'OpenList',
+  cloud: '更多云存储',
 }
+
+const remoteConfigLabel = computed(() => (form.storage_type === 'openlist' ? '关联 OpenList 配置' : '关联远程配置'))
 
 // healthStatusVariant / healthStatusLabel removed – using StatusBadge
 
@@ -125,13 +134,13 @@ function formatTime(dateStr?: string): string {
 watch(() => form.backup_type, () => {
   if (isEditing.value) return
   // Reset storage_type if not valid for new backup_type
-  if (form.backup_type === 'rolling' && form.storage_type === 'cloud') {
+  if (form.backup_type === 'rolling' && (form.storage_type === 'openlist' || form.storage_type === 'cloud')) {
     form.storage_type = 'local'
   }
 })
 
 watch(() => form.storage_type, () => {
-  if (form.storage_type !== 'ssh') {
+  if (form.storage_type !== 'ssh' && form.storage_type !== 'openlist') {
     form.remote_config_id = undefined
   }
 })
@@ -200,7 +209,7 @@ function openEditModal(row: Record<string, unknown>) {
   editingId.value = row.id as number
   form.name = row.name as string
   form.backup_type = row.backup_type as 'rolling' | 'cold'
-  form.storage_type = row.storage_type as 'local' | 'ssh' | 'cloud'
+  form.storage_type = row.storage_type as 'local' | 'ssh' | 'openlist' | 'cloud'
   form.storage_path = row.storage_path as string
   form.remote_config_id = row.remote_config_id as number | undefined
   modalVisible.value = true
@@ -220,7 +229,7 @@ function validateForm(): boolean {
     errors.storage_path = '存储路径不能为空'
     valid = false
   }
-  if (form.storage_type === 'ssh' && !form.remote_config_id) {
+  if ((form.storage_type === 'ssh' || form.storage_type === 'openlist') && !form.remote_config_id) {
     errors.remote_config_id = '请选择关联远程配置'
     valid = false
   }
@@ -237,7 +246,7 @@ async function handleSubmit() {
       backup_type: form.backup_type,
       storage_type: form.storage_type,
       storage_path: form.storage_path.trim(),
-      remote_config_id: form.storage_type === 'ssh' ? form.remote_config_id : undefined,
+      remote_config_id: form.storage_type === 'ssh' || form.storage_type === 'openlist' ? form.remote_config_id : undefined,
     }
 
     if (isEditing.value && editingId.value !== null) {
@@ -409,24 +418,25 @@ async function handleDelete(row: Record<string, unknown>) {
               :options="storageTypeOptions"
               :disabled="isEditing || form.storage_type === 'cloud'"
             />
-            <p v-if="form.storage_type === 'cloud'" class="form-hint">云存储类型即将支持。</p>
+            <p v-if="form.storage_type === 'openlist'" class="form-hint">OpenList 仅支持冷备份，系统会将冷备份打包后上传。</p>
+            <p v-if="form.storage_type === 'cloud'" class="form-hint">更多云存储类型后续补充。</p>
           </AppFormItem>
 
           <AppFormItem label="存储路径" :required="true" :error="errors.storage_path">
-            <AppInput v-model="form.storage_path" placeholder="例如：/data/backups" />
-            <p class="form-hint">路径必须已存在且可写，系统不会自动创建目录。</p>
+            <AppInput v-model="form.storage_path" :placeholder="form.storage_type === 'openlist' ? '例如：/archive/backups' : '例如：/data/backups'" />
+            <p class="form-hint">{{ form.storage_type === 'openlist' ? '填写 OpenList 内的目标目录路径。' : '路径必须已存在且可写，系统不会自动创建目录。' }}</p>
           </AppFormItem>
 
           <AppFormItem
-            v-if="form.storage_type === 'ssh'"
-            label="关联远程配置"
+            v-if="form.storage_type === 'ssh' || form.storage_type === 'openlist'"
+            :label="remoteConfigLabel"
             :required="true"
             :error="errors.remote_config_id"
           >
             <AppSelect
               v-model="form.remote_config_id"
               :options="remoteOptions"
-              placeholder="请选择远程配置"
+              :placeholder="form.storage_type === 'openlist' ? '请选择 OpenList 配置' : '请选择远程配置'"
             />
           </AppFormItem>
         </AppFormGroup>

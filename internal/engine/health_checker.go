@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
@@ -60,6 +61,8 @@ func (hc *HealthChecker) CheckTarget(target *model.BackupTarget) (status, messag
 		return hc.checkLocalTarget(target)
 	case "ssh":
 		return hc.checkSSHTarget(target)
+	case "openlist":
+		return hc.checkOpenListTarget(target)
 	case "cloud":
 		return "degraded", "cloud storage health checks are not supported yet", nil, nil, nil
 	default:
@@ -212,6 +215,60 @@ func (hc *HealthChecker) checkSSHTarget(target *model.BackupTarget) (string, str
 	}
 
 	return "healthy", "ssh target is healthy", total, used, nil
+}
+
+func (hc *HealthChecker) checkOpenListTarget(target *model.BackupTarget) (string, string, *int64, *int64, error) {
+	if hc == nil || hc.db == nil {
+		return "", "", nil, nil, fmt.Errorf("database unavailable")
+	}
+	if target.RemoteConfigID == nil {
+		return "unreachable", "openlist target is missing remote config", nil, nil, nil
+	}
+
+	remoteConfig, err := hc.db.GetRemoteConfigByID(*target.RemoteConfigID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "unreachable", "openlist remote config not found", nil, nil, nil
+		}
+		return "", "", nil, nil, err
+	}
+	if !openlist.IsRemoteConfig(*remoteConfig) {
+		return "unreachable", "remote config must be openlist", nil, nil, nil
+	}
+
+	config, err := openlist.ParseConfig(*remoteConfig)
+	if err != nil {
+		return "unreachable", "openlist remote config is invalid", nil, nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := openlist.NewClient(nil).Open(ctx, config)
+	if err != nil {
+		return "unreachable", strings.TrimSpace(err.Error()), nil, nil, nil
+	}
+	object, err := session.Get(ctx, target.StoragePath)
+	if err != nil {
+		if errors.Is(err, openlist.ErrNotFound) {
+			return "unreachable", "openlist path does not exist", nil, nil, nil
+		}
+		return "unreachable", strings.TrimSpace(err.Error()), nil, nil, nil
+	}
+	if !object.IsDir {
+		return "unreachable", "openlist path must be a directory", nil, nil, nil
+	}
+	if object.MountDetails == nil || object.MountDetails.TotalSpace <= 0 {
+		return "healthy", "openlist target is healthy", nil, nil, nil
+	}
+
+	total := object.MountDetails.TotalSpace
+	free := object.MountDetails.FreeSpace
+	if free < 0 || free > total {
+		return "healthy", "openlist target is healthy", nil, nil, nil
+	}
+	used := total - free
+	return "healthy", "openlist target is healthy", &total, &used, nil
 }
 
 func runSSHCommand(ctx context.Context, client *ssh.Client, command string) (string, string, error) {

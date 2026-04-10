@@ -3,6 +3,7 @@ package handler
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -23,6 +24,7 @@ import (
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/util"
 )
 
@@ -303,7 +305,7 @@ func (h *Handler) GenerateBackupDownloadURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	_, backup, _, err := h.loadBackupContext(instanceID, backupID)
+	_, backup, policy, err := h.loadBackupContext(instanceID, backupID)
 	if err != nil {
 		writeBackupError(w, err, "failed to query backup")
 		return
@@ -317,7 +319,13 @@ func (h *Handler) GenerateBackupDownloadURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	downloadResponse, err := h.buildBackupDownloadResponse(backup)
+	target, err := h.db.GetBackupTargetByID(policy.TargetID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to query backup target")
+		return
+	}
+
+	downloadResponse, err := h.buildBackupDownloadResponse(backup, target)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
 		return
@@ -360,8 +368,23 @@ func (h *Handler) DownloadBackupByToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := streamLocalBackupArtifact(w, r, info.FilePath); err != nil {
+	target, err := h.loadBackupTargetForDownload(backup)
+	if err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
+		return
+	}
+
+	var streamErr error
+	switch strings.ToLower(strings.TrimSpace(target.StorageType)) {
+	case "local":
+		streamErr = streamLocalBackupArtifact(w, r, info.FilePath)
+	case "openlist":
+		streamErr = h.streamOpenListBackupArtifact(w, r, target, info.FilePath)
+	default:
+		streamErr = fmt.Errorf("backup download is not supported for storage type %q", target.StorageType)
+	}
+	if streamErr != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, streamErr.Error())
 	}
 }
 
@@ -411,9 +434,12 @@ func backupRequestIDs(r *http.Request) (int64, int64, error) {
 	return instanceID, backupID, nil
 }
 
-func (h *Handler) buildBackupDownloadResponse(backup *model.Backup) (backupDownloadResponse, error) {
+func (h *Handler) buildBackupDownloadResponse(backup *model.Backup, target *model.BackupTarget) (backupDownloadResponse, error) {
 	if backup == nil {
 		return backupDownloadResponse{}, fmt.Errorf("backup is required")
+	}
+	if target == nil {
+		return backupDownloadResponse{}, fmt.Errorf("backup target is required")
 	}
 	artifactPath := strings.TrimSpace(backup.SnapshotPath)
 	if artifactPath == "" {
@@ -421,23 +447,41 @@ func (h *Handler) buildBackupDownloadResponse(backup *model.Backup) (backupDownl
 	}
 
 	if basePath, ok := downloadSplitBasePath(artifactPath); ok {
-		parts, err := listSplitDownloadParts(basePath)
-		if err != nil {
-			return backupDownloadResponse{}, err
-		}
-		responseParts := make([]backupDownloadPart, 0, len(parts))
-		for index, partPath := range parts {
-			token := h.downloadTokens.Generate(backup.ID, partPath)
-			info, err := os.Stat(partPath)
+		responseParts := make([]backupDownloadPart, 0, 4)
+		switch strings.ToLower(strings.TrimSpace(target.StorageType)) {
+		case "local":
+			parts, err := listSplitDownloadParts(basePath)
 			if err != nil {
-				return backupDownloadResponse{}, fmt.Errorf("stat split download part %q: %w", partPath, err)
+				return backupDownloadResponse{}, err
 			}
-			responseParts = append(responseParts, backupDownloadPart{
-				Index:     index + 1,
-				Name:      filepath.Base(partPath),
-				URL:       "/api/v1/download/" + token,
-				SizeBytes: info.Size(),
-			})
+			for index, partPath := range parts {
+				token := h.downloadTokens.Generate(backup.ID, partPath)
+				info, err := os.Stat(partPath)
+				if err != nil {
+					return backupDownloadResponse{}, fmt.Errorf("stat split download part %q: %w", partPath, err)
+				}
+				responseParts = append(responseParts, backupDownloadPart{
+					Index:     index + 1,
+					Name:      filepath.Base(partPath),
+					URL:       "/api/v1/download/" + token,
+					SizeBytes: info.Size(),
+				})
+			}
+		case "openlist":
+			parts, err := h.listOpenListSplitDownloadParts(target, basePath)
+			if err != nil {
+				return backupDownloadResponse{}, err
+			}
+			for index, part := range parts {
+				responseParts = append(responseParts, backupDownloadPart{
+					Index:     index + 1,
+					Name:      filepath.Base(part.Path),
+					URL:       "/api/v1/download/" + h.downloadTokens.Generate(backup.ID, part.Path),
+					SizeBytes: part.Size,
+				})
+			}
+		default:
+			return backupDownloadResponse{}, fmt.Errorf("backup download is not supported for storage type %q", target.StorageType)
 		}
 		return backupDownloadResponse{
 			Mode:     "split",
@@ -452,6 +496,93 @@ func (h *Handler) buildBackupDownloadResponse(backup *model.Backup) (backupDownl
 		URL:      "/api/v1/download/" + token,
 		FileName: filepath.Base(artifactPath),
 	}, nil
+}
+
+type openListDownloadPart struct {
+	Path string
+	Size int64
+}
+
+func (h *Handler) loadBackupTargetForDownload(backup *model.Backup) (*model.BackupTarget, error) {
+	if h == nil || h.db == nil {
+		return nil, fmt.Errorf("database unavailable")
+	}
+	policy, err := h.db.GetPolicyByID(backup.PolicyID)
+	if err != nil {
+		return nil, err
+	}
+	return h.db.GetBackupTargetByID(policy.TargetID)
+}
+
+func (h *Handler) listOpenListSplitDownloadParts(target *model.BackupTarget, basePath string) ([]openListDownloadPart, error) {
+	session, err := h.openListSessionForTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]openListDownloadPart, 0, 4)
+	for partIndex := 1; ; partIndex++ {
+		partPath := fmt.Sprintf("%s.part%03d", basePath, partIndex)
+		object, err := session.Get(context.Background(), partPath)
+		if errors.Is(err, openlist.ErrNotFound) {
+			if partIndex == 1 {
+				return nil, fmt.Errorf("split download parts for %q not found", basePath)
+			}
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, openListDownloadPart{Path: partPath, Size: object.Size})
+	}
+	return parts, nil
+}
+
+func (h *Handler) openListSessionForTarget(target *model.BackupTarget) (*openlist.Session, error) {
+	if h == nil || h.db == nil {
+		return nil, fmt.Errorf("database unavailable")
+	}
+	if target == nil || target.RemoteConfigID == nil {
+		return nil, fmt.Errorf("openlist target remote config is required")
+	}
+	remote, err := h.db.GetRemoteConfigByID(*target.RemoteConfigID)
+	if err != nil {
+		return nil, err
+	}
+	if !openlist.IsRemoteConfig(*remote) {
+		return nil, fmt.Errorf("remote config must be openlist")
+	}
+	config, err := openlist.ParseConfig(*remote)
+	if err != nil {
+		return nil, err
+	}
+	return openlist.NewClient(nil).Open(context.Background(), config)
+}
+
+func (h *Handler) streamOpenListBackupArtifact(w http.ResponseWriter, r *http.Request, target *model.BackupTarget, artifactPath string) error {
+	session, err := h.openListSessionForTarget(target)
+	if err != nil {
+		return err
+	}
+	resp, err := session.OpenDownload(r.Context(), artifactPath, r.Header.Get("Range"))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	copyHeaderIfPresent(w.Header(), resp.Header, "Content-Type")
+	copyHeaderIfPresent(w.Header(), resp.Header, "Content-Length")
+	copyHeaderIfPresent(w.Header(), resp.Header, "Content-Range")
+	copyHeaderIfPresent(w.Header(), resp.Header, "Accept-Ranges")
+	copyHeaderIfPresent(w.Header(), resp.Header, "Last-Modified")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(artifactPath)))
+	w.WriteHeader(resp.StatusCode)
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
+func copyHeaderIfPresent(dst, src http.Header, key string) {
+	if value := strings.TrimSpace(src.Get(key)); value != "" {
+		dst.Set(key, value)
+	}
 }
 
 func streamLocalBackupArtifact(w http.ResponseWriter, r *http.Request, artifactPath string) error {

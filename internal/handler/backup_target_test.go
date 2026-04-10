@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 )
 
 func TestBackupTargetCRUDAndManualHealthCheck(t *testing.T) {
@@ -109,7 +110,7 @@ func TestBackupTargetValidationAndDeleteInUse(t *testing.T) {
 	invalidCombo := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/targets", map[string]any{
 		"name":         "invalid-cloud",
 		"backup_type":  "rolling",
-		"storage_type": "cloud",
+		"storage_type": "openlist",
 		"storage_path": "oss://bucket/path",
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, invalidCombo, http.StatusBadRequest, authErrorInvalidRequest, "rolling backups only support local or ssh storage")
@@ -143,6 +144,33 @@ func TestBackupTargetValidationAndDeleteInUse(t *testing.T) {
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	if validSSH.Code != http.StatusCreated {
 		t.Fatalf("POST /api/v1/targets ssh status = %d, want %d, body = %s", validSSH.Code, http.StatusCreated, validSSH.Body.String())
+	}
+
+	openListConfig, err := openlist.EncodeStoredConfig("secret", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	openListRemote := &model.RemoteConfig{
+		Name:          "openlist-remote",
+		Type:          "openlist",
+		Host:          "https://openlist.example.com",
+		Username:      "admin",
+		CloudProvider: stringPtr("openlist"),
+		CloudConfig:   openListConfig,
+	}
+	if err := db.CreateRemoteConfig(openListRemote); err != nil {
+		t.Fatalf("CreateRemoteConfig(openlist) error = %v", err)
+	}
+
+	validOpenList := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/targets", map[string]any{
+		"name":             "openlist-target",
+		"backup_type":      "cold",
+		"storage_type":     "openlist",
+		"storage_path":     "/archive/backups",
+		"remote_config_id": openListRemote.ID,
+	}, mustAccessTokenForUser(t, admin, "secret"))
+	if validOpenList.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/targets openlist status = %d, want %d, body = %s", validOpenList.Code, http.StatusCreated, validOpenList.Body.String())
 	}
 
 	localTarget := &model.BackupTarget{

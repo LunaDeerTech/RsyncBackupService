@@ -35,10 +35,11 @@ const submitting = ref(false)
 
 const form = reactive({
   name: '',
-  type: 'ssh' as 'ssh' | 'cloud',
+  type: 'ssh' as 'ssh' | 'openlist' | 'cloud',
   host: '',
   port: 22,
   username: '',
+  password: '',
 })
 const privateKeyFile = ref<File | null>(null)
 
@@ -47,6 +48,7 @@ const errors = reactive({
   host: '',
   port: '',
   username: '',
+  password: '',
   privateKey: '',
 })
 
@@ -66,13 +68,14 @@ const columns: TableColumn[] = [
 
 const typeOptions = [
   { label: 'SSH', value: 'ssh' },
-  { label: '云存储（即将支持）', value: 'cloud' },
+  { label: 'OpenList', value: 'openlist' },
+  { label: '更多云存储（即将支持）', value: 'cloud' },
 ]
 
 const tableData = computed(() =>
   remotes.value.map((r) => ({
     ...r,
-    type_label: r.type === 'ssh' ? 'SSH' : '云存储',
+    type_label: r.type === 'ssh' ? 'SSH' : r.type === 'openlist' ? 'OpenList' : '更多云存储',
     created_at_display: new Date(r.created_at).toLocaleString(),
   })),
 )
@@ -111,11 +114,13 @@ function resetForm() {
   form.host = ''
   form.port = 22
   form.username = ''
+  form.password = ''
   privateKeyFile.value = null
   errors.name = ''
   errors.host = ''
   errors.port = ''
   errors.username = ''
+  errors.password = ''
   errors.privateKey = ''
 }
 
@@ -131,7 +136,7 @@ function openEditModal(row: Record<string, unknown>) {
   isEditing.value = true
   editingId.value = row.id as number
   form.name = row.name as string
-  form.type = row.type as 'ssh' | 'cloud'
+  form.type = row.type as 'ssh' | 'openlist' | 'cloud'
   form.host = (row.host as string) ?? ''
   form.port = (row.port as number) ?? 22
   form.username = (row.username as string) ?? ''
@@ -150,6 +155,7 @@ function validateForm(): boolean {
   errors.host = ''
   errors.port = ''
   errors.username = ''
+  errors.password = ''
   errors.privateKey = ''
 
   if (!form.name.trim()) {
@@ -176,6 +182,21 @@ function validateForm(): boolean {
     }
   }
 
+  if (form.type === 'openlist') {
+    if (!form.host.trim()) {
+      errors.host = 'OpenList 地址不能为空'
+      valid = false
+    }
+    if (!form.username.trim()) {
+      errors.username = '用户名不能为空'
+      valid = false
+    }
+    if (!isEditing.value && !form.password.trim()) {
+      errors.password = '密码不能为空'
+      valid = false
+    }
+  }
+
   return valid
 }
 
@@ -193,6 +214,12 @@ async function handleSubmit() {
       fd.append('username', form.username.trim())
       if (privateKeyFile.value) {
         fd.append('private_key', privateKeyFile.value)
+      }
+    } else if (form.type === 'openlist') {
+      fd.append('host', form.host.trim())
+      fd.append('username', form.username.trim())
+      if (form.password.trim()) {
+        fd.append('password', form.password.trim())
       }
     }
 
@@ -286,6 +313,7 @@ async function handleDelete(row: Record<string, unknown>) {
             <AppButton
               variant="ghost"
               size="sm"
+              :disabled="row.type === 'cloud'"
               :loading="testingIds.has(row.id as number)"
               @click="handleTest(row)"
             >
@@ -326,7 +354,7 @@ async function handleDelete(row: Record<string, unknown>) {
               }))"
               :disabled="isEditing"
             />
-            <p v-if="form.type === 'cloud'" class="form-hint">云存储类型即将支持，当前仅可使用 SSH。</p>
+            <p v-if="form.type === 'cloud'" class="form-hint">更多云存储类型后续补充，当前已支持 OpenList。</p>
           </AppFormItem>
 
           <template v-if="form.type === 'ssh'">
@@ -353,6 +381,24 @@ async function handleDelete(row: Record<string, unknown>) {
                 accept=".pem,.key,.pub,.ppk,*"
                 @change="onFileChange"
               />
+            </AppFormItem>
+          </template>
+
+          <template v-else-if="form.type === 'openlist'">
+            <AppFormItem label="OpenList 地址" :required="true" :error="errors.host">
+              <AppInput v-model="form.host" placeholder="例如：https://openlist.example.com" />
+            </AppFormItem>
+
+            <AppFormItem label="用户名" :required="true" :error="errors.username">
+              <AppInput v-model="form.username" placeholder="例如：admin" />
+            </AppFormItem>
+
+            <AppFormItem
+              :label="isEditing ? '密码（留空则不更新）' : '密码'"
+              :required="!isEditing"
+              :error="errors.password"
+            >
+              <AppInput v-model="form.password" type="password" placeholder="输入 OpenList 登录密码" />
             </AppFormItem>
           </template>
         </AppFormGroup>

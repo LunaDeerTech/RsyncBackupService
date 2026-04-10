@@ -2,7 +2,7 @@ export interface BackupTarget {
   id: number
   name: string
   backup_type: 'rolling' | 'cold'
-  storage_type: 'local' | 'ssh' | 'cloud'
+  storage_type: 'local' | 'ssh' | 'openlist' | 'cloud'
   storage_path: string
   remote_config_id?: number
   total_capacity_bytes?: number
@@ -17,7 +17,7 @@ export interface BackupTarget {
 export interface CreateTargetRequest {
   name: string
   backup_type: 'rolling' | 'cold'
-  storage_type: 'local' | 'ssh' | 'cloud'
+  storage_type: 'local' | 'ssh' | 'openlist'
   storage_path: string
   remote_config_id?: number
 }
@@ -25,7 +25,7 @@ export interface CreateTargetRequest {
 export interface UpdateTargetRequest {
   name: string
   backup_type: 'rolling' | 'cold'
-  storage_type: 'local' | 'ssh' | 'cloud'
+  storage_type: 'local' | 'ssh' | 'openlist'
   storage_path: string
   remote_config_id?: number
 }

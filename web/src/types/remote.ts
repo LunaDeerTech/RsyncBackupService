@@ -1,7 +1,7 @@
 export interface RemoteConfig {
   id: number
   name: string
-  type: 'ssh' | 'cloud'
+  type: 'ssh' | 'openlist' | 'cloud'
   host: string
   port: number
   username: string

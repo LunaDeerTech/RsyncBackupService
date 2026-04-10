@@ -735,7 +735,7 @@ func resolveRollingDataDir() string {
 }
 
 func joinStoragePath(storageType, parts0, part1, part2 string) string {
-	if normalizeRsyncType(storageType) == "ssh" {
+	if normalizeRsyncType(storageType) == "ssh" || normalizeRsyncType(storageType) == "openlist" {
 		return pathpkg.Join(strings.TrimSpace(parts0), part1, part2)
 	}
 	return filepath.Join(strings.TrimSpace(parts0), part1, part2)

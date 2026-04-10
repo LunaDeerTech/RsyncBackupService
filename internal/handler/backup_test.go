@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/store"
 )
 
@@ -189,6 +191,131 @@ func TestDownloadSplitColdBackupReturnsPartList(t *testing.T) {
 	}
 	if !strings.Contains(firstPart.Header().Get("Content-Disposition"), `filename="mysql-prod-20260407-210000.tar.gz.part001"`) {
 		t.Fatalf("Content-Disposition = %q, want split part filename", firstPart.Header().Get("Content-Disposition"))
+	}
+}
+
+func TestOpenListSplitBackupDownloadReturnsPartList(t *testing.T) {
+	db := newAuthTestDB(t)
+	viewer := createHandlerTestUser(t, db, "viewer-openlist@example.com", "Viewer", "viewer", "ViewerPass123")
+	token := "openlist-token"
+	basePath := "/cold/mysql-prod-20260407-210000.tar.gz"
+	partBodies := map[string]string{
+		basePath + ".part001": "cold-backup-part-1",
+		basePath + ".part002": "cold-backup-part-2",
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/auth/login":
+			writeOpenListTestJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data": map[string]any{
+					"token": token,
+				},
+			})
+		case r.URL.Path == "/api/fs/get":
+			assertOpenListTestAuth(t, r, token)
+			var payload map[string]string
+			decodeOpenListTestBody(t, r, &payload)
+			content, ok := partBodies[payload["path"]]
+			if !ok {
+				writeOpenListTestJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+				return
+			}
+			writeOpenListTestJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data": map[string]any{
+					"path":   payload["path"],
+					"name":   filepath.Base(payload["path"]),
+					"size":   len(content),
+					"is_dir": false,
+				},
+			})
+		case strings.HasPrefix(r.URL.Path, "/@file/link/path/"):
+			assertOpenListTestAuth(t, r, token)
+			remotePath, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/@file/link/path"))
+			if err != nil {
+				t.Fatalf("PathUnescape(link path) error = %v", err)
+			}
+			if _, ok := partBodies[remotePath]; !ok {
+				writeOpenListTestJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+				return
+			}
+			writeOpenListTestJSON(t, w, http.StatusOK, map[string]any{
+				"data": server.URL + "/downloads" + openlist.EncodePathForRoute(remotePath),
+			})
+		case strings.HasPrefix(r.URL.Path, "/downloads/"):
+			assertOpenListTestAuth(t, r, token)
+			remotePath, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/downloads"))
+			if err != nil {
+				t.Fatalf("PathUnescape(download path) error = %v", err)
+			}
+			content, ok := partBodies[remotePath]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			http.ServeContent(w, r, filepath.Base(remotePath), time.Time{}, strings.NewReader(content))
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	instanceID, backupID := createOpenListSplitColdBackupForHandlerTests(t, db, server.URL, basePath)
+	if err := db.SetInstancePermissions(instanceID, []model.InstancePermission{{UserID: viewer.ID, Permission: "readdownload"}}); err != nil {
+		t.Fatalf("SetInstancePermissions() error = %v", err)
+	}
+
+	router := NewRouter(db, WithJWTSecret("secret"), WithTaskQueue(engine.NewTaskQueue(8, db)))
+	response := performAuthorizedJSONRequest(t, router, http.MethodGet, "/api/v1/instances/"+itoa(instanceID)+"/backups/"+itoa(backupID)+"/download", nil, mustAccessTokenForUser(t, viewer, "secret"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET download URL status = %d, want %d, body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var envelope apiEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var payload struct {
+		Mode     string `json:"mode"`
+		FileName string `json:"file_name"`
+		Parts    []struct {
+			Name      string `json:"name"`
+			URL       string `json:"url"`
+			SizeBytes int64  `json:"size_bytes"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Mode != "split" {
+		t.Fatalf("download mode = %q, want %q", payload.Mode, "split")
+	}
+	if payload.FileName != "mysql-prod-20260407-210000.tar.gz" {
+		t.Fatalf("file_name = %q, want %q", payload.FileName, "mysql-prod-20260407-210000.tar.gz")
+	}
+	if len(payload.Parts) != 2 {
+		t.Fatalf("split part count = %d, want %d", len(payload.Parts), 2)
+	}
+	if payload.Parts[0].SizeBytes != int64(len("cold-backup-part-1")) {
+		t.Fatalf("first part size = %d, want %d", payload.Parts[0].SizeBytes, len("cold-backup-part-1"))
+	}
+
+	request := httptest.NewRequest(http.MethodGet, payload.Parts[0].URL, nil)
+	request.Header.Set("Range", "bytes=0-3")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusPartialContent {
+		t.Fatalf("GET token ranged openlist download status = %d, want %d", recorder.Code, http.StatusPartialContent)
+	}
+	if recorder.Body.String() != "cold" {
+		t.Fatalf("openlist download body = %q, want %q", recorder.Body.String(), "cold")
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Disposition"), `filename="mysql-prod-20260407-210000.tar.gz.part001"`) {
+		t.Fatalf("Content-Disposition = %q, want split part filename", recorder.Header().Get("Content-Disposition"))
 	}
 }
 
@@ -439,4 +566,103 @@ func createDirectoryColdBackupForHandlerTests(t *testing.T, db *store.DB) (int64
 	}
 
 	return instanceID, backup.ID
+}
+
+func createOpenListSplitColdBackupForHandlerTests(t *testing.T, db *store.DB, baseURL, snapshotBasePath string) (int64, int64) {
+	t.Helper()
+
+	encodedConfig, err := openlist.EncodeStoredConfig("secret", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	provider := "openlist"
+	remote := &model.RemoteConfig{
+		Name:          "openlist-remote",
+		Type:          "openlist",
+		Host:          baseURL,
+		Username:      "admin",
+		CloudProvider: &provider,
+		CloudConfig:   encodedConfig,
+	}
+	if err := db.CreateRemoteConfig(remote); err != nil {
+		t.Fatalf("CreateRemoteConfig() error = %v", err)
+	}
+
+	instanceID := createHandlerTestInstance(t, db, "mysql-prod")
+	target := &model.BackupTarget{
+		Name:           "openlist-cold-target",
+		BackupType:     "cold",
+		StorageType:    "openlist",
+		StoragePath:    "/cold",
+		RemoteConfigID: &remote.ID,
+		HealthStatus:   "healthy",
+		HealthMessage:  "ok",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	partSize := 1
+	policy := &model.Policy{
+		InstanceID:     instanceID,
+		Name:           "nightly-openlist-split",
+		Type:           "cold",
+		TargetID:       target.ID,
+		ScheduleType:   "interval",
+		ScheduleValue:  "3600",
+		Enabled:        true,
+		Compression:    true,
+		SplitEnabled:   true,
+		SplitSizeMB:    &partSize,
+		RetentionType:  "count",
+		RetentionValue: 7,
+	}
+	if err := db.CreatePolicy(policy); err != nil {
+		t.Fatalf("CreatePolicy() error = %v", err)
+	}
+
+	completedAt := time.Date(2026, 4, 7, 21, 0, 0, 0, time.UTC)
+	startedAt := completedAt.Add(-time.Minute)
+	backup := &model.Backup{
+		InstanceID:      instanceID,
+		PolicyID:        policy.ID,
+		TriggerSource:   model.BackupTriggerSourceManual,
+		Type:            "cold",
+		Status:          "success",
+		SnapshotPath:    snapshotBasePath + ".part001",
+		BackupSizeBytes: int64(len("cold-backup-part-1cold-backup-part-2")),
+		ActualSizeBytes: int64(len("cold-backup-part-1cold-backup-part-2")),
+		StartedAt:       &startedAt,
+		CompletedAt:     &completedAt,
+		DurationSeconds: 60,
+	}
+	if err := db.CreateBackup(backup); err != nil {
+		t.Fatalf("CreateBackup() error = %v", err)
+	}
+
+	return instanceID, backup.ID
+}
+
+func writeOpenListTestJSON(t *testing.T, w http.ResponseWriter, status int, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Fatalf("json.NewEncoder().Encode() error = %v", err)
+	}
+}
+
+func decodeOpenListTestBody(t *testing.T, r *http.Request, out any) {
+	t.Helper()
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		t.Fatalf("json.NewDecoder().Decode() error = %v", err)
+	}
+}
+
+func assertOpenListTestAuth(t *testing.T, r *http.Request, want string) {
+	t.Helper()
+	if got := r.Header.Get("Authorization"); got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
+	}
 }

@@ -7,11 +7,13 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/util"
 )
@@ -30,7 +32,6 @@ type remoteConfigResponse struct {
 	Port          int       `json:"port"`
 	Username      string    `json:"username"`
 	CloudProvider *string   `json:"cloud_provider,omitempty"`
-	CloudConfig   *string   `json:"cloud_config,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -46,6 +47,8 @@ type remoteConfigUpdateFields struct {
 	port             int
 	hasUsername      bool
 	username         string
+	hasPassword      bool
+	password         string
 	hasCloudProvider bool
 	cloudProvider    *string
 	hasCloudConfig   bool
@@ -160,6 +163,9 @@ func (h *Handler) UpdateRemoteConfig(w http.ResponseWriter, r *http.Request) {
 	if fields.hasUsername {
 		input.Username = strings.TrimSpace(fields.username)
 	}
+	if fields.hasPassword {
+		input.CloudConfig = nil
+	}
 	if fields.hasCloudProvider {
 		input.CloudProvider = cloneOptionalString(fields.cloudProvider)
 	}
@@ -171,6 +177,16 @@ func (h *Handler) UpdateRemoteConfig(w http.ResponseWriter, r *http.Request) {
 		input.Host = ""
 		input.Port = 0
 		input.Username = ""
+	}
+	if input.Type == "openlist" {
+		input.Port = 0
+		input.CloudProvider = cloneOptionalString(stringPtr("openlist"))
+		cloudConfig, err := buildOpenListCloudConfig(input.Host, current.CloudConfig, fields.password, fields.hasPassword)
+		if err != nil {
+			Error(w, http.StatusBadRequest, authErrorInvalidRequest, err.Error())
+			return
+		}
+		input.CloudConfig = cloudConfig
 	}
 
 	requirePrivateKey := current.PrivateKeyPath == "" || current.Type != "ssh" || input.Type != current.Type
@@ -245,8 +261,9 @@ func parseCreateRemoteConfigForm(r *http.Request) (service.RemoteConfigInput, []
 		CloudProvider: optionalFormString(r.MultipartForm, "cloud_provider"),
 		CloudConfig:   optionalFormString(r.MultipartForm, "cloud_config"),
 	}
+	password := strings.TrimSpace(formFirstValue(r.MultipartForm, "password"))
 
-	port, err := parsePortValue(formFirstValue(r.MultipartForm, "port"), input.Type == "cloud")
+	port, err := parsePortValue(formFirstValue(r.MultipartForm, "port"), input.Type != "ssh")
 	if err != nil {
 		return service.RemoteConfigInput{}, nil, err
 	}
@@ -261,6 +278,18 @@ func parseCreateRemoteConfigForm(r *http.Request) (service.RemoteConfigInput, []
 		input.Host = ""
 		input.Port = 0
 		input.Username = ""
+		if len(privateKeyPEM) > 0 {
+			return service.RemoteConfigInput{}, nil, service.ErrPrivateKeyNotSupported
+		}
+	}
+	if input.Type == "openlist" {
+		input.Port = 0
+		input.CloudProvider = cloneOptionalString(stringPtr("openlist"))
+		cloudConfig, err := buildOpenListCloudConfig(input.Host, nil, password, true)
+		if err != nil {
+			return service.RemoteConfigInput{}, nil, err
+		}
+		input.CloudConfig = cloudConfig
 		if len(privateKeyPEM) > 0 {
 			return service.RemoteConfigInput{}, nil, service.ErrPrivateKeyNotSupported
 		}
@@ -298,6 +327,10 @@ func parseUpdateRemoteConfigForm(r *http.Request) (remoteConfigUpdateFields, err
 	if value, ok := formValue(r.MultipartForm, "username"); ok {
 		fields.hasUsername = true
 		fields.username = value
+	}
+	if value, ok := formValue(r.MultipartForm, "password"); ok {
+		fields.hasPassword = true
+		fields.password = value
 	}
 	if _, ok := r.MultipartForm.Value["cloud_provider"]; ok {
 		fields.hasCloudProvider = true
@@ -340,12 +373,39 @@ func validateRemoteConfigInput(input service.RemoteConfigInput, requirePrivateKe
 		if requirePrivateKey && !hasPrivateKey {
 			return service.ErrPrivateKeyRequired
 		}
+	case "openlist":
+		if hasPrivateKey {
+			return service.ErrPrivateKeyNotSupported
+		}
+		if strings.TrimSpace(input.Host) == "" {
+			return fmt.Errorf("host is required")
+		}
+		parsedURL, err := url.Parse(strings.TrimSpace(input.Host))
+		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+			return fmt.Errorf("host must be a valid OpenList base URL")
+		}
+		if strings.TrimSpace(input.Username) == "" {
+			return fmt.Errorf("username is required")
+		}
+		if input.CloudConfig == nil {
+			return fmt.Errorf("password is required")
+		}
+		_, err = openlist.ParseConfig(model.RemoteConfig{
+			Type:          "openlist",
+			Host:          input.Host,
+			Username:      input.Username,
+			CloudProvider: cloneOptionalString(stringPtr("openlist")),
+			CloudConfig:   cloneOptionalString(input.CloudConfig),
+		})
+		if err != nil {
+			return err
+		}
 	case "cloud":
 		if hasPrivateKey {
 			return service.ErrPrivateKeyNotSupported
 		}
 	default:
-		return fmt.Errorf("type must be ssh or cloud")
+		return fmt.Errorf("type must be ssh, openlist, or cloud")
 	}
 
 	return nil
@@ -385,6 +445,8 @@ func writeRemoteConfigError(w http.ResponseWriter, err error, defaultMessage str
 		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "private key is only supported for ssh remotes")
 	case errors.Is(err, service.ErrSSHTestNotSupported):
 		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "only ssh remotes support connection testing")
+	case errors.Is(err, service.ErrRemoteTestNotSupported):
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "only ssh or OpenList remotes support connection testing")
 	case errors.Is(err, service.ErrRemoteConfigUnavailable):
 		Error(w, http.StatusInternalServerError, authErrorInternal, "remote config service unavailable")
 	default:
@@ -491,6 +553,21 @@ func normalizeRemoteType(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
+func buildOpenListCloudConfig(baseURL string, currentConfig *string, password string, hasPassword bool) (*string, error) {
+	stored, err := openlist.DecodeStoredConfig(currentConfig)
+	if err != nil {
+		return nil, fmt.Errorf("password is invalid")
+	}
+	resolvedPassword := stored.Password
+	if hasPassword {
+		resolvedPassword = strings.TrimSpace(password)
+	}
+	if resolvedPassword == "" {
+		return nil, fmt.Errorf("password is required")
+	}
+	return openlist.EncodeStoredConfig(resolvedPassword, strings.TrimSpace(baseURL))
+}
+
 func toRemoteConfigResponse(remote model.RemoteConfig) remoteConfigResponse {
 	return remoteConfigResponse{
 		ID:            remote.ID,
@@ -500,7 +577,6 @@ func toRemoteConfigResponse(remote model.RemoteConfig) remoteConfigResponse {
 		Port:          remote.Port,
 		Username:      remote.Username,
 		CloudProvider: cloneOptionalString(remote.CloudProvider),
-		CloudConfig:   cloneOptionalString(remote.CloudConfig),
 		CreatedAt:     remote.CreatedAt,
 		UpdatedAt:     remote.UpdatedAt,
 	}
@@ -522,4 +598,8 @@ func cloneOptionalString(value *string) *string {
 
 	cloned := *value
 	return &cloned
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

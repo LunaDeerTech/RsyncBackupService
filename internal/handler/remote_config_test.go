@@ -18,6 +18,7 @@ import (
 
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
@@ -191,6 +192,65 @@ func TestRemoteConfigTestEndpoint(t *testing.T) {
 	defer mu.Unlock()
 	if testedID != remote.ID {
 		t.Fatalf("testedID = %d, want %d", testedID, remote.ID)
+	}
+}
+
+func TestRemoteConfigOpenListFlow(t *testing.T) {
+	dataDir := t.TempDir()
+	db := newRemoteHandlerTestDB(t, dataDir)
+	remoteService := service.NewRemoteConfigService(db, dataDir, nil)
+	remoteService.SetOpenListTester(func(ctx context.Context, remote model.RemoteConfig) error {
+		if !openlist.IsRemoteConfig(remote) {
+			t.Fatalf("remote type = %q, want openlist", remote.Type)
+		}
+		return nil
+	})
+
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		WithDataDir(dataDir),
+		withRemoteConfigService(remoteService),
+	)
+
+	createRequest := newMultipartRemoteRequest(t, http.MethodPost, "/api/v1/remotes", map[string]string{
+		"name":     "ol-primary",
+		"type":     "openlist",
+		"host":     "https://openlist.example.com",
+		"username": "admin",
+		"password": "secret-pass",
+	}, "", "", nil)
+	createRequest.Header.Set("Authorization", adminBearerToken(t, "secret"))
+	createRecorder := httptest.NewRecorder()
+	router.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create openlist status = %d, want %d, body = %s", createRecorder.Code, http.StatusCreated, createRecorder.Body.String())
+	}
+	if strings.Contains(createRecorder.Body.String(), "cloud_config") {
+		t.Fatalf("create response leaked cloud_config: %s", createRecorder.Body.String())
+	}
+
+	created, err := db.GetRemoteConfigByName("ol-primary")
+	if err != nil {
+		t.Fatalf("GetRemoteConfigByName(openlist) error = %v", err)
+	}
+	if created.Type != "openlist" {
+		t.Fatalf("created.Type = %q, want %q", created.Type, "openlist")
+	}
+	decoded, err := openlist.DecodeStoredConfig(created.CloudConfig)
+	if err != nil {
+		t.Fatalf("DecodeStoredConfig() error = %v", err)
+	}
+	if decoded.Password != "secret-pass" {
+		t.Fatalf("stored password = %q, want %q", decoded.Password, "secret-pass")
+	}
+
+	testRequest := httptest.NewRequest(http.MethodPost, "/api/v1/remotes/"+itoa(created.ID)+"/test", nil)
+	testRequest.Header.Set("Authorization", adminBearerToken(t, "secret"))
+	testRecorder := httptest.NewRecorder()
+	router.ServeHTTP(testRecorder, testRequest)
+	if testRecorder.Code != http.StatusOK {
+		t.Fatalf("test openlist status = %d, want %d, body = %s", testRecorder.Code, http.StatusOK, testRecorder.Body.String())
 	}
 }
 

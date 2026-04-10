@@ -11,6 +11,7 @@ import (
 	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/engine"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/store"
 	"rsync-backup-service/internal/util"
 )
@@ -277,9 +278,9 @@ func normalizeBackupTargetInput(request backupTargetRequest) (backupTargetInput,
 
 	storageType := strings.ToLower(strings.TrimSpace(request.StorageType))
 	switch storageType {
-	case "local", "ssh", "cloud":
+	case "local", "ssh", "openlist":
 	default:
-		return backupTargetInput{}, fmt.Errorf("storage_type must be local, ssh, or cloud")
+		return backupTargetInput{}, fmt.Errorf("storage_type must be local, ssh, or openlist")
 	}
 
 	storagePath := strings.TrimSpace(request.StoragePath)
@@ -310,14 +311,14 @@ func (h *Handler) validateBackupTargetInput(input backupTargetInput) error {
 			return fmt.Errorf("rolling backups only support local or ssh storage")
 		}
 	case "cold":
-		if input.StorageType != "local" && input.StorageType != "ssh" && input.StorageType != "cloud" {
-			return fmt.Errorf("cold backups only support local, ssh, or cloud storage")
+		if input.StorageType != "local" && input.StorageType != "ssh" && input.StorageType != "openlist" {
+			return fmt.Errorf("cold backups only support local, ssh, or openlist storage")
 		}
 	}
 
-	if input.StorageType == "ssh" {
+	if input.StorageType == "ssh" || input.StorageType == "openlist" {
 		if input.RemoteConfigID == nil {
-			return fmt.Errorf("remote_config_id is required for ssh storage")
+			return fmt.Errorf("remote_config_id is required for %s storage", input.StorageType)
 		}
 		remoteConfig, err := h.db.GetRemoteConfigByID(*input.RemoteConfigID)
 		if err != nil {
@@ -326,14 +327,17 @@ func (h *Handler) validateBackupTargetInput(input backupTargetInput) error {
 			}
 			return err
 		}
-		if remoteConfig.Type != "ssh" {
+		if input.StorageType == "ssh" && remoteConfig.Type != "ssh" {
 			return fmt.Errorf("remote_config_id must reference an ssh remote config")
+		}
+		if input.StorageType == "openlist" && !openlist.IsRemoteConfig(*remoteConfig) {
+			return fmt.Errorf("remote_config_id must reference an openlist remote config")
 		}
 		return nil
 	}
 
 	if input.RemoteConfigID != nil {
-		return fmt.Errorf("remote_config_id is only supported for ssh storage")
+		return fmt.Errorf("remote_config_id is only supported for ssh or openlist storage")
 	}
 
 	return nil

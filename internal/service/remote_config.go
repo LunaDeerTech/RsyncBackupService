@@ -20,6 +20,7 @@ import (
 	"rsync-backup-service/internal/audit"
 	"rsync-backup-service/internal/middleware"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/store"
 )
 
@@ -30,10 +31,12 @@ var (
 	ErrPrivateKeyRequired      = errors.New("private key is required")
 	ErrPrivateKeyNotSupported  = errors.New("private key is only supported for ssh remotes")
 	ErrSSHTestNotSupported     = errors.New("only ssh remotes support connection testing")
+	ErrRemoteTestNotSupported  = errors.New("only ssh or openlist remotes support connection testing")
 	ErrRemoteConfigUnavailable = errors.New("remote config service unavailable")
 )
 
 type SSHTester func(context.Context, model.RemoteConfig) error
+type OpenListTester func(context.Context, model.RemoteConfig) error
 
 type RemoteConfigInput struct {
 	Name          string
@@ -54,10 +57,11 @@ func (e *RemoteConfigInUseError) Error() string {
 }
 
 type RemoteConfigService struct {
-	db        *store.DB
-	keyDir    string
-	sshTester SSHTester
-	audit     *audit.Logger
+	db             *store.DB
+	keyDir         string
+	sshTester      SSHTester
+	openListTester OpenListTester
+	audit          *audit.Logger
 }
 
 func NewRemoteConfigService(db *store.DB, dataDir string, sshTester SSHTester) *RemoteConfigService {
@@ -70,9 +74,10 @@ func NewRemoteConfigService(db *store.DB, dataDir string, sshTester SSHTester) *
 	}
 
 	return &RemoteConfigService{
-		db:        db,
-		keyDir:    keyDir,
-		sshTester: sshTester,
+		db:             db,
+		keyDir:         keyDir,
+		sshTester:      sshTester,
+		openListTester: openlist.VerifyConnection,
 	}
 }
 
@@ -81,6 +86,13 @@ func (s *RemoteConfigService) SetAuditLogger(logger *audit.Logger) {
 		return
 	}
 	s.audit = logger
+}
+
+func (s *RemoteConfigService) SetOpenListTester(tester OpenListTester) {
+	if s == nil || tester == nil {
+		return
+	}
+	s.openListTester = tester
 }
 
 func (s *RemoteConfigService) CreateRemoteConfig(ctx context.Context, input RemoteConfigInput, privateKeyPEM []byte) (*model.RemoteConfig, error) {
@@ -159,7 +171,7 @@ func (s *RemoteConfigService) UpdateRemoteConfig(ctx context.Context, id int64, 
 		if strings.TrimSpace(updated.PrivateKeyPath) == "" {
 			return nil, ErrPrivateKeyRequired
 		}
-	case "cloud":
+	case "openlist", "cloud":
 		if replacePrivateKey {
 			return nil, ErrPrivateKeyNotSupported
 		}
@@ -254,14 +266,20 @@ func (s *RemoteConfigService) TestRemoteConfigConnection(ctx context.Context, id
 	if err != nil {
 		return err
 	}
-	if remote.Type != "ssh" {
-		return ErrSSHTestNotSupported
+	switch {
+	case remote.Type == "ssh":
+		if strings.TrimSpace(remote.PrivateKeyPath) == "" {
+			return ErrPrivateKeyRequired
+		}
+		return s.sshTester(ctx, *remote)
+	case openlist.IsRemoteConfig(*remote):
+		if s.openListTester == nil {
+			return ErrRemoteTestNotSupported
+		}
+		return s.openListTester(ctx, *remote)
+	default:
+		return ErrRemoteTestNotSupported
 	}
-	if strings.TrimSpace(remote.PrivateKeyPath) == "" {
-		return ErrPrivateKeyRequired
-	}
-
-	return s.sshTester(ctx, *remote)
 }
 
 func VerifySSHConnection(ctx context.Context, remote model.RemoteConfig) error {

@@ -21,6 +21,7 @@ import (
 
 	backupcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
@@ -173,7 +174,7 @@ func (e *ColdBackupExecutor) Execute(ctx context.Context, task *model.Task, poli
 	artifactPath := tempDataDir
 	artifactName := fmt.Sprintf("%s-%s", sanitizeBackupName(instance.Name), runName)
 
-	if e.requiresPackedArtifact(policy) {
+	if e.requiresPackedArtifact(policy, target) {
 		step := coldTaskPackageStep
 		extension := ".tar"
 		compress := false
@@ -244,7 +245,7 @@ func (e *ColdBackupExecutor) Execute(ctx context.Context, task *model.Task, poli
 		}
 	} else {
 		entryName := artifactName
-		if !e.requiresPackedArtifact(policy) && !policy.Encryption {
+		if !e.requiresPackedArtifact(policy, target) && !policy.Encryption {
 			entryName = fmt.Sprintf("%s-%s", sanitizeBackupName(instance.Name), runName)
 		}
 		if err := movePath(artifactPath, filepath.Join(stageDir, entryName)); err != nil {
@@ -328,7 +329,7 @@ func (e *ColdBackupExecutor) validateInputs(task *model.Task, policy *model.Poli
 	if target.BackupType != "cold" {
 		return fmt.Errorf("cold executor only supports cold targets")
 	}
-	if normalizeRsyncType(target.StorageType) != "local" && normalizeRsyncType(target.StorageType) != "ssh" {
+	if normalizeRsyncType(target.StorageType) != "local" && normalizeRsyncType(target.StorageType) != "ssh" && normalizeRsyncType(target.StorageType) != "openlist" {
 		return fmt.Errorf("cold backup target storage type %q is not supported", target.StorageType)
 	}
 
@@ -336,11 +337,12 @@ func (e *ColdBackupExecutor) validateInputs(task *model.Task, policy *model.Poli
 }
 
 func (e *ColdBackupExecutor) loadRemoteConfig(endpointType string, remoteConfigID *int64, role string) (*model.RemoteConfig, error) {
-	if normalizeRsyncType(endpointType) != "ssh" {
+	normalizedType := normalizeRsyncType(endpointType)
+	if normalizedType != "ssh" && normalizedType != "openlist" {
 		return nil, nil
 	}
 	if remoteConfigID == nil {
-		return nil, fmt.Errorf("%s ssh remote config is required", role)
+		return nil, fmt.Errorf("%s %s remote config is required", role, normalizedType)
 	}
 
 	remote, err := e.db.GetRemoteConfigByID(*remoteConfigID)
@@ -350,8 +352,11 @@ func (e *ColdBackupExecutor) loadRemoteConfig(endpointType string, remoteConfigI
 		}
 		return nil, err
 	}
-	if remote.Type != "ssh" {
+	if normalizedType == "ssh" && remote.Type != "ssh" {
 		return nil, fmt.Errorf("%s remote config %d must be ssh", role, remote.ID)
+	}
+	if normalizedType == "openlist" && !openlist.IsRemoteConfig(*remote) {
+		return nil, fmt.Errorf("%s remote config %d must be openlist", role, remote.ID)
 	}
 
 	return remote, nil
@@ -410,6 +415,19 @@ func (e *ColdBackupExecutor) runDirectoryAvailable(ctx context.Context, storageT
 			return false, fmt.Errorf("check remote cold backup path %q: %w (%s)", runDir, err, strings.TrimSpace(stderr))
 		}
 		return strings.TrimSpace(stdout) == "", nil
+	case "openlist":
+		session, err := e.openListSession(ctx, remote)
+		if err != nil {
+			return false, err
+		}
+		_, err = session.Get(ctx, runDir)
+		if errors.Is(err, openlist.ErrNotFound) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return false, nil
 	default:
 		return false, fmt.Errorf("unsupported target storage type %q", storageType)
 	}
@@ -787,6 +805,31 @@ func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, target *model
 			return nil, progressErr
 		}
 		return &result.Stats, nil
+	case "openlist":
+		session, err := e.openListSession(ctx, remote)
+		if err != nil {
+			return nil, err
+		}
+		if err := session.EnsureDir(ctx, runDir); err != nil {
+			return nil, err
+		}
+		for index, entry := range entries {
+			artifactPath := filepath.Join(stageDir, entry)
+			info, err := os.Stat(artifactPath)
+			if err != nil {
+				return nil, fmt.Errorf("stat staged openlist artifact %q: %w", artifactPath, err)
+			}
+			if info.IsDir() {
+				return nil, fmt.Errorf("openlist targets only support file artifacts")
+			}
+			if err := session.UploadFile(ctx, artifactPath, pathpkg.Join(runDir, entry)); err != nil {
+				return nil, err
+			}
+			if progressCb != nil {
+				progressCb(ProgressInfo{Percentage: 90 + ((index + 1) * 10 / len(entries))})
+			}
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported target storage type %q", target.StorageType)
 	}
@@ -803,7 +846,21 @@ func (e *ColdBackupExecutor) connectSSH(ctx context.Context, remote *model.Remot
 	return client, nil
 }
 
-func (e *ColdBackupExecutor) requiresPackedArtifact(policy *model.Policy) bool {
+func (e *ColdBackupExecutor) openListSession(ctx context.Context, remote *model.RemoteConfig) (*openlist.Session, error) {
+	if remote == nil {
+		return nil, fmt.Errorf("openlist remote config is required")
+	}
+	config, err := openlist.ParseConfig(*remote)
+	if err != nil {
+		return nil, err
+	}
+	return openlist.NewClient(nil).Open(ctx, config)
+}
+
+func (e *ColdBackupExecutor) requiresPackedArtifact(policy *model.Policy, target *model.BackupTarget) bool {
+	if target != nil && normalizeRsyncType(target.StorageType) == "openlist" {
+		return true
+	}
 	return policy.Compression || policy.Encryption || policy.SplitEnabled
 }
 
@@ -923,7 +980,7 @@ func copyFilePath(sourcePath, destPath string, mode os.FileMode) error {
 }
 
 func joinArtifactPath(storageType, dirPath, name string) string {
-	if normalizeRsyncType(storageType) == "ssh" {
+	if normalizeRsyncType(storageType) == "ssh" || normalizeRsyncType(storageType) == "openlist" {
 		return pathpkg.Join(dirPath, name)
 	}
 	return filepath.Join(dirPath, name)

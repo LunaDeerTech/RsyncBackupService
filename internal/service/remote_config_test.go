@@ -17,6 +17,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
+	"rsync-backup-service/internal/store"
 )
 
 func TestVerifySSHConnectionSuccess(t *testing.T) {
@@ -69,6 +71,47 @@ func TestVerifySSHConnectionRejectsLoosePermissions(t *testing.T) {
 	if !strings.Contains(err.Error(), "0600") {
 		t.Fatalf("VerifySSHConnection() error = %q, want permission error", err.Error())
 	}
+}
+
+func TestRemoteConfigServiceUsesOpenListTester(t *testing.T) {
+	dataDir := t.TempDir()
+	db := newRemoteConfigServiceTestDB(t, dataDir)
+	service := NewRemoteConfigService(db, dataDir, nil)
+	tested := false
+	service.SetOpenListTester(func(ctx context.Context, remote model.RemoteConfig) error {
+		tested = true
+		if !openlist.IsRemoteConfig(remote) {
+			t.Fatalf("remote type = %q, want openlist", remote.Type)
+		}
+		return nil
+	})
+
+	encoded, err := openlist.EncodeStoredConfig("secret-pass", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	remote := &model.RemoteConfig{
+		Name:          "ol-service",
+		Type:          "openlist",
+		Host:          "https://openlist.example.com",
+		Username:      "admin",
+		CloudProvider: stringPtrForServiceTest("openlist"),
+		CloudConfig:   encoded,
+	}
+	if err := db.CreateRemoteConfig(remote); err != nil {
+		t.Fatalf("CreateRemoteConfig() error = %v", err)
+	}
+
+	if err := service.TestRemoteConfigConnection(context.Background(), remote.ID); err != nil {
+		t.Fatalf("TestRemoteConfigConnection() error = %v", err)
+	}
+	if !tested {
+		t.Fatal("openlist tester was not invoked")
+	}
+}
+
+func stringPtrForServiceTest(value string) *string {
+	return &value
 }
 
 func newSignerPEM(t *testing.T) ([]byte, ssh.Signer) {
@@ -174,4 +217,22 @@ func filepathJoin(parts ...string) string {
 		result = result + string(os.PathSeparator) + part
 	}
 	return result
+}
+
+func newRemoteConfigServiceTestDB(t *testing.T, dataDir string) *store.DB {
+	t.Helper()
+
+	db, err := store.New(dataDir)
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("db.Close() error = %v", err)
+		}
+	})
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("db.Migrate() error = %v", err)
+	}
+	return db
 }

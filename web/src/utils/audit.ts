@@ -48,6 +48,8 @@ export const actionOptions = [
 
 const backupTypeLabels: Record<string, string> = { rolling: '滚动', cold: '冷备' }
 const sourceTypeLabels: Record<string, string> = { local: '本地', ssh: 'SSH' }
+const storageTypeLabels: Record<string, string> = { local: '本地', ssh: 'SSH', openlist: 'OpenList', cloud: '更多云存储' }
+const remoteTypeLabels: Record<string, string> = { ssh: 'SSH', openlist: 'OpenList', cloud: '更多云存储' }
 const triggerLabels: Record<string, string> = { manual: '手动', scheduled: '定时' }
 
 const riskSourceLabels: Record<string, string> = {
@@ -140,11 +142,11 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
   } else if (action.startsWith('target.')) {
     if (detail.name) parts.push(fmt('名称', detail.name))
     if (detail.backup_type) parts.push(fmt('备份类型', backupTypeLabels[detail.backup_type] ?? detail.backup_type))
-    if (detail.storage_type) parts.push(fmt('存储类型', detail.storage_type))
+    if (detail.storage_type) parts.push(fmt('存储类型', storageTypeLabels[detail.storage_type] ?? detail.storage_type))
     if (detail.storage_path) parts.push(fmt('路径', detail.storage_path))
   } else if (action.startsWith('remote.')) {
     if (detail.name) parts.push(fmt('名称', detail.name))
-    if (detail.type) parts.push(fmt('类型', detail.type))
+    if (detail.type) parts.push(fmt('类型', remoteTypeLabels[detail.type] ?? detail.type))
     if (detail.host) parts.push(fmt('主机', detail.host))
     if (detail.port) parts.push(fmt('端口', detail.port))
     if (detail.username) parts.push(fmt('用户名', detail.username))

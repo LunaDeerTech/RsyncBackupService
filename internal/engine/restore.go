@@ -18,6 +18,7 @@ import (
 
 	backupcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/service"
 	"rsync-backup-service/internal/store"
 )
@@ -290,11 +291,12 @@ func (e *RestoreExecutor) updateTaskStep(task *model.Task, step string, progress
 }
 
 func (e *RestoreExecutor) loadRemoteConfig(endpointType string, remoteConfigID *int64, role string) (*model.RemoteConfig, error) {
-	if normalizeRsyncType(endpointType) != "ssh" {
+	normalizedType := normalizeRsyncType(endpointType)
+	if normalizedType != "ssh" && normalizedType != "openlist" {
 		return nil, nil
 	}
 	if remoteConfigID == nil {
-		return nil, fmt.Errorf("%s ssh remote config is required", role)
+		return nil, fmt.Errorf("%s %s remote config is required", role, normalizedType)
 	}
 
 	remote, err := e.db.GetRemoteConfigByID(*remoteConfigID)
@@ -304,8 +306,11 @@ func (e *RestoreExecutor) loadRemoteConfig(endpointType string, remoteConfigID *
 		}
 		return nil, err
 	}
-	if remote.Type != "ssh" {
+	if normalizedType == "ssh" && remote.Type != "ssh" {
 		return nil, fmt.Errorf("%s remote config %d must be ssh", role, remote.ID)
+	}
+	if normalizedType == "openlist" && !openlist.IsRemoteConfig(*remote) {
+		return nil, fmt.Errorf("%s remote config %d must be openlist", role, remote.ID)
 	}
 
 	return remote, nil
@@ -493,6 +498,17 @@ func (e *RestoreExecutor) stageColdArtifact(ctx context.Context, task *model.Tas
 		return stagedPath, nil
 	}
 
+	if storageType == "openlist" {
+		stagedPath, err := e.stageOpenListColdArtifact(ctx, target, remote, snapshotPath, stageRoot, progressCb)
+		if err != nil {
+			return "", err
+		}
+		if err := e.reportProgress(task, restoreTaskFetchStep, ProgressInfo{Percentage: 100}, progressCb); err != nil {
+			return "", err
+		}
+		return stagedPath, nil
+	}
+
 	if storageType != "ssh" {
 		return "", fmt.Errorf("unsupported cold backup storage type %q", target.StorageType)
 	}
@@ -524,6 +540,81 @@ func (e *RestoreExecutor) stageColdArtifact(ctx context.Context, task *model.Tas
 	}
 
 	return filepath.Join(stageRoot, stagedPath), nil
+}
+
+func (e *RestoreExecutor) stageOpenListColdArtifact(ctx context.Context, target *model.BackupTarget, remote *model.RemoteConfig, snapshotPath, stageRoot string, progressCb func(ProgressInfo)) (string, error) {
+	session, err := e.openListSession(ctx, remote)
+	if err != nil {
+		return "", err
+	}
+	if basePath, ok := splitPartBasePath(snapshotPath, "openlist"); ok {
+		localBase := filepath.Join(stageRoot, pathpkg.Base(basePath))
+		for partIndex := 1; ; partIndex++ {
+			remotePartPath := fmt.Sprintf("%s.part%03d", basePath, partIndex)
+			localPartPath := fmt.Sprintf("%s.part%03d", localBase, partIndex)
+			resp, err := session.OpenDownload(ctx, remotePartPath, "")
+			if errors.Is(err, openlist.ErrNotFound) {
+				if partIndex == 1 {
+					return "", fmt.Errorf("split backup parts for %q not found", snapshotPath)
+				}
+				break
+			}
+			if err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(filepath.Dir(localPartPath), 0o755); err != nil {
+				resp.Body.Close()
+				return "", fmt.Errorf("create openlist staged part directory %q: %w", filepath.Dir(localPartPath), err)
+			}
+			file, err := os.OpenFile(localPartPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+			if err != nil {
+				resp.Body.Close()
+				return "", fmt.Errorf("create openlist staged part %q: %w", localPartPath, err)
+			}
+			_, copyErr := io.Copy(file, resp.Body)
+			closeErr := file.Close()
+			resp.Body.Close()
+			if copyErr != nil {
+				return "", fmt.Errorf("copy openlist split part %q: %w", remotePartPath, copyErr)
+			}
+			if closeErr != nil {
+				return "", fmt.Errorf("close openlist staged part %q: %w", localPartPath, closeErr)
+			}
+			if progressCb != nil {
+				progressCb(ProgressInfo{Percentage: minInt(95, partIndex*20)})
+			}
+		}
+		return localBase + ".part001", nil
+	}
+
+	object, err := session.Get(ctx, snapshotPath)
+	if err != nil {
+		return "", err
+	}
+	if object.IsDir {
+		return "", fmt.Errorf("openlist directory backups are not supported for restore")
+	}
+	localPath := filepath.Join(stageRoot, pathpkg.Base(snapshotPath))
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return "", fmt.Errorf("create openlist staged directory %q: %w", filepath.Dir(localPath), err)
+	}
+	resp, err := session.OpenDownload(ctx, snapshotPath, "")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	file, err := os.OpenFile(localPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create openlist staged file %q: %w", localPath, err)
+	}
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		file.Close()
+		return "", fmt.Errorf("copy openlist artifact %q: %w", snapshotPath, err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close openlist staged file %q: %w", localPath, err)
+	}
+	return localPath, nil
 }
 
 func stageLocalColdArtifact(snapshotPath, stageRoot string) (string, error) {
@@ -687,6 +778,24 @@ func (e *RestoreExecutor) resolveEncryptionKey(policy *model.Policy, restoreReq 
 		return nil, fmt.Errorf("encryption key does not match policy")
 	}
 	return []byte(key), nil
+}
+
+func (e *RestoreExecutor) openListSession(ctx context.Context, remote *model.RemoteConfig) (*openlist.Session, error) {
+	if remote == nil {
+		return nil, fmt.Errorf("openlist remote config is required")
+	}
+	config, err := openlist.ParseConfig(*remote)
+	if err != nil {
+		return nil, err
+	}
+	return openlist.NewClient(nil).Open(ctx, config)
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (e *RestoreExecutor) extractArchive(ctx context.Context, archivePath, destDir string) error {

@@ -3,13 +3,18 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	backupcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 )
 
 func TestRestoreExecutorExecuteRollingSourceUsesDelete(t *testing.T) {
@@ -172,6 +177,112 @@ func TestRestoreExecutorExecuteColdMergeDecryptExtractAndRestore(t *testing.T) {
 	}
 }
 
+func TestRestoreExecutorStageOpenListColdArtifactDownloadsSplitParts(t *testing.T) {
+	db := newRollingTestDB(t)
+	token := "openlist-token"
+	basePath := "/cold/mysql-prod-20260407-210000.tar.gz"
+	partBodies := map[string]string{
+		basePath + ".part001": "cold-backup-part-1",
+		basePath + ".part002": "cold-backup-part-2",
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/auth/login":
+			writeRestoreOpenListJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data": map[string]any{
+					"token": token,
+				},
+			})
+		case r.URL.Path == "/api/fs/get":
+			assertRestoreOpenListAuth(t, r, token)
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("json.NewDecoder().Decode() error = %v", err)
+			}
+			_ = r.Body.Close()
+			content, ok := partBodies[payload["path"]]
+			if !ok {
+				writeRestoreOpenListJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+				return
+			}
+			writeRestoreOpenListJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data": map[string]any{
+					"path":   payload["path"],
+					"name":   filepath.Base(payload["path"]),
+					"size":   len(content),
+					"is_dir": false,
+				},
+			})
+		case strings.HasPrefix(r.URL.Path, "/@file/link/path/"):
+			assertRestoreOpenListAuth(t, r, token)
+			remotePath, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/@file/link/path"))
+			if err != nil {
+				t.Fatalf("PathUnescape(link path) error = %v", err)
+			}
+			if _, ok := partBodies[remotePath]; !ok {
+				writeRestoreOpenListJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+				return
+			}
+			writeRestoreOpenListJSON(t, w, http.StatusOK, map[string]any{
+				"data": server.URL + "/downloads" + openlist.EncodePathForRoute(remotePath),
+			})
+		case strings.HasPrefix(r.URL.Path, "/downloads/"):
+			assertRestoreOpenListAuth(t, r, token)
+			remotePath, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/downloads"))
+			if err != nil {
+				t.Fatalf("PathUnescape(download path) error = %v", err)
+			}
+			content, ok := partBodies[remotePath]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			http.ServeContent(w, r, filepath.Base(remotePath), time.Time{}, strings.NewReader(content))
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	encodedConfig, err := openlist.EncodeStoredConfig("secret", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	provider := "openlist"
+	remote := &model.RemoteConfig{
+		ID:            7,
+		Type:          "openlist",
+		Host:          server.URL,
+		Username:      "admin",
+		CloudProvider: &provider,
+		CloudConfig:   encodedConfig,
+	}
+
+	restoreExecutor := NewRestoreExecutor(nil, db, t.TempDir())
+	stageRoot := t.TempDir()
+	var progressEvents []ProgressInfo
+	stagedPath, err := restoreExecutor.stageOpenListColdArtifact(context.Background(), &model.BackupTarget{StorageType: "openlist"}, remote, basePath+".part001", stageRoot, func(progress ProgressInfo) {
+		progressEvents = append(progressEvents, progress)
+	})
+	if err != nil {
+		t.Fatalf("stageOpenListColdArtifact() error = %v", err)
+	}
+	if stagedPath != filepath.Join(stageRoot, "mysql-prod-20260407-210000.tar.gz.part001") {
+		t.Fatalf("stagedPath = %q, want %q", stagedPath, filepath.Join(stageRoot, "mysql-prod-20260407-210000.tar.gz.part001"))
+	}
+	assertFileContent(t, filepath.Join(stageRoot, "mysql-prod-20260407-210000.tar.gz.part001"), "cold-backup-part-1")
+	assertFileContent(t, filepath.Join(stageRoot, "mysql-prod-20260407-210000.tar.gz.part002"), "cold-backup-part-2")
+	if len(progressEvents) != 2 {
+		t.Fatalf("progressEvents len = %d, want %d", len(progressEvents), 2)
+	}
+}
+
 func TestWorkerPoolProcessRestoreTaskKeepsBackupStatus(t *testing.T) {
 	db := newRollingTestDB(t)
 	instance, policy, _, _, _ := createRollingFixtures(t, db, t.TempDir(), t.TempDir())
@@ -252,5 +363,21 @@ func TestRestoreTaskJSONFieldsRoundTrip(t *testing.T) {
 	}
 	if string(payload) == "{}" {
 		t.Fatal("task JSON unexpectedly omitted restore fields")
+	}
+}
+
+func writeRestoreOpenListJSON(t *testing.T, w http.ResponseWriter, status int, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Fatalf("json.NewEncoder().Encode() error = %v", err)
+	}
+}
+
+func assertRestoreOpenListAuth(t *testing.T, r *http.Request, want string) {
+	t.Helper()
+	if got := r.Header.Get("Authorization"); got != want {
+		t.Fatalf("Authorization = %q, want %q", got, want)
 	}
 }
