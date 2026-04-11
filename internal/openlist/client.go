@@ -230,6 +230,16 @@ func (s *Session) EnsureDir(ctx context.Context, remotePath string) error {
 	current := "/"
 	for _, segment := range segments {
 		current = pathpkg.Join(current, segment)
+		object, err := s.Get(ctx, current)
+		if err == nil {
+			if !object.IsDir {
+				return fmt.Errorf("openlist path %q exists and is not a directory", current)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
 		if err := s.Mkdir(ctx, current); err != nil && !isAlreadyExistsError(err) {
 			return err
 		}

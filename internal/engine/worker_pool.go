@@ -41,6 +41,7 @@ type WorkerPool struct {
 	audit            *audit.Logger
 	disasterRecovery *service.DisasterRecoveryService
 	riskDetector     *RiskDetector
+	afterFunc        func(time.Duration, func()) *time.Timer
 	retryMu          sync.Mutex
 	retryStates      map[int64]*retryState // keyed by backup ID
 }
@@ -71,6 +72,7 @@ func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor
 		restore:     restore,
 		db:          db,
 		retention:   retention,
+		afterFunc:   time.AfterFunc,
 		retryStates: make(map[int64]*retryState),
 	}
 }
@@ -224,6 +226,11 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
+		if wp.shouldTreatRunErrAsCancellation(runErr, loadedTask, backup) {
+			wp.cleanupRetryState(backup)
+			wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
+			return runErr
+		}
 		if taskUsesManagedBackup(loadedTask) && policy != nil && policy.RetryEnabled && policy.RetryMaxRetries > 0 {
 			attempt := wp.getRetryAttempt(backup)
 			if attempt < policy.RetryMaxRetries {
@@ -537,9 +544,26 @@ func (wp *WorkerPool) scheduleRetry(task *model.Task, backup *model.Backup, poli
 		"delay", delay,
 	)
 
-	time.AfterFunc(delay, func() {
+	afterFunc := wp.afterFunc
+	if afterFunc == nil {
+		afterFunc = time.AfterFunc
+	}
+	afterFunc(delay, func() {
 		wp.executeRetry(policy, nextAttempt, encryptionKey, backup.TriggerSource)
 	})
+}
+
+func (wp *WorkerPool) shouldTreatRunErrAsCancellation(runErr error, task *model.Task, backup *model.Backup) bool {
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		return true
+	}
+	if task != nil && strings.EqualFold(strings.TrimSpace(task.Status), "cancelled") {
+		return true
+	}
+	if backup != nil && strings.EqualFold(strings.TrimSpace(backup.Status), "cancelled") {
+		return true
+	}
+	return false
 }
 
 func (wp *WorkerPool) executeRetry(policy *model.Policy, attempt int, encryptionKey string, triggerSource string) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,15 +36,20 @@ func TestSessionSupportsFileLifecycle(t *testing.T) {
 			assertAuth(t, r, token)
 			var payload map[string]string
 			decodeJSONBody(t, r, &payload)
+			if payload["path"] != "/" && !strings.HasSuffix(payload["path"], ".tar") && !containsString(createdDirs, payload["path"]) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+				return
+			}
+			isDir := payload["path"] == "/" || !strings.HasSuffix(payload["path"], ".tar")
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"code":    200,
 				"message": "success",
 				"data": map[string]any{
-					"path":    payload["path"],
-					"name":    "artifact.tar",
-					"size":    42,
-					"is_dir":  payload["path"] == "/",
-					"sign":    "sig-1",
+					"path":          payload["path"],
+					"name":          path.Base(payload["path"]),
+					"size":          42,
+					"is_dir":        isDir,
+					"sign":          "sig-1",
 					"mount_details": map[string]any{"driver_name": "Local", "total_space": 1000, "free_space": 500},
 				},
 			})
@@ -167,6 +173,72 @@ func TestParseConfigSupportsOpenListRemote(t *testing.T) {
 	}
 }
 
+func TestSessionEnsureDirSkipsExistingParentDirectories(t *testing.T) {
+	token := "token-123"
+	createdDirs := make([]string, 0, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data": map[string]any{
+					"token": token,
+				},
+			})
+		case "/api/fs/get":
+			assertAuth(t, r, token)
+			var payload map[string]string
+			decodeJSONBody(t, r, &payload)
+			switch payload["path"] {
+			case "/mount", "/mount/existing":
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"code":    200,
+					"message": "success",
+					"data": map[string]any{
+						"path":   payload["path"],
+						"name":   path.Base(payload["path"]),
+						"is_dir": true,
+					},
+				})
+			case "/mount/existing/new-dir":
+				writeJSON(t, w, http.StatusOK, map[string]any{"code": 500, "message": "object not found", "data": nil})
+			default:
+				t.Fatalf("unexpected get path: %s", payload["path"])
+			}
+		case "/api/fs/mkdir":
+			assertAuth(t, r, token)
+			var payload map[string]string
+			decodeJSONBody(t, r, &payload)
+			createdDirs = append(createdDirs, payload["path"])
+			if payload["path"] != "/mount/existing/new-dir" {
+				t.Fatalf("mkdir path = %q, want %q", payload["path"], "/mount/existing/new-dir")
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{"code": 200, "message": "success", "data": nil})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	session, err := NewClient(server.Client()).Open(context.Background(), Config{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	if err := session.EnsureDir(context.Background(), "/mount/existing/new-dir"); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+	if len(createdDirs) != 1 {
+		t.Fatalf("createdDirs = %v, want one mkdir call", createdDirs)
+	}
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, status int, payload any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -193,4 +265,13 @@ func assertAuth(t *testing.T, r *http.Request, want string) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
