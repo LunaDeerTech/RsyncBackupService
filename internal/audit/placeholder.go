@@ -20,6 +20,8 @@ const (
 	ActionBackupTrigger      = "backup.trigger"
 	ActionBackupComplete     = "backup.complete"
 	ActionBackupFail         = "backup.fail"
+	ActionBackupRetry        = "backup.retry"
+	ActionBackupRetryExhausted = "backup.retry_exhausted"
 	ActionRestoreTrigger     = "restore.trigger"
 	ActionRestoreComplete    = "restore.complete"
 	ActionRestoreFail        = "restore.fail"

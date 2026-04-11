@@ -30,6 +30,8 @@ type policyRequest struct {
 	EncryptionKey  string `json:"encryption_key,omitempty"`
 	SplitEnabled   bool   `json:"split_enabled"`
 	SplitSizeMB    *int   `json:"split_size_mb,omitempty"`
+	RetryEnabled   *bool  `json:"retry_enabled,omitempty"`
+	RetryMaxRetries *int  `json:"retry_max_retries,omitempty"`
 	RetentionType  string `json:"retention_type"`
 	RetentionValue int    `json:"retention_value"`
 }
@@ -51,6 +53,8 @@ type policyInput struct {
 	EncryptionKeyHash *string
 	SplitEnabled      bool
 	SplitSizeMB       *int
+	RetryEnabled      bool
+	RetryMaxRetries   int
 	RetentionType     string
 	RetentionValue    int
 }
@@ -68,6 +72,8 @@ type policyResponse struct {
 	Encryption          bool       `json:"encryption"`
 	SplitEnabled        bool       `json:"split_enabled"`
 	SplitSizeMB         *int       `json:"split_size_mb,omitempty"`
+	RetryEnabled        bool       `json:"retry_enabled"`
+	RetryMaxRetries     int        `json:"retry_max_retries"`
 	RetentionType       string     `json:"retention_type"`
 	RetentionValue      int        `json:"retention_value"`
 	CreatedAt           time.Time  `json:"created_at"`
@@ -155,6 +161,8 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		EncryptionKeyHash: cloneOptionalPolicyString(input.EncryptionKeyHash),
 		SplitEnabled:      input.SplitEnabled,
 		SplitSizeMB:       cloneOptionalInt(input.SplitSizeMB),
+		RetryEnabled:      input.RetryEnabled,
+		RetryMaxRetries:   input.RetryMaxRetries,
 		RetentionType:     input.RetentionType,
 		RetentionValue:    input.RetentionValue,
 	}
@@ -229,6 +237,8 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	current.EncryptionKeyHash = cloneOptionalPolicyString(input.EncryptionKeyHash)
 	current.SplitEnabled = input.SplitEnabled
 	current.SplitSizeMB = cloneOptionalInt(input.SplitSizeMB)
+	current.RetryEnabled = input.RetryEnabled
+	current.RetryMaxRetries = input.RetryMaxRetries
 	current.RetentionType = input.RetentionType
 	current.RetentionValue = input.RetentionValue
 
@@ -433,16 +443,39 @@ func (h *Handler) normalizePolicyInput(instanceID int64, request policyRequest, 
 	}
 
 	encryptionKey := strings.TrimSpace(request.EncryptionKey)
+
+	retryEnabled := true
+	retryMaxRetries := 3
+	if current != nil {
+		retryEnabled = current.RetryEnabled
+		retryMaxRetries = current.RetryMaxRetries
+	}
+	if request.RetryEnabled != nil {
+		retryEnabled = *request.RetryEnabled
+	}
+	if request.RetryMaxRetries != nil {
+		retryMaxRetries = *request.RetryMaxRetries
+	}
+	if retryEnabled {
+		if retryMaxRetries < 1 || retryMaxRetries > 10 {
+			return policyInput{}, fmt.Errorf("retry_max_retries must be between 1 and 10")
+		}
+	} else {
+		retryMaxRetries = 0
+	}
+
 	input := policyInput{
-		InstanceID:     instanceID,
-		Name:           name,
-		Type:           policyType,
-		TargetID:       request.TargetID,
-		ScheduleType:   scheduleType,
-		ScheduleValue:  scheduleValue,
-		Enabled:        request.Enabled,
-		RetentionType:  retentionType,
-		RetentionValue: request.RetentionValue,
+		InstanceID:      instanceID,
+		Name:            name,
+		Type:            policyType,
+		TargetID:        request.TargetID,
+		ScheduleType:    scheduleType,
+		ScheduleValue:   scheduleValue,
+		Enabled:         request.Enabled,
+		RetryEnabled:    retryEnabled,
+		RetryMaxRetries: retryMaxRetries,
+		RetentionType:   retentionType,
+		RetentionValue:  request.RetentionValue,
 	}
 
 	if policyType == "rolling" {
@@ -511,6 +544,8 @@ func buildPolicyResponse(policy model.Policy, summary model.PolicyExecutionSumma
 		Encryption:          policy.Encryption,
 		SplitEnabled:        policy.SplitEnabled,
 		SplitSizeMB:         cloneOptionalInt(policy.SplitSizeMB),
+		RetryEnabled:        policy.RetryEnabled,
+		RetryMaxRetries:     policy.RetryMaxRetries,
 		RetentionType:       policy.RetentionType,
 		RetentionValue:      policy.RetentionValue,
 		CreatedAt:           policy.CreatedAt,

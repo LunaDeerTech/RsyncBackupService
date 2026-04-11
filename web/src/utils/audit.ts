@@ -8,6 +8,8 @@ export const actionLabels: Record<string, string> = {
   'backup.trigger': '触发备份',
   'backup.complete': '备份完成',
   'backup.fail': '备份失败',
+  'backup.retry': '备份重试',
+  'backup.retry_exhausted': '重试耗尽',
   'backup.download': '下载备份',
   'backup.cleanup_failed': '清理失败',
   'restore.trigger': '触发恢复',
@@ -115,6 +117,13 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
       else parts.push(fmt('耗时', `${dur}秒`))
     }
     if (detail.error_message) parts.push(fmt('错误', detail.error_message))
+  } else if (action === 'backup.retry' || action === 'backup.retry_exhausted') {
+    if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
+    if (detail.policy_name) parts.push(fmt('策略', `${detail.policy_name} (#${detail.policy_id})`))
+    if (detail.attempt != null && detail.max_retries != null) parts.push(fmt('重试', `${detail.attempt}/${detail.max_retries}`))
+    if (detail.next_delay) parts.push(fmt('下次等待', detail.next_delay))
+    if (detail.error) parts.push(fmt('错误', detail.error))
+    if (detail.final) parts.push('已耗尽全部重试次数')
   } else if (action === 'backup.download') {
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
     if (detail.backup_id) parts.push(fmtId('备份', detail.backup_id))

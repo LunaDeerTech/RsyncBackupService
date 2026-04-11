@@ -16,6 +16,8 @@ type Policy struct {
 	EncryptionKeyHash *string   `json:"-"`
 	SplitEnabled      bool      `json:"split_enabled"`
 	SplitSizeMB       *int      `json:"split_size_mb,omitempty"`
+	RetryEnabled      bool      `json:"retry_enabled"`
+	RetryMaxRetries   int       `json:"retry_max_retries"`
 	RetentionType     string    `json:"retention_type"`
 	RetentionValue    int       `json:"retention_value"`
 	CreatedAt         time.Time `json:"created_at"`

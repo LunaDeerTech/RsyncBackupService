@@ -24,6 +24,12 @@ type restoreTaskExecutor interface {
 	Execute(context.Context, *model.Task, *model.Backup, *RestoreRequest, func(ProgressInfo)) error
 }
 
+type retryState struct {
+	attempt       int
+	maxRetries    int
+	encryptionKey string
+}
+
 type WorkerPool struct {
 	workers          int
 	queue            *TaskQueue
@@ -35,6 +41,8 @@ type WorkerPool struct {
 	audit            *audit.Logger
 	disasterRecovery *service.DisasterRecoveryService
 	riskDetector     *RiskDetector
+	retryMu          sync.Mutex
+	retryStates      map[int64]*retryState // keyed by backup ID
 }
 
 func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor, cold *ColdBackupExecutor, db *store.DB, retention *RetentionCleaner) *WorkerPool {
@@ -56,13 +64,14 @@ func NewWorkerPool(workers int, queue *TaskQueue, rolling *RollingBackupExecutor
 	}
 
 	return &WorkerPool{
-		workers:   workers,
-		queue:     queue,
-		rolling:   rolling,
-		cold:      cold,
-		restore:   restore,
-		db:        db,
-		retention: retention,
+		workers:     workers,
+		queue:       queue,
+		rolling:     rolling,
+		cold:        cold,
+		restore:     restore,
+		db:          db,
+		retention:   retention,
+		retryStates: make(map[int64]*retryState),
 	}
 }
 
@@ -215,10 +224,22 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return wp.failTask(loadedTask, backup, fmt.Errorf("unsupported task type %q", loadedTask.Type))
 	}
 	if runErr != nil {
+		if taskUsesManagedBackup(loadedTask) && policy != nil && policy.RetryEnabled && policy.RetryMaxRetries > 0 {
+			attempt := wp.getRetryAttempt(backup)
+			if attempt < policy.RetryMaxRetries {
+				wp.writeRetryAudit(loadedTask, backup, policy, attempt+1, policy.RetryMaxRetries, runErr)
+				wp.cleanupRetryState(backup)
+				wp.scheduleRetry(loadedTask, backup, policy, attempt+1)
+				return runErr
+			}
+			wp.writeRetryFinalFailAudit(loadedTask, backup, policy, attempt, policy.RetryMaxRetries, runErr)
+			wp.cleanupRetryState(backup)
+		}
 		wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 		wp.handleRiskAfterFailure(runCtx, loadedTask, backup)
 		return runErr
 	}
+	wp.cleanupRetryState(backup)
 	if wp.retention != nil && taskUsesManagedBackup(loadedTask) {
 		if err := wp.retention.CleanByPolicy(runCtx, policy); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("retention cleanup after backup failed", "task_id", loadedTask.ID, "policy_id", policy.ID, "error", err)
@@ -462,5 +483,151 @@ func (wp *WorkerPool) handleRiskAfterFailure(ctx context.Context, task *model.Ta
 		if err := wp.riskDetector.OnRestoreFailed(ctx, task.InstanceID); err != nil {
 			slog.Error("restore failure risk detection failed", "task_id", task.ID, "instance_id", task.InstanceID, "error", err)
 		}
+	}
+}
+
+// ── Retry support ──
+
+func (wp *WorkerPool) getRetryAttempt(backup *model.Backup) int {
+	if wp == nil || backup == nil {
+		return 0
+	}
+	wp.retryMu.Lock()
+	defer wp.retryMu.Unlock()
+	if state, ok := wp.retryStates[backup.ID]; ok {
+		return state.attempt
+	}
+	return 0
+}
+
+func (wp *WorkerPool) setRetryState(backupID int64, state *retryState) {
+	if wp == nil {
+		return
+	}
+	wp.retryMu.Lock()
+	defer wp.retryMu.Unlock()
+	wp.retryStates[backupID] = state
+}
+
+func (wp *WorkerPool) cleanupRetryState(backup *model.Backup) {
+	if wp == nil || backup == nil {
+		return
+	}
+	wp.retryMu.Lock()
+	defer wp.retryMu.Unlock()
+	delete(wp.retryStates, backup.ID)
+}
+
+func (wp *WorkerPool) scheduleRetry(task *model.Task, backup *model.Backup, policy *model.Policy, nextAttempt int) {
+	if wp == nil || wp.db == nil || wp.queue == nil || policy == nil || backup == nil {
+		return
+	}
+
+	delay := time.Duration(nextAttempt) * 5 * time.Second
+	encryptionKey := ""
+	if policy.Type == "cold" && policy.Encryption {
+		encryptionKey = wp.queue.coldEncryptionKey(task.ID)
+	}
+
+	slog.Info("scheduling backup retry",
+		"policy_id", policy.ID,
+		"backup_id", backup.ID,
+		"attempt", nextAttempt,
+		"max_retries", policy.RetryMaxRetries,
+		"delay", delay,
+	)
+
+	time.AfterFunc(delay, func() {
+		wp.executeRetry(policy, nextAttempt, encryptionKey, backup.TriggerSource)
+	})
+}
+
+func (wp *WorkerPool) executeRetry(policy *model.Policy, attempt int, encryptionKey string, triggerSource string) {
+	if wp == nil || wp.db == nil || wp.queue == nil || policy == nil {
+		return
+	}
+
+	retryBackup, retryTask, err := wp.db.CreatePendingPolicyRunWithSource(policy, triggerSource)
+	if err != nil {
+		slog.Error("create retry backup+task failed",
+			"policy_id", policy.ID,
+			"attempt", attempt,
+			"error", err,
+		)
+		return
+	}
+
+	retryTask.CurrentStep = fmt.Sprintf("queued（重试%d/%d）", attempt, policy.RetryMaxRetries)
+	if err := wp.db.UpdateTask(retryTask); err != nil {
+		slog.Error("update retry task step failed", "task_id", retryTask.ID, "error", err)
+	}
+
+	wp.setRetryState(retryBackup.ID, &retryState{
+		attempt:       attempt,
+		maxRetries:    policy.RetryMaxRetries,
+		encryptionKey: encryptionKey,
+	})
+
+	if policy.Type == "cold" && encryptionKey != "" {
+		wp.queue.SetColdEncryptionKey(retryTask.ID, encryptionKey)
+	}
+
+	if err := wp.queue.Enqueue(retryTask); err != nil {
+		slog.Error("enqueue retry task failed",
+			"policy_id", policy.ID,
+			"task_id", retryTask.ID,
+			"attempt", attempt,
+			"error", err,
+		)
+	}
+}
+
+func (wp *WorkerPool) writeRetryAudit(task *model.Task, backup *model.Backup, policy *model.Policy, attempt, maxRetries int, runErr error) {
+	if wp == nil || wp.audit == nil || task == nil {
+		return
+	}
+
+	instanceID := task.InstanceID
+	detail := map[string]any{
+		"task_id":     task.ID,
+		"policy_id":   policy.ID,
+		"policy_name": policy.Name,
+		"type":        policy.Type,
+		"attempt":     attempt,
+		"max_retries": maxRetries,
+		"error":       strings.TrimSpace(runErr.Error()),
+		"next_delay":  fmt.Sprintf("%ds", attempt*5),
+	}
+	if backup != nil {
+		detail["backup_id"] = backup.ID
+		detail["trigger_source"] = backup.TriggerSource
+	}
+	if err := wp.audit.LogAction(context.Background(), instanceID, 0, audit.ActionBackupRetry, detail); err != nil {
+		slog.Error("write retry audit failed", "task_id", task.ID, "error", err)
+	}
+}
+
+func (wp *WorkerPool) writeRetryFinalFailAudit(task *model.Task, backup *model.Backup, policy *model.Policy, attempt, maxRetries int, runErr error) {
+	if wp == nil || wp.audit == nil || task == nil {
+		return
+	}
+
+	instanceID := task.InstanceID
+	detail := map[string]any{
+		"task_id":     task.ID,
+		"policy_id":   policy.ID,
+		"policy_name": policy.Name,
+		"type":        policy.Type,
+		"attempt":     attempt,
+		"max_retries": maxRetries,
+		"error":       strings.TrimSpace(runErr.Error()),
+		"final":       true,
+	}
+	if backup != nil {
+		detail["backup_id"] = backup.ID
+		detail["trigger_source"] = backup.TriggerSource
+	}
+	if err := wp.audit.LogAction(context.Background(), instanceID, 0, audit.ActionBackupRetryExhausted, detail); err != nil {
+		slog.Error("write retry exhausted audit failed", "task_id", task.ID, "error", err)
 	}
 }

@@ -137,6 +137,8 @@ const policyForm = reactive({
   encryption_key: '',
   split_enabled: false,
   split_size_mb: undefined as number | undefined,
+  retry_enabled: true,
+  retry_max_retries: 3,
   retention_type: 'count' as 'time' | 'count',
   retention_value: 7,
 })
@@ -147,6 +149,7 @@ const policyErrors = reactive({
   schedule_input: '',
   encryption_key: '',
   split_size_mb: '',
+  retry_max_retries: '',
   retention_value: '',
 })
 
@@ -651,6 +654,8 @@ function resetPolicyForm() {
   policyForm.encryption_key = ''
   policyForm.split_enabled = false
   policyForm.split_size_mb = undefined
+  policyForm.retry_enabled = true
+  policyForm.retry_max_retries = 3
   policyForm.retention_type = 'count'
   policyForm.retention_value = 7
   Object.keys(policyErrors).forEach((k) => (policyErrors as Record<string, string>)[k] = '')
@@ -705,6 +710,8 @@ function openEditPolicy(row: Record<string, unknown>) {
   policyForm.encryption_key = ''
   policyForm.split_enabled = row.split_enabled as boolean
   policyForm.split_size_mb = row.split_size_mb as number | undefined
+  policyForm.retry_enabled = row.retry_enabled as boolean ?? true
+  policyForm.retry_max_retries = row.retry_max_retries as number ?? 3
   policyForm.retention_type = row.retention_type as 'time' | 'count'
   policyForm.retention_value = row.retention_value as number
   policyModalVisible.value = true
@@ -755,6 +762,10 @@ function validatePolicyForm(): boolean {
     policyErrors.split_size_mb = '请输入有效的分卷大小'
     valid = false
   }
+  if (policyForm.retry_enabled && (policyForm.retry_max_retries < 1 || policyForm.retry_max_retries > 10)) {
+    policyErrors.retry_max_retries = '重试次数需在 1-10 之间'
+    valid = false
+  }
   if (!policyForm.retention_value || policyForm.retention_value <= 0) {
     policyErrors.retention_value = '保留值必须大于 0'
     valid = false
@@ -794,6 +805,8 @@ async function handlePolicySubmit() {
       encryption_key: policyForm.encryption ? policyForm.encryption_key : undefined,
       split_enabled: policyForm.split_enabled,
       split_size_mb: policyForm.split_enabled ? policyForm.split_size_mb : undefined,
+      retry_enabled: policyForm.retry_enabled,
+      retry_max_retries: policyForm.retry_enabled ? policyForm.retry_max_retries : 0,
       retention_type: policyForm.retention_type,
       retention_value: policyForm.retention_value,
     }
@@ -865,6 +878,8 @@ async function handleTogglePolicy(row: Record<string, unknown>, enabled: boolean
       encryption: row.encryption as boolean,
       split_enabled: row.split_enabled as boolean,
       split_size_mb: row.split_size_mb as number | undefined,
+      retry_enabled: row.retry_enabled as boolean ?? true,
+      retry_max_retries: row.retry_max_retries as number ?? 3,
       retention_type: row.retention_type as 'time' | 'count',
       retention_value: row.retention_value as number,
     }
@@ -1825,82 +1840,106 @@ const permissionOptions = [
     </AppModal>
 
     <!-- Policy Create/Edit Modal -->
-    <AppModal v-model:visible="policyModalVisible" :title="policyEditing ? '编辑策略' : '新增策略'" width="560px">
+    <AppModal v-model:visible="policyModalVisible" :title="policyEditing ? '编辑策略' : '新增策略'" width="720px">
       <form @submit.prevent="handlePolicySubmit">
-        <AppFormGroup>
-          <AppFormItem label="策略名称" :required="true" :error="policyErrors.name">
-            <AppInput v-model="policyForm.name" placeholder="例如：每日滚动备份" />
-          </AppFormItem>
+        <div class="policy-modal-grid">
+          <!-- Left column: Basic config -->
+          <div class="policy-modal-col">
+            <div class="form-divider">基本配置</div>
+            <AppFormGroup>
+              <AppFormItem label="策略名称" :required="true" :error="policyErrors.name">
+                <AppInput v-model="policyForm.name" placeholder="例如：每日滚动备份" />
+              </AppFormItem>
 
-          <AppFormItem label="类型" :required="true">
-            <AppSelect v-model="policyForm.type" :options="policyTypeOptions" :disabled="policyEditing" />
-          </AppFormItem>
+              <AppFormItem label="类型" :required="true">
+                <AppSelect v-model="policyForm.type" :options="policyTypeOptions" :disabled="policyEditing" />
+              </AppFormItem>
 
-          <AppFormItem label="目标" :required="true" :error="policyErrors.target_id">
-            <AppSelect v-model="policyForm.target_id" :options="filteredTargetOptions" placeholder="请选择备份目标" />
-          </AppFormItem>
+              <AppFormItem label="目标" :required="true" :error="policyErrors.target_id">
+                <AppSelect v-model="policyForm.target_id" :options="filteredTargetOptions" placeholder="请选择备份目标" />
+              </AppFormItem>
 
-          <AppFormItem label="调度周期" :required="true">
-            <AppSelect v-model="policyForm.schedule_mode" :options="scheduleOptions" />
-          </AppFormItem>
+              <AppFormItem label="调度周期" :required="true">
+                <AppSelect v-model="policyForm.schedule_mode" :options="scheduleOptions" />
+              </AppFormItem>
 
-          <!-- Interval input: number + unit -->
-          <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true"
-            :error="policyErrors.schedule_input">
-            <div class="schedule-interval-row">
-              <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
-              <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
-            </div>
-          </AppFormItem>
+              <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true"
+                :error="policyErrors.schedule_input">
+                <div class="schedule-interval-row">
+                  <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
+                  <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
+                </div>
+              </AppFormItem>
 
-          <!-- Custom cron input -->
-          <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true"
-            :error="policyErrors.schedule_input">
-            <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
-          </AppFormItem>
+              <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true"
+                :error="policyErrors.schedule_input">
+                <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
+              </AppFormItem>
 
-          <AppFormItem label="保留策略" :required="true">
-            <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
-          </AppFormItem>
+              <AppFormItem label="启用">
+                <AppSwitch v-model="policyForm.enabled" />
+              </AppFormItem>
+            </AppFormGroup>
+          </div>
 
-          <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true"
-            :error="policyErrors.retention_value">
-            <AppInput v-model="policyForm.retention_value" type="number"
-              :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
-          </AppFormItem>
+          <!-- Right column: Retention, retry, and cold options -->
+          <div class="policy-modal-col">
+            <div class="form-divider">保留与重试</div>
+            <AppFormGroup>
+              <AppFormItem label="保留策略" :required="true">
+                <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
+              </AppFormItem>
 
-          <AppFormItem label="启用">
-            <AppSwitch v-model="policyForm.enabled" />
-          </AppFormItem>
+              <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true"
+                :error="policyErrors.retention_value">
+                <AppInput v-model="policyForm.retention_value" type="number"
+                  :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
+              </AppFormItem>
 
-          <!-- Cold-only options -->
-          <template v-if="policyForm.type === 'cold'">
-            <div class="form-divider">冷备份选项</div>
+              <AppFormItem label="失败自动重试">
+                <AppSwitch v-model="policyForm.retry_enabled" />
+              </AppFormItem>
 
-            <AppFormItem label="压缩">
-              <AppSwitch v-model="policyForm.compression" />
-            </AppFormItem>
+              <AppFormItem v-if="policyForm.retry_enabled" label="最大重试次数" :required="true"
+                :error="policyErrors.retry_max_retries">
+                <AppInput v-model="policyForm.retry_max_retries" type="number" placeholder="1-10，默认 3" />
+              </AppFormItem>
 
-            <AppFormItem label="加密">
-              <AppSwitch v-model="policyForm.encryption" />
-            </AppFormItem>
+              <p v-if="policyForm.retry_enabled" class="policy-modal-hint">
+                失败后依次等待 5s、10s、15s… 再自动重试，重试不阻塞其他任务。
+              </p>
+            </AppFormGroup>
 
-            <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
-              :error="policyErrors.encryption_key">
-              <AppInput v-model="policyForm.encryption_key" type="password"
-                :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
-            </AppFormItem>
+            <!-- Cold-only options -->
+            <template v-if="policyForm.type === 'cold'">
+              <div class="form-divider">冷备份选项</div>
+              <AppFormGroup>
+                <AppFormItem label="压缩">
+                  <AppSwitch v-model="policyForm.compression" />
+                </AppFormItem>
 
-            <AppFormItem label="分卷">
-              <AppSwitch v-model="policyForm.split_enabled" />
-            </AppFormItem>
+                <AppFormItem label="加密">
+                  <AppSwitch v-model="policyForm.encryption" />
+                </AppFormItem>
 
-            <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
-              :error="policyErrors.split_size_mb">
-              <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
-            </AppFormItem>
-          </template>
-        </AppFormGroup>
+                <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
+                  :error="policyErrors.encryption_key">
+                  <AppInput v-model="policyForm.encryption_key" type="password"
+                    :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
+                </AppFormItem>
+
+                <AppFormItem label="分卷">
+                  <AppSwitch v-model="policyForm.split_enabled" />
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
+                  :error="policyErrors.split_size_mb">
+                  <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
+                </AppFormItem>
+              </AppFormGroup>
+            </template>
+          </div>
+        </div>
       </form>
 
       <template #footer>
@@ -2793,6 +2832,30 @@ const permissionOptions = [
 .schedule-interval-row> :last-child {
   width: 100px;
   flex-shrink: 0;
+}
+
+/* Policy modal two-column layout */
+.policy-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+}
+
+.policy-modal-col {
+  min-width: 0;
+}
+
+.policy-modal-hint {
+  font-size: var(--font-size-xs, 12px);
+  color: var(--text-muted);
+  margin: -4px 0 8px;
+  line-height: 1.5;
+}
+
+@media (max-width: 680px) {
+  .policy-modal-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Backup detail */

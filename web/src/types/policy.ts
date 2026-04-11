@@ -11,6 +11,8 @@ export interface Policy {
   encryption: boolean
   split_enabled: boolean
   split_size_mb?: number
+  retry_enabled: boolean
+  retry_max_retries: number
   retention_type: 'time' | 'count'
   retention_value: number
   created_at: string
@@ -32,6 +34,8 @@ export interface CreatePolicyRequest {
   encryption_key?: string
   split_enabled: boolean
   split_size_mb?: number
+  retry_enabled: boolean
+  retry_max_retries: number
   retention_type: 'time' | 'count'
   retention_value: number
 }
