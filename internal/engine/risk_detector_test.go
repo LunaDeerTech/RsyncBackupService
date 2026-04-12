@@ -243,7 +243,7 @@ func TestRiskDetectorSendsNotificationsOnCreateAndCriticalEscalation(t *testing.
 	if len(sender.jobs) != 2 {
 		t.Fatalf("notification count after critical escalation = %d, want %d", len(sender.jobs), 2)
 	}
-	if sender.jobs[1].to != user.Email || !strings.Contains(sender.jobs[1].subject, "备份失败") || !strings.Contains(sender.jobs[1].body, "critical") {
+	if sender.jobs[1].to != user.Email || !strings.Contains(sender.jobs[1].subject, "备份失败") || !strings.Contains(sender.jobs[1].body, "风险等级: 严重") || !strings.Contains(sender.jobs[1].body, "处理建议") {
 		t.Fatalf("critical notification = %+v, want backup-failed critical email", sender.jobs[1])
 	}
 }

@@ -170,7 +170,16 @@ func (h *Handler) UpdateCurrentUserSubscriptions(w http.ResponseWriter, r *http.
 	if !decodeRequestBody(w, r, &request) {
 		return
 	}
-	merged := make(map[int64]bool, len(request.Subscriptions))
+	current, err := h.db.ListSubscriptionsByUser(user.ID)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to list subscriptions")
+		return
+	}
+
+	merged := make(map[int64]bool, len(current)+len(request.Subscriptions))
+	for _, item := range current {
+		merged[item.InstanceID] = item.Enabled
+	}
 	for _, item := range request.Subscriptions {
 		if _, ok := allowed[item.InstanceID]; !ok {
 			Error(w, http.StatusBadRequest, authErrorInvalidRequest, "subscription instance is not accessible")
@@ -186,7 +195,7 @@ func (h *Handler) UpdateCurrentUserSubscriptions(w http.ResponseWriter, r *http.
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to update subscriptions")
 		return
 	}
-	current, err := h.db.ListSubscriptionsByUser(user.ID)
+	current, err = h.db.ListSubscriptionsByUser(user.ID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to list subscriptions")
 		return

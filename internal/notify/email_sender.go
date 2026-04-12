@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"log/slog"
 	"net"
 	"net/smtp"
@@ -283,15 +284,187 @@ func SendSMTPMail(host string, port int, username, password, from, encryption, t
 }
 
 func buildMailMessage(from, to, subject, body string) string {
+	boundary := fmt.Sprintf("rbs-alt-%d", time.Now().UnixNano())
+	htmlBody := buildHTMLMailBody(subject, body)
 	return strings.Join([]string{
 		fmt.Sprintf("From: %s", from),
 		fmt.Sprintf("To: %s", to),
 		fmt.Sprintf("Subject: %s", subject),
 		"MIME-Version: 1.0",
+		fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q", boundary),
+		"",
+		fmt.Sprintf("--%s", boundary),
 		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
 		"",
 		body,
+		"",
+		fmt.Sprintf("--%s", boundary),
+		"Content-Type: text/html; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		htmlBody,
+		"",
+		fmt.Sprintf("--%s--", boundary),
 	}, "\r\n")
+}
+
+type mailDetail struct {
+	Label string
+	Value string
+}
+
+func buildHTMLMailBody(subject, body string) string {
+	details, paragraphs := splitMailBody(body)
+	accent := "#2fc7f0"
+	badge := "系统通知"
+	summary := "以下是本次邮件的关键信息。"
+
+	subjectLower := strings.ToLower(strings.TrimSpace(subject))
+	switch {
+	case strings.Contains(subjectLower, "登录密码") || findMailDetailValue(details, "您的初始登录密码为") != "":
+		accent = "#5dcc96"
+		badge = "账号信息"
+		summary = "系统已为您生成初始登录密码。为确保账户安全，请在首次登录后尽快修改密码。"
+	case strings.Contains(subjectLower, "smtp 测试邮件"):
+		accent = "#5dcc96"
+		badge = "SMTP 测试"
+		summary = "这是一封用于确认邮件通知通道是否正常工作的测试邮件。"
+	default:
+		if severity := findMailDetailValue(details, "风险等级"); severity != "" {
+			badge = severity
+			accent = riskAccentColor(severity)
+		}
+		if description := findMailDetailValue(details, "风险描述"); description != "" {
+			summary = description
+		} else if len(paragraphs) > 0 {
+			summary = paragraphs[0]
+		}
+	}
+
+	content := renderMailDetailTable(details, accent)
+	if content == "" {
+		content = renderMailParagraphs(paragraphs)
+	}
+	if content == "" {
+		content = `<p style="margin:0;font-size:14px;line-height:1.7;color:#475569;">暂无正文内容。</p>`
+	}
+
+	return fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>%s</title>
+  </head>
+  <body style="margin:0;padding:24px;background:#f4f8fc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+    <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #dbe5f0;border-radius:20px;overflow:hidden;box-shadow:0 18px 40px rgba(15,23,42,0.08);">
+      <div style="padding:28px 32px;background:linear-gradient(135deg,%s 0%%, #eaf8ff 100%%);border-bottom:1px solid rgba(15,23,42,0.08);">
+        <div style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,0.72);font-size:12px;font-weight:700;letter-spacing:0.04em;color:#0f172a;">%s</div>
+        <h1 style="margin:16px 0 10px;font-size:24px;line-height:1.35;color:#0f172a;">%s</h1>
+        <p style="margin:0;font-size:14px;line-height:1.8;color:#334155;">%s</p>
+      </div>
+      <div style="padding:28px 32px;">%s</div>
+      <div style="padding:18px 32px;border-top:1px solid #e2e8f0;background:#f8fafc;">
+        <p style="margin:0;font-size:12px;line-height:1.7;color:#64748b;">此邮件由 Rsync Backup Service 自动发送，请勿直接回复。</p>
+      </div>
+    </div>
+  </body>
+</html>`,
+		html.EscapeString(subject),
+		accent,
+		html.EscapeString(badge),
+		html.EscapeString(subject),
+		html.EscapeString(summary),
+		content,
+	)
+}
+
+func splitMailBody(body string) ([]mailDetail, []string) {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	details := make([]mailDetail, 0, len(lines))
+	paragraphs := make([]string, 0, len(lines))
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		separator := ":"
+		idx := strings.Index(line, separator)
+		if idx < 0 {
+			separator = "："
+			idx = strings.Index(line, separator)
+		}
+		if idx > 0 {
+			label := strings.TrimSpace(line[:idx])
+			value := strings.TrimSpace(line[idx+len(separator):])
+			if label != "" && value != "" {
+				details = append(details, mailDetail{Label: label, Value: value})
+				continue
+			}
+		}
+		paragraphs = append(paragraphs, line)
+	}
+	return details, paragraphs
+}
+
+func renderMailDetailTable(details []mailDetail, accent string) string {
+	if len(details) == 0 {
+		return ""
+	}
+	rows := make([]string, 0, len(details))
+	for _, detail := range details {
+		rows = append(rows, fmt.Sprintf(
+			`<tr><td style="padding:12px 0;border-bottom:1px solid #e2e8f0;width:112px;vertical-align:top;font-size:12px;font-weight:700;color:#64748b;letter-spacing:0.03em;">%s</td><td style="padding:12px 0;border-bottom:1px solid #e2e8f0;font-size:14px;line-height:1.75;color:#0f172a;">%s</td></tr>`,
+			html.EscapeString(detail.Label),
+			renderMailDetailValue(detail, accent),
+		))
+	}
+	return `<table role="presentation" style="width:100%%;border-collapse:collapse;">` + strings.Join(rows, "") + `</table>`
+}
+
+func renderMailDetailValue(detail mailDetail, accent string) string {
+	value := html.EscapeString(detail.Value)
+	if strings.Contains(detail.Label, "密码") {
+		return `<span style="display:inline-flex;align-items:center;padding:8px 12px;border-radius:12px;background:#0f172a;color:#f8fafc;font-size:15px;font-weight:700;letter-spacing:0.06em;font-family:'SFMono-Regular','Cascadia Code','Roboto Mono',monospace;">` + value + `</span>`
+	}
+	if detail.Label == "风险等级" {
+		return `<span style="display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:` + html.EscapeString(accent) + `1f;color:` + html.EscapeString(accent) + `;font-size:12px;font-weight:700;">` + value + `</span>`
+	}
+	return value
+}
+
+func renderMailParagraphs(paragraphs []string) string {
+	if len(paragraphs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		parts = append(parts, `<p style="margin:0 0 12px;font-size:14px;line-height:1.8;color:#334155;">`+html.EscapeString(paragraph)+`</p>`)
+	}
+	return strings.Join(parts, "")
+}
+
+func findMailDetailValue(details []mailDetail, label string) string {
+	for _, detail := range details {
+		if detail.Label == label {
+			return detail.Value
+		}
+	}
+	return ""
+}
+
+func riskAccentColor(severity string) string {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "严重", "critical":
+		return "#f06060"
+	case "警告", "warning":
+		return "#f5be58"
+	case "提示", "info":
+		return "#2fc7f0"
+	default:
+		return "#2fc7f0"
+	}
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {

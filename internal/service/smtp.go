@@ -114,7 +114,11 @@ func (s *SystemConfigService) TestSMTP(cfg *SMTPConfig, to string) error {
 		return fmt.Errorf("invalid test recipient: %w", err)
 	}
 
-	return notify.SendSMTPMail(validated.Host, validated.Port, validated.Username, validated.Password, validated.From, validated.Encryption, to, "Rsync Backup Service SMTP 测试邮件", "这是一封来自 Rsync Backup Service 的 SMTP 测试邮件。", s.mailer)
+	body := strings.Join([]string{
+		"邮件通道测试: 这是一封来自 Rsync Backup Service 的 SMTP 测试邮件。",
+		"说明: 如果您能正常收到并查看此邮件，说明当前 SMTP 配置可用。",
+	}, "\n")
+	return notify.SendSMTPMail(validated.Host, validated.Port, validated.Username, validated.Password, validated.From, validated.Encryption, to, "Rsync Backup Service SMTP 测试邮件", body, s.mailer)
 }
 
 func (s *SystemConfigService) GetRegistrationEnabled() (bool, error) {

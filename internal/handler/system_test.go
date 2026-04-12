@@ -70,8 +70,12 @@ func TestCurrentUserSubscriptionsEndpoints(t *testing.T) {
 	viewer := createHandlerTestUser(t, db, "viewer@example.com", "Viewer", "viewer", "ViewerPass123")
 	instanceA := createHandlerTestInstance(t, db, "instance-a")
 	instanceB := createHandlerTestInstance(t, db, "instance-b")
+	instanceC := createHandlerTestInstance(t, db, "instance-c")
 	if _, err := db.Exec(`INSERT INTO instance_permissions (user_id, instance_id, permission, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, viewer.ID, instanceA, "readonly"); err != nil {
 		t.Fatalf("insert instance permission error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO instance_permissions (user_id, instance_id, permission, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, viewer.ID, instanceB, "readonly"); err != nil {
+		t.Fatalf("insert second instance permission error = %v", err)
 	}
 	router := NewRouter(db, WithJWTSecret("secret"))
 	token := mustAccessTokenForUser(t, viewer, "secret")
@@ -90,18 +94,20 @@ func TestCurrentUserSubscriptionsEndpoints(t *testing.T) {
 	if err := json.Unmarshal(envelope.Data, &data); err != nil {
 		t.Fatalf("decode subscriptions payload: %v", err)
 	}
-	if len(data.Subscriptions) != 1 || int64(data.Subscriptions[0]["instance_id"].(float64)) != instanceA {
-		t.Fatalf("subscriptions payload = %+v, want only instance-a", data.Subscriptions)
+	if len(data.Subscriptions) != 2 {
+		t.Fatalf("subscriptions payload len = %d, want 2", len(data.Subscriptions))
 	}
-	if enabled, _ := data.Subscriptions[0]["enabled"].(bool); enabled {
-		t.Fatal("default subscription enabled = true, want false")
+	for _, item := range data.Subscriptions {
+		if enabled, _ := item["enabled"].(bool); enabled {
+			t.Fatal("default subscription enabled = true, want false")
+		}
 	}
 
-	update := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
+	updateA := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
 		"subscriptions": []map[string]any{{"instance_id": instanceA, "enabled": true}},
 	}, token)
-	if update.Code != http.StatusOK {
-		t.Fatalf("PUT /api/v1/users/me/subscriptions status = %d, want %d", update.Code, http.StatusOK)
+	if updateA.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/users/me/subscriptions(instance-a) status = %d, want %d", updateA.Code, http.StatusOK)
 	}
 	subscribers, err := db.ListSubscribersByInstance(instanceA)
 	if err != nil {
@@ -111,8 +117,50 @@ func TestCurrentUserSubscriptionsEndpoints(t *testing.T) {
 		t.Fatalf("subscribers = %+v, want viewer", subscribers)
 	}
 
-	invalid := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
+	updateB := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
 		"subscriptions": []map[string]any{{"instance_id": instanceB, "enabled": true}},
+	}, token)
+	if updateB.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/users/me/subscriptions(instance-b) status = %d, want %d", updateB.Code, http.StatusOK)
+	}
+	subscribers, err = db.ListSubscribersByInstance(instanceB)
+	if err != nil {
+		t.Fatalf("ListSubscribersByInstance(instance-b) error = %v", err)
+	}
+	if len(subscribers) != 1 || subscribers[0].ID != viewer.ID {
+		t.Fatalf("instance-b subscribers = %+v, want viewer", subscribers)
+	}
+	subscribers, err = db.ListSubscribersByInstance(instanceA)
+	if err != nil {
+		t.Fatalf("ListSubscribersByInstance(instance-a again) error = %v", err)
+	}
+	if len(subscribers) != 1 || subscribers[0].ID != viewer.ID {
+		t.Fatalf("instance-a subscribers after enabling instance-b = %+v, want viewer preserved", subscribers)
+	}
+
+	disableA := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
+		"subscriptions": []map[string]any{{"instance_id": instanceA, "enabled": false}},
+	}, token)
+	if disableA.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/users/me/subscriptions(disable instance-a) status = %d, want %d", disableA.Code, http.StatusOK)
+	}
+	subscribers, err = db.ListSubscribersByInstance(instanceA)
+	if err != nil {
+		t.Fatalf("ListSubscribersByInstance(instance-a disabled) error = %v", err)
+	}
+	if len(subscribers) != 0 {
+		t.Fatalf("instance-a disabled subscribers len = %d, want 0", len(subscribers))
+	}
+	subscribers, err = db.ListSubscribersByInstance(instanceB)
+	if err != nil {
+		t.Fatalf("ListSubscribersByInstance(instance-b preserved) error = %v", err)
+	}
+	if len(subscribers) != 1 || subscribers[0].ID != viewer.ID {
+		t.Fatalf("instance-b subscribers after disabling instance-a = %+v, want viewer preserved", subscribers)
+	}
+
+	invalid := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/users/me/subscriptions", map[string]any{
+		"subscriptions": []map[string]any{{"instance_id": instanceC, "enabled": true}},
 	}, token)
 	assertAPIError(t, invalid, http.StatusBadRequest, authErrorInvalidRequest, "subscription instance is not accessible")
 }

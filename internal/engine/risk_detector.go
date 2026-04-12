@@ -727,15 +727,18 @@ func buildRiskNotificationBody(event *model.RiskEvent, instance *model.Instance,
 		createdAt = event.CreatedAt.UTC()
 	}
 
-	lines := []string{
-		fmt.Sprintf("实例: %s", instanceName),
+	lines := []string{fmt.Sprintf("实例: %s", instanceName)}
+	if targetName != "" {
+		lines = append(lines, fmt.Sprintf("备份目标: %s", targetName))
+	}
+	lines = append(lines,
 		fmt.Sprintf("风险类型: %s", riskSourceLabel(event.Source)),
 		fmt.Sprintf("风险等级: %s", riskSeverityLabel(event.Severity)),
 		fmt.Sprintf("风险描述: %s", event.Message),
-		fmt.Sprintf("时间: %s", createdAt.Format(time.RFC3339)),
-	}
-	if targetName != "" {
-		lines = append(lines, fmt.Sprintf("备份目标: %s", targetName))
+		fmt.Sprintf("发生时间: %s", createdAt.Format(time.RFC3339)),
+	)
+	if suggestion := riskActionSuggestion(event.Source); suggestion != "" {
+		lines = append(lines, fmt.Sprintf("处理建议: %s", suggestion))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -764,13 +767,34 @@ func riskSourceLabel(source string) string {
 func riskSeverityLabel(severity string) string {
 	switch severity {
 	case model.RiskSeverityCritical:
-		return "critical"
+		return "严重"
 	case model.RiskSeverityWarning:
-		return "warning"
+		return "警告"
 	case model.RiskSeverityInfo:
-		return "info"
+		return "提示"
 	default:
 		return severity
+	}
+}
+
+func riskActionSuggestion(source string) string {
+	switch source {
+	case model.RiskSourceBackupFailed:
+		return "请检查最近一次备份任务日志、策略配置以及源端可访问性。"
+	case model.RiskSourceBackupOverdue:
+		return "请确认调度器状态、策略执行周期以及实例最近一次成功备份时间。"
+	case model.RiskSourceColdBackupMissing:
+		return "建议为该实例补充冷备份策略，避免只有滚动备份时缺少离线副本。"
+	case model.RiskSourceTargetUnreachable:
+		return "请检查目标地址、网络连通性、认证信息和目标服务状态。"
+	case model.RiskSourceTargetCapacityLow:
+		return "请尽快清理旧备份、扩容存储或调整保留策略，避免备份继续失败。"
+	case model.RiskSourceRestoreFailed:
+		return "请核对恢复任务日志、目标路径权限以及备份快照是否完整可用。"
+	case model.RiskSourceCredentialError:
+		return "请检查 SSH 凭证、密钥权限和远程认证配置，必要时重新下发密钥。"
+	default:
+		return "请登录系统查看对应实例详情与风险事件记录。"
 	}
 }
 
