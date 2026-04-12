@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"rsync-backup-service/internal/audit"
 	backupcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/openlist"
@@ -47,16 +48,25 @@ type coldBackupStats struct {
 	Delivery *RsyncStats `json:"delivery,omitempty"`
 }
 
+type coldBackupOpenListSession interface {
+	EnsureDir(context.Context, string) error
+	UploadFile(context.Context, string, string) error
+}
+
 type ColdBackupExecutor struct {
 	rsync *RsyncExecutor
 	db    *store.DB
+	audit *audit.Logger
 
-	dataDir      string
-	now          func() time.Time
-	dialSSH      func(context.Context, model.RemoteConfig) (*ssh.Client, error)
-	executeRsync func(context.Context, RsyncConfig, func(ProgressInfo)) (*RsyncResult, error)
-	newCommand   commandFactory
-	encryptFile  func(context.Context, string, string, []byte) error
+	dataDir                string
+	now                    func() time.Time
+	dialSSH                func(context.Context, model.RemoteConfig) (*ssh.Client, error)
+	executeRsync           func(context.Context, RsyncConfig, func(ProgressInfo)) (*RsyncResult, error)
+	newCommand             commandFactory
+	encryptFile            func(context.Context, string, string, []byte) error
+	movePath               func(string, string) error
+	sleep                  func(context.Context, time.Duration) error
+	openListSessionFactory func(context.Context, *model.RemoteConfig) (coldBackupOpenListSession, error)
 }
 
 func NewColdBackupExecutor(rsync *RsyncExecutor, db *store.DB, dataDir string) *ColdBackupExecutor {
@@ -67,6 +77,7 @@ func NewColdBackupExecutor(rsync *RsyncExecutor, db *store.DB, dataDir string) *
 	executor := &ColdBackupExecutor{
 		rsync:      rsync,
 		db:         db,
+		audit:      audit.NewLogger(db),
 		dataDir:    strings.TrimSpace(dataDir),
 		now:        func() time.Time { return time.Now().UTC() },
 		dialSSH:    service.DialSSHClient,
@@ -74,8 +85,13 @@ func NewColdBackupExecutor(rsync *RsyncExecutor, db *store.DB, dataDir string) *
 		encryptFile: func(ctx context.Context, inputPath, outputPath string, key []byte) error {
 			return backupcrypto.EncryptFileWithContext(ctx, inputPath, outputPath, key)
 		},
+		movePath: movePath,
+		sleep:    sleepWithContext,
 	}
 	executor.executeRsync = executor.rsync.Execute
+	executor.openListSessionFactory = func(ctx context.Context, remote *model.RemoteConfig) (coldBackupOpenListSession, error) {
+		return executor.openListSession(ctx, remote)
+	}
 	if executor.dataDir == "" {
 		executor.dataDir = resolveRollingDataDir()
 	}
@@ -265,7 +281,7 @@ func (e *ColdBackupExecutor) Execute(ctx context.Context, task *model.Task, poli
 		return e.finishRun(task, backup, err)
 	}
 
-	deliveryStats, err := e.deliverArtifacts(ctx, target, targetRemote, runDir, stageDir, stageEntries, task, progressCb)
+	deliveryStats, err := e.deliverArtifacts(ctx, policy, target, targetRemote, runDir, stageDir, stageEntries, task, progressCb)
 	if err != nil {
 		return e.finishRun(task, backup, err)
 	}
@@ -307,6 +323,20 @@ func (e *ColdBackupExecutor) validateInputs(task *model.Task, policy *model.Poli
 	if e.encryptFile == nil {
 		e.encryptFile = func(ctx context.Context, inputPath, outputPath string, key []byte) error {
 			return backupcrypto.EncryptFileWithContext(ctx, inputPath, outputPath, key)
+		}
+	}
+	if e.movePath == nil {
+		e.movePath = movePath
+	}
+	if e.sleep == nil {
+		e.sleep = sleepWithContext
+	}
+	if e.audit == nil {
+		e.audit = audit.NewLogger(e.db)
+	}
+	if e.openListSessionFactory == nil {
+		e.openListSessionFactory = func(ctx context.Context, remote *model.RemoteConfig) (coldBackupOpenListSession, error) {
+			return e.openListSession(ctx, remote)
 		}
 	}
 	if strings.TrimSpace(e.dataDir) == "" {
@@ -760,22 +790,26 @@ func (e *ColdBackupExecutor) splitFile(ctx context.Context, inputPath string, sp
 	return partPaths, nil
 }
 
-func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, target *model.BackupTarget, remote *model.RemoteConfig, runDir, stageDir string, entries []string, task *model.Task, progressCb func(ProgressInfo)) (*RsyncStats, error) {
+func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, policy *model.Policy, target *model.BackupTarget, remote *model.RemoteConfig, runDir, stageDir string, entries []string, task *model.Task, progressCb func(ProgressInfo)) (*RsyncStats, error) {
 	switch normalizeRsyncType(target.StorageType) {
 	case "local":
 		if err := os.MkdirAll(runDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create final cold backup directory %q: %w", runDir, err)
 		}
-		for _, entry := range entries {
+		for index, entry := range entries {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if err := movePath(filepath.Join(stageDir, entry), filepath.Join(runDir, entry)); err != nil {
+			sourcePath := filepath.Join(stageDir, entry)
+			destPath := filepath.Join(runDir, entry)
+			if _, err := e.retryDeliveryEntry(ctx, task, policy, entry, sourcePath, destPath, "local_move", func() (*RsyncStats, error) {
+				return nil, e.movePath(sourcePath, destPath)
+			}); err != nil {
 				return nil, fmt.Errorf("move cold backup artifact %q: %w", entry, err)
 			}
-		}
-		if progressCb != nil {
-			progressCb(ProgressInfo{Percentage: 100})
+			if err := e.reportProgress(task, coldTaskMoveStep, ProgressInfo{Percentage: deliveryProgressPercentage(index, len(entries))}, progressCb); err != nil {
+				return nil, err
+			}
 		}
 		return nil, nil
 	case "ssh":
@@ -789,28 +823,51 @@ func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, target *model
 			return nil, fmt.Errorf("create remote cold backup directory %q: %w (%s)", runDir, err, strings.TrimSpace(stderr))
 		}
 
-		var progressErr error
-		result, err := e.executeRsync(ctx, RsyncConfig{
-			SourcePath: stageDir,
-			SourceType: "local",
-			DestPath:   runDir,
-			DestType:   "ssh",
-			DestRemote: remote,
-		}, func(progress ProgressInfo) {
-			mapped := scaleProgress(progress, 90, 100)
-			if updateErr := e.reportProgress(task, coldTaskMoveStep, mapped, progressCb); updateErr != nil {
-				progressErr = errors.Join(progressErr, updateErr)
+		aggregated := &RsyncStats{}
+		for index, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
-		})
-		if err != nil {
-			return nil, err
+			sourcePath := filepath.Join(stageDir, entry)
+			entryStart := deliveryProgressPercentage(index-1, len(entries))
+			if index == 0 {
+				entryStart = 90
+			}
+			entryEnd := deliveryProgressPercentage(index, len(entries))
+			stats, err := e.retryDeliveryEntry(ctx, task, policy, entry, sourcePath, joinArtifactPath("ssh", runDir, entry), "ssh_rsync", func() (*RsyncStats, error) {
+				var progressErr error
+				result, runErr := e.executeRsync(ctx, RsyncConfig{
+					SourcePath:    sourcePath,
+					SourceType:    "local",
+					DestPath:      runDir,
+					DestType:      "ssh",
+					DestRemote:    remote,
+					DisableDelete: true,
+				}, func(progress ProgressInfo) {
+					mapped := scaleProgress(progress, entryStart, entryEnd)
+					if updateErr := e.reportProgress(task, coldTaskMoveStep, mapped, progressCb); updateErr != nil {
+						progressErr = errors.Join(progressErr, updateErr)
+					}
+				})
+				if runErr != nil {
+					return nil, runErr
+				}
+				if progressErr != nil {
+					return nil, progressErr
+				}
+				return &result.Stats, nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("move cold backup artifact %q: %w", entry, err)
+			}
+			aggregated = combineRsyncStats(aggregated, stats)
+			if err := e.reportProgress(task, coldTaskMoveStep, ProgressInfo{Percentage: entryEnd}, progressCb); err != nil {
+				return nil, err
+			}
 		}
-		if progressErr != nil {
-			return nil, progressErr
-		}
-		return &result.Stats, nil
+		return aggregated, nil
 	case "openlist":
-		session, err := e.openListSession(ctx, remote)
+		session, err := e.openListSessionFactory(ctx, remote)
 		if err != nil {
 			return nil, err
 		}
@@ -819,6 +876,7 @@ func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, target *model
 		}
 		for index, entry := range entries {
 			artifactPath := filepath.Join(stageDir, entry)
+			destPath := pathpkg.Join(runDir, entry)
 			info, err := os.Stat(artifactPath)
 			if err != nil {
 				return nil, fmt.Errorf("stat staged openlist artifact %q: %w", artifactPath, err)
@@ -826,11 +884,13 @@ func (e *ColdBackupExecutor) deliverArtifacts(ctx context.Context, target *model
 			if info.IsDir() {
 				return nil, fmt.Errorf("openlist targets only support file artifacts")
 			}
-			if err := session.UploadFile(ctx, artifactPath, pathpkg.Join(runDir, entry)); err != nil {
+			if _, err := e.retryDeliveryEntry(ctx, task, policy, entry, artifactPath, destPath, "openlist_upload", func() (*RsyncStats, error) {
+				return nil, session.UploadFile(ctx, artifactPath, destPath)
+			}); err != nil {
 				return nil, err
 			}
-			if progressCb != nil {
-				progressCb(ProgressInfo{Percentage: 90 + ((index + 1) * 10 / len(entries))})
+			if err := e.reportProgress(task, coldTaskMoveStep, ProgressInfo{Percentage: deliveryProgressPercentage(index, len(entries))}, progressCb); err != nil {
+				return nil, err
 			}
 		}
 		return nil, nil
@@ -859,6 +919,111 @@ func (e *ColdBackupExecutor) openListSession(ctx context.Context, remote *model.
 		return nil, err
 	}
 	return openlist.NewClient(nil).Open(ctx, config)
+}
+
+func (e *ColdBackupExecutor) retryDeliveryEntry(ctx context.Context, task *model.Task, policy *model.Policy, entry, sourcePath, destPath, operation string, run func() (*RsyncStats, error)) (*RsyncStats, error) {
+	maxRetries := 0
+	if policy != nil && policy.RetryEnabled && policy.RetryMaxRetries > 0 {
+		maxRetries = policy.RetryMaxRetries
+	}
+
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		stats, err := run()
+		if err == nil {
+			return stats, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if attempt >= maxRetries {
+			if maxRetries > 0 {
+				e.writeMoveRetryAudit(ctx, task, policy, entry, sourcePath, destPath, operation, attempt, maxRetries, err, true)
+			}
+			return nil, fmt.Errorf("delivery failed after %d retries: %w", maxRetries, err)
+		}
+
+		retryAttempt := attempt + 1
+		delay := managedRetryDelay(retryAttempt)
+		e.writeMoveRetryAudit(ctx, task, policy, entry, sourcePath, destPath, operation, retryAttempt, maxRetries, err, false)
+		if err := e.sleep(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (e *ColdBackupExecutor) writeMoveRetryAudit(ctx context.Context, task *model.Task, policy *model.Policy, entry, sourcePath, destPath, operation string, attempt, maxRetries int, runErr error, exhausted bool) {
+	if e == nil || e.audit == nil || task == nil {
+		return
+	}
+
+	action := audit.ActionBackupMoveRetry
+	detail := map[string]any{
+		"task_id":     task.ID,
+		"entry":       entry,
+		"source_path": sourcePath,
+		"dest_path":   destPath,
+		"operation":   operation,
+		"attempt":     attempt,
+		"max_retries": maxRetries,
+		"error":       strings.TrimSpace(runErr.Error()),
+	}
+	if task.BackupID != nil {
+		detail["backup_id"] = *task.BackupID
+	}
+	if policy != nil {
+		detail["policy_id"] = policy.ID
+		detail["policy_name"] = policy.Name
+		detail["type"] = policy.Type
+	}
+	if exhausted {
+		action = audit.ActionBackupMoveRetryExhausted
+		detail["final"] = true
+		detail["total_attempts"] = attempt + 1
+	} else {
+		detail["next_delay"] = managedRetryDelay(attempt).String()
+	}
+	if err := e.audit.LogAction(ctx, task.InstanceID, 0, action, detail); err != nil {
+		return
+	}
+}
+
+func combineRsyncStats(base, next *RsyncStats) *RsyncStats {
+	if base == nil && next == nil {
+		return nil
+	}
+	if base == nil {
+		copyStats := *next
+		return &copyStats
+	}
+	if next == nil {
+		return base
+	}
+	base.TotalSize += next.TotalSize
+	base.TransferSize += next.TransferSize
+	base.TotalFiles += next.TotalFiles
+	base.TransferFiles += next.TransferFiles
+	base.Duration += next.Duration
+	if strings.TrimSpace(next.Speed) != "" {
+		base.Speed = next.Speed
+	}
+	return base
+}
+
+func deliveryProgressPercentage(index, total int) int {
+	if total <= 0 {
+		return 100
+	}
+	if index < 0 {
+		return 90
+	}
+	if index >= total-1 {
+		return 100
+	}
+	return 90 + ((index + 1) * 10 / total)
 }
 
 func (e *ColdBackupExecutor) requiresPackedArtifact(policy *model.Policy, target *model.BackupTarget) bool {

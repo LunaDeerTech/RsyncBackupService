@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"rsync-backup-service/internal/audit"
 	backupcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
 	"rsync-backup-service/internal/store"
@@ -267,6 +269,169 @@ func TestColdBackupExecutorExecuteMarksCancelledOnContextCancel(t *testing.T) {
 	}
 }
 
+func TestColdBackupExecutorDeliverArtifactsLocalRetriesFailedEntry(t *testing.T) {
+	db := newRollingTestDB(t)
+	_, policy, target, _, task := createColdFixtures(t, db, t.TempDir(), t.TempDir())
+	policy.RetryEnabled = true
+	policy.RetryMaxRetries = 2
+	target.StorageType = "local"
+
+	stageDir := t.TempDir()
+	runDir := filepath.Join(t.TempDir(), "run")
+	mustWriteFile(t, filepath.Join(stageDir, "alpha.txt"), "alpha")
+	mustWriteFile(t, filepath.Join(stageDir, "beta.txt"), "beta")
+
+	executor := NewColdBackupExecutor(nil, db, t.TempDir())
+	attempts := map[string]int{}
+	var delays []time.Duration
+	executor.movePath = func(sourcePath, destPath string) error {
+		entry := filepath.Base(sourcePath)
+		attempts[entry]++
+		if entry == "alpha.txt" && attempts[entry] == 1 {
+			return errors.New("transient local move error")
+		}
+		return movePath(sourcePath, destPath)
+	}
+	executor.sleep = func(ctx context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+
+	_, err := executor.deliverArtifacts(context.Background(), policy, target, nil, runDir, stageDir, []string{"alpha.txt", "beta.txt"}, task, nil)
+	if err != nil {
+		t.Fatalf("deliverArtifacts() error = %v", err)
+	}
+	if attempts["alpha.txt"] != 2 {
+		t.Fatalf("alpha attempts = %d, want 2", attempts["alpha.txt"])
+	}
+	if attempts["beta.txt"] != 1 {
+		t.Fatalf("beta attempts = %d, want 1", attempts["beta.txt"])
+	}
+	if len(delays) != 1 || delays[0] != managedRetryDelay(1) {
+		t.Fatalf("retry delays = %v, want [%s]", delays, managedRetryDelay(1))
+	}
+	assertFileContent(t, filepath.Join(runDir, "alpha.txt"), "alpha")
+	assertFileContent(t, filepath.Join(runDir, "beta.txt"), "beta")
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetry, 1)
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetryExhausted, 0)
+
+	detail := loadAuditDetailByAction(t, db, audit.ActionBackupMoveRetry)
+	if detail["entry"] != "alpha.txt" {
+		t.Fatalf("retry audit entry = %v, want alpha.txt", detail["entry"])
+	}
+	if detail["operation"] != "local_move" {
+		t.Fatalf("retry audit operation = %v, want local_move", detail["operation"])
+	}
+	if detail["next_delay"] != managedRetryDelay(1).String() {
+		t.Fatalf("retry audit next_delay = %v, want %s", detail["next_delay"], managedRetryDelay(1))
+	}
+}
+
+func TestColdBackupExecutorDeliverArtifactsOpenListRetriesOnlyFailedEntry(t *testing.T) {
+	db := newRollingTestDB(t)
+	_, policy, target, _, task := createColdFixtures(t, db, t.TempDir(), t.TempDir())
+	policy.RetryEnabled = true
+	policy.RetryMaxRetries = 2
+	target.StorageType = "openlist"
+
+	stageDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(stageDir, "alpha.tar"), "alpha")
+	mustWriteFile(t, filepath.Join(stageDir, "beta.tar"), "beta")
+
+	session := &fakeColdBackupOpenListSession{
+		remainingFailures: map[string]int{"/remote/run/alpha.tar": 1},
+		uploadAttempts:    map[string]int{},
+	}
+	executor := NewColdBackupExecutor(nil, db, t.TempDir())
+	var delays []time.Duration
+	executor.openListSessionFactory = func(ctx context.Context, remote *model.RemoteConfig) (coldBackupOpenListSession, error) {
+		return session, nil
+	}
+	executor.sleep = func(ctx context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+
+	_, err := executor.deliverArtifacts(context.Background(), policy, target, nil, "/remote/run", stageDir, []string{"alpha.tar", "beta.tar"}, task, nil)
+	if err != nil {
+		t.Fatalf("deliverArtifacts() error = %v", err)
+	}
+	if len(session.ensureDirs) != 1 || session.ensureDirs[0] != "/remote/run" {
+		t.Fatalf("ensureDirs = %v, want [/remote/run]", session.ensureDirs)
+	}
+	if session.uploadAttempts["/remote/run/alpha.tar"] != 2 {
+		t.Fatalf("alpha upload attempts = %d, want 2", session.uploadAttempts["/remote/run/alpha.tar"])
+	}
+	if session.uploadAttempts["/remote/run/beta.tar"] != 1 {
+		t.Fatalf("beta upload attempts = %d, want 1", session.uploadAttempts["/remote/run/beta.tar"])
+	}
+	if len(delays) != 1 || delays[0] != managedRetryDelay(1) {
+		t.Fatalf("retry delays = %v, want [%s]", delays, managedRetryDelay(1))
+	}
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetry, 1)
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetryExhausted, 0)
+
+	detail := loadAuditDetailByAction(t, db, audit.ActionBackupMoveRetry)
+	if detail["entry"] != "alpha.tar" {
+		t.Fatalf("retry audit entry = %v, want alpha.tar", detail["entry"])
+	}
+	if detail["operation"] != "openlist_upload" {
+		t.Fatalf("retry audit operation = %v, want openlist_upload", detail["operation"])
+	}
+	if detail["dest_path"] != "/remote/run/alpha.tar" {
+		t.Fatalf("retry audit dest_path = %v, want /remote/run/alpha.tar", detail["dest_path"])
+	}
+}
+
+func TestColdBackupExecutorDeliverArtifactsOpenListFailsAfterRetryExhausted(t *testing.T) {
+	db := newRollingTestDB(t)
+	_, policy, target, _, task := createColdFixtures(t, db, t.TempDir(), t.TempDir())
+	policy.RetryEnabled = true
+	policy.RetryMaxRetries = 2
+	target.StorageType = "openlist"
+
+	stageDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(stageDir, "alpha.tar"), "alpha")
+
+	session := &fakeColdBackupOpenListSession{
+		remainingFailures: map[string]int{"/remote/run/alpha.tar": 3},
+		uploadAttempts:    map[string]int{},
+	}
+	executor := NewColdBackupExecutor(nil, db, t.TempDir())
+	var delays []time.Duration
+	executor.openListSessionFactory = func(ctx context.Context, remote *model.RemoteConfig) (coldBackupOpenListSession, error) {
+		return session, nil
+	}
+	executor.sleep = func(ctx context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+
+	_, err := executor.deliverArtifacts(context.Background(), policy, target, nil, "/remote/run", stageDir, []string{"alpha.tar"}, task, nil)
+	if err == nil || !strings.Contains(err.Error(), "delivery failed after 2 retries") {
+		t.Fatalf("deliverArtifacts() error = %v, want exhausted retry failure", err)
+	}
+	if session.uploadAttempts["/remote/run/alpha.tar"] != 3 {
+		t.Fatalf("alpha upload attempts = %d, want 3", session.uploadAttempts["/remote/run/alpha.tar"])
+	}
+	if len(delays) != 2 || delays[0] != managedRetryDelay(1) || delays[1] != managedRetryDelay(2) {
+		t.Fatalf("retry delays = %v, want [%s %s]", delays, managedRetryDelay(1), managedRetryDelay(2))
+	}
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetry, 2)
+	assertEngineAuditCount(t, db, audit.ActionBackupMoveRetryExhausted, 1)
+
+	detail := loadAuditDetailByAction(t, db, audit.ActionBackupMoveRetryExhausted)
+	if detail["entry"] != "alpha.tar" {
+		t.Fatalf("exhausted audit entry = %v, want alpha.tar", detail["entry"])
+	}
+	if detail["operation"] != "openlist_upload" {
+		t.Fatalf("exhausted audit operation = %v, want openlist_upload", detail["operation"])
+	}
+	if detail["final"] != true {
+		t.Fatalf("exhausted audit final = %v, want true", detail["final"])
+	}
+}
+
 func createColdFixtures(t *testing.T, db *store.DB, sourceRoot, targetRoot string) (*model.Instance, *model.Policy, *model.BackupTarget, *model.Backup, *model.Task) {
 	t.Helper()
 
@@ -318,4 +483,41 @@ func createColdFixtures(t *testing.T, db *store.DB, sourceRoot, targetRoot strin
 
 func itoa64(value int64) string {
 	return strconv.FormatInt(value, 10)
+}
+
+type fakeColdBackupOpenListSession struct {
+	ensureDirs        []string
+	remainingFailures map[string]int
+	uploadAttempts    map[string]int
+}
+
+func (s *fakeColdBackupOpenListSession) EnsureDir(ctx context.Context, remotePath string) error {
+	s.ensureDirs = append(s.ensureDirs, remotePath)
+	return nil
+}
+
+func (s *fakeColdBackupOpenListSession) UploadFile(ctx context.Context, localPath, remotePath string) error {
+	if s.uploadAttempts == nil {
+		s.uploadAttempts = map[string]int{}
+	}
+	s.uploadAttempts[remotePath]++
+	if s.remainingFailures[remotePath] > 0 {
+		s.remainingFailures[remotePath]--
+		return errors.New("transient remote upload error")
+	}
+	return nil
+}
+
+func loadAuditDetailByAction(t *testing.T, db *store.DB, action string) map[string]any {
+	t.Helper()
+
+	var raw string
+	if err := db.QueryRow(`SELECT detail FROM audit_logs WHERE action = ? ORDER BY id LIMIT 1`, action).Scan(&raw); err != nil {
+		t.Fatalf("query audit detail action %q error = %v", action, err)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		t.Fatalf("json.Unmarshal(detail) error = %v", err)
+	}
+	return detail
 }

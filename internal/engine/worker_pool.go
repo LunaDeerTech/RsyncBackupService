@@ -530,7 +530,7 @@ func (wp *WorkerPool) scheduleRetry(task *model.Task, backup *model.Backup, poli
 		return
 	}
 
-	delay := time.Duration(nextAttempt) * 5 * time.Second
+	delay := managedRetryDelay(nextAttempt)
 	encryptionKey := ""
 	if policy.Type == "cold" && policy.Encryption {
 		encryptionKey = wp.queue.coldEncryptionKey(task.ID)
@@ -620,7 +620,7 @@ func (wp *WorkerPool) writeRetryAudit(task *model.Task, backup *model.Backup, po
 		"attempt":     attempt,
 		"max_retries": maxRetries,
 		"error":       strings.TrimSpace(runErr.Error()),
-		"next_delay":  fmt.Sprintf("%ds", attempt*5),
+		"next_delay":  managedRetryDelay(attempt).String(),
 	}
 	if backup != nil {
 		detail["backup_id"] = backup.ID

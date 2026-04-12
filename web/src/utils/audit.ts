@@ -10,6 +10,8 @@ export const actionLabels: Record<string, string> = {
   'backup.fail': '备份失败',
   'backup.retry': '备份重试',
   'backup.retry_exhausted': '重试耗尽',
+  'backup.move_retry': '备份移动重试',
+  'backup.move_retry_exhausted': '备份移动重试耗尽',
   'backup.download': '下载备份',
   'backup.cleanup_failed': '清理失败',
   'restore.trigger': '触发恢复',
@@ -36,7 +38,9 @@ export function getActionLabel(action: string): string {
 
 export function getActionBadgeVariant(action: string): 'success' | 'warning' | 'error' | 'info' | 'default' {
   if (action.endsWith('.fail') || action === 'backup.cleanup_failed') return 'error'
+  if (action === 'backup.move_retry_exhausted') return 'error'
   if (action === 'risk.create' || action === 'risk.escalate') return 'error'
+  if (action === 'backup.retry' || action === 'backup.retry_exhausted' || action === 'backup.move_retry') return 'warning'
   if (action.endsWith('.delete')) return 'warning'
   if (action.endsWith('.complete') || action === 'risk.resolve') return 'success'
   if (action.endsWith('.create') || action.endsWith('.trigger')) return 'info'
@@ -53,6 +57,11 @@ const sourceTypeLabels: Record<string, string> = { local: '本地', ssh: 'SSH' }
 const storageTypeLabels: Record<string, string> = { local: '本地', ssh: 'SSH', openlist: 'OpenList', cloud: '更多云存储' }
 const remoteTypeLabels: Record<string, string> = { ssh: 'SSH', openlist: 'OpenList', cloud: '更多云存储' }
 const triggerLabels: Record<string, string> = { manual: '手动', scheduled: '定时' }
+const backupMoveOperationLabels: Record<string, string> = {
+  local_move: '本地移动',
+  ssh_rsync: 'SSH 传输',
+  openlist_upload: 'OpenList 上传',
+}
 
 const riskSourceLabels: Record<string, string> = {
   backup_failure: '备份失败',
@@ -124,6 +133,17 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.next_delay) parts.push(fmt('下次等待', detail.next_delay))
     if (detail.error) parts.push(fmt('错误', detail.error))
     if (detail.final) parts.push('已耗尽全部重试次数')
+  } else if (action === 'backup.move_retry' || action === 'backup.move_retry_exhausted') {
+    if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
+    if (detail.policy_name) parts.push(fmt('策略', `${detail.policy_name} (#${detail.policy_id})`))
+    if (detail.entry) parts.push(fmt('条目', detail.entry))
+    if (detail.operation) parts.push(fmt('操作', backupMoveOperationLabels[detail.operation] ?? detail.operation))
+    if (detail.attempt != null && detail.max_retries != null) parts.push(fmt('重试', `${detail.attempt}/${detail.max_retries}`))
+    if (detail.source_path) parts.push(fmt('源路径', detail.source_path))
+    if (detail.dest_path) parts.push(fmt('目标路径', detail.dest_path))
+    if (detail.next_delay) parts.push(fmt('下次等待', detail.next_delay))
+    if (detail.error) parts.push(fmt('错误', detail.error))
+    if (detail.final) parts.push('当前条目已耗尽全部重试次数')
   } else if (action === 'backup.download') {
     if (detail.type) parts.push(fmt('类型', backupTypeLabels[detail.type] ?? detail.type))
     if (detail.backup_id) parts.push(fmtId('备份', detail.backup_id))
