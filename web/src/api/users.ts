@@ -18,6 +18,10 @@ export function deleteUser(id: number) {
   return apiClient.delete<void>(`/users/${id}`)
 }
 
+export function resetUserPassword(id: number) {
+  return apiClient.post<{ message: string }>(`/users/${id}/reset-password`)
+}
+
 export function updateCurrentUserProfile(data: { name: string }) {
   return apiClient.put<User>('/users/me/profile', data)
 }

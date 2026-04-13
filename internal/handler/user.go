@@ -114,15 +114,9 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	password, err := h.passwordGenerator()
+	password, passwordHash, err := h.generatePasswordHash()
 	if err != nil {
-		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to generate password")
-		return
-	}
-
-	passwordHash, err := authcrypto.HashPassword(password)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to hash password")
+		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
 		return
 	}
 
@@ -275,6 +269,60 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "user deleted"})
+}
+
+func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+		return
+	}
+
+	userID, err := userIDFromRequest(r)
+	if err != nil {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "invalid user id")
+		return
+	}
+
+	user, err := h.db.GetUserByID(userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			Error(w, http.StatusNotFound, userErrorNotFound, "user not found")
+			return
+		}
+
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to query user")
+		return
+	}
+
+	password, passwordHash, err := h.generatePasswordHash()
+	if err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
+		return
+	}
+
+	user.PasswordHash = passwordHash
+	if err := h.db.UpdateUser(user); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			Error(w, http.StatusNotFound, userErrorNotFound, "user not found")
+			return
+		}
+
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to reset password")
+		return
+	}
+
+	if err := h.passwordSender.SendPassword(r.Context(), user.Email, password); err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to deliver password")
+		return
+	}
+	h.writeCurrentUserAudit(r, 0, audit.ActionUserPasswordReset, map[string]any{
+		"reset_user_id":    user.ID,
+		"reset_user_email": user.Email,
+		"reset_user_name":  user.Name,
+		"reset_user_role":  user.Role,
+	})
+
+	JSON(w, http.StatusOK, map[string]string{"message": "password reset"})
 }
 
 func (h *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
@@ -459,4 +507,18 @@ func totalPages(total int64, pageSize int) int {
 	}
 
 	return int((total + int64(pageSize) - 1) / int64(pageSize))
+}
+
+func (h *Handler) generatePasswordHash() (string, string, error) {
+	password, err := h.passwordGenerator()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate password")
+	}
+
+	passwordHash, err := authcrypto.HashPassword(password)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to hash password")
+	}
+
+	return password, passwordHash, nil
 }

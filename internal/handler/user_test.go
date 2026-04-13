@@ -7,11 +7,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/smtp"
 	"strconv"
+	"strings"
 	"testing"
 
 	authcrypto "rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/notify"
 	"rsync-backup-service/internal/store"
 )
 
@@ -125,6 +128,91 @@ func TestAdminCreateAndUpdateUser(t *testing.T) {
 		"role": "viewer",
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, selfUpdate, http.StatusBadRequest, authErrorInvalidRequest, "cannot modify your own role")
+}
+
+func TestAdminCreateUserUsesStoredSMTPConfigForPasswordDelivery(t *testing.T) {
+	db := newAuthTestDB(t)
+	admin := createHandlerTestUser(t, db, "admin@example.com", "Admin", "admin", "AdminPass123")
+	token := mustAccessTokenForUser(t, admin, "secret")
+
+	previousSendMail := notify.DefaultSendMail
+	t.Cleanup(func() {
+		notify.DefaultSendMail = previousSendMail
+	})
+
+	called := false
+	notify.DefaultSendMail = func(addr string, _ smtp.Auth, from string, to []string, msg []byte) error {
+		called = true
+		if addr != "smtp.example.com:587" || from != "noreply@example.com" || len(to) != 1 || to[0] != "new-user@example.com" {
+			t.Fatalf("mailer args = %q %q %+v", addr, from, to)
+		}
+		message := string(msg)
+		if !strings.Contains(message, "Rsync Backup Service 登录密码") {
+			t.Fatalf("message = %q, want login password subject", message)
+		}
+		if !strings.Contains(message, "TempPass456") {
+			t.Fatalf("message = %q, want generated password", message)
+		}
+		return nil
+	}
+
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		withPasswordGenerator(sequencePasswordGenerator("TempPass456")),
+	)
+
+	updateSMTP := performAuthorizedJSONRequest(t, router, http.MethodPut, "/api/v1/system/smtp", map[string]any{
+		"host":     "smtp.example.com",
+		"port":     587,
+		"username": "mailer",
+		"password": "smtp-pass",
+		"from":     "noreply@example.com",
+	}, token)
+	if updateSMTP.Code != http.StatusOK {
+		t.Fatalf("PUT /api/v1/system/smtp status = %d, want %d", updateSMTP.Code, http.StatusOK)
+	}
+
+	createResponse := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/users", map[string]string{
+		"email": "new-user@example.com",
+		"name":  "New User",
+		"role":  "viewer",
+	}, token)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/users status = %d, want %d", createResponse.Code, http.StatusCreated)
+	}
+	if !called {
+		t.Fatal("password delivery did not use stored smtp config")
+	}
+}
+
+func TestAdminResetUserPassword(t *testing.T) {
+	db := newAuthTestDB(t)
+	admin := createHandlerTestUser(t, db, "admin@example.com", "Admin", "admin", "AdminPass123")
+	target := createHandlerTestUser(t, db, "viewer@example.com", "Viewer", "viewer", "ViewerPass123")
+	sender := newRecordingPasswordSender()
+
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		withPasswordSender(sender),
+		withPasswordGenerator(sequencePasswordGenerator("ResetPass456")),
+	)
+
+	response := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/users/"+itoa(target.ID)+"/reset-password", nil, mustAccessTokenForUser(t, admin, "secret"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/users/{id}/reset-password status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if sender.PasswordFor(target.Email) != "ResetPass456" {
+		t.Fatalf("reset password = %q, want %q", sender.PasswordFor(target.Email), "ResetPass456")
+	}
+	updated, err := db.GetUserByID(target.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID(reset target) error = %v", err)
+	}
+	if !authcrypto.CheckPassword("ResetPass456", updated.PasswordHash) {
+		t.Fatal("reset password hash does not match generated password")
+	}
 }
 
 func TestAdminDeleteUserPreventsSelfAndCleansRelations(t *testing.T) {

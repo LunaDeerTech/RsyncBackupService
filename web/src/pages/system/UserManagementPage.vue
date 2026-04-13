@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
-import { listUsers, createUser, updateUser, deleteUser } from '../../api/users'
+import { listUsers, createUser, updateUser, deleteUser, resetUserPassword } from '../../api/users'
 import { getRegistrationStatus, updateRegistrationStatus } from '../../api/system'
 import { useAuthStore } from '../../stores/auth'
 import { useListViewPreferenceStore, type ListViewMode, SHARED_LIST_VIEW_PREFERENCE_KEY } from '../../stores/list-view-preference'
@@ -22,7 +22,7 @@ import ListViewToggle from '../../components/ListViewToggle.vue'
 import AppBadge from '../../components/AppBadge.vue'
 import AppSwitch from '../../components/AppSwitch.vue'
 import AppConfirm from '../../components/AppConfirm.vue'
-import { Plus, Pencil, Trash2 } from 'lucide-vue-next'
+import { Plus, Pencil, RefreshCw, Trash2 } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const listViewPreferenceStore = useListViewPreferenceStore()
@@ -47,6 +47,7 @@ const viewMode = computed({
 // ── Registration toggle ──
 const registrationEnabled = ref(false)
 const registrationLoading = ref(false)
+const resettingUserId = ref<number | null>(null)
 
 // ── Modal state ──
 const modalVisible = ref(false)
@@ -77,7 +78,7 @@ const columns: TableColumn[] = [
   { key: 'name', title: '名称' },
   { key: 'role', title: '角色', width: '100px' },
   { key: 'created_at', title: '创建时间' },
-  { key: 'actions', title: '操作', width: '120px' },
+  { key: 'actions', title: '操作', width: '168px' },
 ]
 
 // ── Fetch ──
@@ -202,7 +203,7 @@ async function handleSubmit() {
         name: form.name.trim() || undefined,
         role: form.role,
       })
-      toast.success('用户已创建，密码已发送至邮箱（SMTP 未配置时密码已输出到服务器日志）')
+      toast.success('用户已创建，新密码已发送至邮箱；若 SMTP 未配置或发送失败，则密码已输出到服务器日志')
     }
     modalVisible.value = false
     await fetchList()
@@ -245,6 +246,32 @@ async function handleDelete(row: Record<string, unknown>) {
   }
 }
 
+async function handleResetPassword(row: Record<string, unknown>) {
+  const userId = row.id as number
+  const ok = await confirm({
+    title: '重置密码',
+    message: `确定要为「${row.email}」重置登录密码吗？系统会重新生成随机密码，并尝试通过 SMTP 发送；若 SMTP 未配置或发送失败，则密码会输出到服务器日志。`,
+    confirmText: '确认重置',
+    danger: true,
+  })
+  if (!ok) return
+
+  resettingUserId.value = userId
+  try {
+    await resetUserPassword(userId)
+    toast.success('密码已重置，新密码已发送至邮箱；若 SMTP 未配置或发送失败，则密码已输出到服务器日志')
+    await fetchList()
+  } catch (e) {
+    if (e instanceof ApiBusinessError) {
+      toast.error(e.message)
+    } else {
+      toast.error('重置密码失败')
+    }
+  } finally {
+    resettingUserId.value = null
+  }
+}
+
 function roleVariant(role: string): 'default' | 'info' {
   return role === 'admin' ? 'info' : 'default'
 }
@@ -255,6 +282,10 @@ function roleLabel(role: string): string {
 
 function isSelf(row: Record<string, unknown>): boolean {
   return (row.id as number) === authStore.user?.id
+}
+
+function isResetting(row: Record<string, unknown>): boolean {
+	return resettingUserId.value === (row.id as number)
 }
 </script>
 
@@ -298,6 +329,9 @@ function isSelf(row: Record<string, unknown>): boolean {
 
         <template #cell-actions="{ row }">
           <div class="user-mgmt__actions">
+            <AppButton variant="ghost" size="sm" :loading="isResetting(row)" :disabled="isResetting(row)" title="重置密码" @click="handleResetPassword(row)">
+              <RefreshCw v-if="!isResetting(row)" :size="14" />
+            </AppButton>
             <AppButton variant="ghost" size="sm" @click="openEditModal(row)">
               <Pencil :size="14" />
             </AppButton>
@@ -341,6 +375,16 @@ function isSelf(row: Record<string, unknown>): boolean {
 
           <div class="user-mgmt-card__footer">
             <div class="user-mgmt__actions">
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :loading="isResetting(user as unknown as Record<string, unknown>)"
+                :disabled="isResetting(user as unknown as Record<string, unknown>)"
+                title="重置密码"
+                @click="handleResetPassword(user as unknown as Record<string, unknown>)"
+              >
+                <RefreshCw v-if="!isResetting(user as unknown as Record<string, unknown>)" :size="14" />
+              </AppButton>
               <AppButton variant="ghost" size="sm" @click="openEditModal(user as unknown as Record<string, unknown>)">
                 <Pencil :size="14" />
               </AppButton>

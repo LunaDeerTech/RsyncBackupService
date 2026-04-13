@@ -119,9 +119,6 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	for _, option := range options {
 		option(&resolved)
 	}
-	if resolved.passwordSender == nil {
-		resolved.passwordSender = notify.NewPasswordSender()
-	}
 	if resolved.passwordGenerator == nil {
 		resolved.passwordGenerator = generateRandomPassword
 	}
@@ -131,11 +128,15 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if strings.TrimSpace(resolved.dataDir) == "" {
 		resolved.dataDir = filepath.Join(".", "data")
 	}
+	aesKey := authcrypto.DeriveAESKey(resolved.jwtSecret)
 	if resolved.remoteConfigs == nil {
 		resolved.remoteConfigs = service.NewRemoteConfigService(db, resolved.dataDir, nil)
 	}
 	if resolved.systemConfigs == nil {
-		resolved.systemConfigs = service.NewSystemConfigService(db, authcrypto.DeriveAESKey(resolved.jwtSecret))
+		resolved.systemConfigs = service.NewSystemConfigService(db, aesKey)
+	}
+	if resolved.passwordSender == nil {
+		resolved.passwordSender = notify.NewPasswordSender(db, aesKey)
 	}
 	if resolved.downloadTokens == nil {
 		resolved.downloadTokens = NewDownloadTokenManager()
@@ -179,6 +180,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("POST /api/v1/users", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateUser))))
 	mux.Handle("PUT /api/v1/users/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateUser))))
 	mux.Handle("DELETE /api/v1/users/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteUser))))
+	mux.Handle("POST /api/v1/users/{id}/reset-password", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ResetUserPassword))))
 	mux.Handle("GET /api/v1/remotes", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListRemoteConfigs))))
 	mux.Handle("POST /api/v1/remotes", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.CreateRemoteConfig))))
 	mux.Handle("PUT /api/v1/remotes/{id}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateRemoteConfig))))

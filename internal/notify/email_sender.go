@@ -204,7 +204,17 @@ func (s *EmailSender) deliver(job *EmailJob) error {
 }
 
 func (s *EmailSender) loadSMTPConfig() (*smtpRuntimeConfig, error) {
-	values, err := s.db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey, smtpEncryptionKey})
+	if s == nil {
+		return nil, fmt.Errorf("email sender unavailable")
+	}
+	return loadSMTPRuntimeConfig(s.db, s.aesKey)
+}
+
+func loadSMTPRuntimeConfig(db *store.DB, aesKey []byte) (*smtpRuntimeConfig, error) {
+	if db == nil {
+		return nil, fmt.Errorf("smtp config store unavailable")
+	}
+	values, err := db.GetSystemConfigs([]string{smtpHostKey, smtpPortKey, smtpUsernameKey, smtpPasswordKey, smtpFromKey, smtpEncryptionKey})
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +235,7 @@ func (s *EmailSender) loadSMTPConfig() (*smtpRuntimeConfig, error) {
 		}
 	}
 	if encryptedPassword := strings.TrimSpace(values[smtpPasswordKey]); encryptedPassword != "" {
-		password, err := authcrypto.AESDecrypt(encryptedPassword, s.aesKey)
+		password, err := authcrypto.AESDecrypt(encryptedPassword, aesKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt smtp password: %w", err)
 		}

@@ -30,6 +30,7 @@ const (
 	ActionUserCreate               = "user.create"
 	ActionUserUpdate               = "user.update"
 	ActionUserDelete               = "user.delete"
+	ActionUserPasswordReset        = "user.password_reset"
 	ActionTargetCreate             = "target.create"
 	ActionTargetUpdate             = "target.update"
 	ActionTargetDelete             = "target.delete"

@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/smtp"
-	"os"
 	"strings"
+
+	"rsync-backup-service/internal/store"
 )
 
 type PasswordSender interface {
@@ -14,19 +15,15 @@ type PasswordSender interface {
 }
 
 type smtpPasswordSender struct {
-	config smtpConfig
+	db       *store.DB
+	aesKey   []byte
+	sendMail SendMailFunc
 }
 
-type smtpConfig struct {
-	Host     string
-	Port     string
-	Username string
-	Password string
-	From     string
-}
-
-func NewPasswordSender() PasswordSender {
-	return &smtpPasswordSender{config: loadSMTPConfigFromEnv()}
+func NewPasswordSender(db *store.DB, aesKey []byte) PasswordSender {
+	keyCopy := make([]byte, len(aesKey))
+	copy(keyCopy, aesKey)
+	return &smtpPasswordSender{db: db, aesKey: keyCopy, sendMail: DefaultSendMail}
 }
 
 func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password string) error {
@@ -34,12 +31,18 @@ func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password s
 		return err
 	}
 
-	if !s.config.isConfigured() {
+	config, err := loadSMTPRuntimeConfig(s.db, s.aesKey)
+	if err != nil {
+		slog.Error("failed to load smtp config; generated password logged for manual delivery", "email", email, "error", err, "password", password)
+		return nil
+	}
+
+	if !config.isConfigured() {
 		slog.Info("smtp not configured; generated password logged for manual delivery", "email", email, "password", password)
 		return nil
 	}
 
-	auth, err := s.config.auth()
+	auth, err := config.auth()
 	if err != nil {
 		slog.Error("smtp configuration invalid; generated password logged for manual delivery", "email", email, "error", err, "password", password)
 		return nil
@@ -50,7 +53,7 @@ func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password s
 		fmt.Sprintf("您的初始登录密码为: %s", password),
 		"安全建议: 首次登录后请立即修改密码，并妥善保管邮件中的凭证信息。",
 	}, "\n")
-	if err := SendSMTPMail(s.config.Host, mustParsePort(s.config.Port), s.config.Username, s.config.Password, s.config.From, "none", email, "Rsync Backup Service 登录密码", body, DefaultSendMail); err != nil {
+	if err := SendSMTPMail(config.Host, config.Port, config.Username, config.Password, config.From, config.Encryption, email, "Rsync Backup Service 登录密码", body, s.sendMail); err != nil {
 		slog.Error("smtp delivery failed; generated password logged for manual delivery", "email", email, "error", err, "password", password)
 		return nil
 	}
@@ -58,21 +61,7 @@ func (s *smtpPasswordSender) SendPassword(ctx context.Context, email, password s
 	return nil
 }
 
-func loadSMTPConfigFromEnv() smtpConfig {
-	return smtpConfig{
-		Host:     strings.TrimSpace(os.Getenv("RBS_SMTP_HOST")),
-		Port:     strings.TrimSpace(os.Getenv("RBS_SMTP_PORT")),
-		Username: strings.TrimSpace(os.Getenv("RBS_SMTP_USERNAME")),
-		Password: os.Getenv("RBS_SMTP_PASSWORD"),
-		From:     strings.TrimSpace(os.Getenv("RBS_SMTP_FROM")),
-	}
-}
-
-func (c smtpConfig) isConfigured() bool {
-	return c.Host != "" && c.Port != "" && c.From != ""
-}
-
-func (c smtpConfig) auth() (smtp.Auth, error) {
+func (c smtpRuntimeConfig) auth() (smtp.Auth, error) {
 	if c.Username == "" && c.Password == "" {
 		return nil, nil
 	}
@@ -81,10 +70,4 @@ func (c smtpConfig) auth() (smtp.Auth, error) {
 	}
 
 	return smtp.PlainAuth("", c.Username, c.Password, c.Host), nil
-}
-
-func mustParsePort(raw string) int {
-	var port int
-	_, _ = fmt.Sscanf(strings.TrimSpace(raw), "%d", &port)
-	return port
 }
