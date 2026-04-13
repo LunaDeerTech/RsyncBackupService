@@ -1,26 +1,30 @@
 package middleware
 
-import "net/http"
-
-const (
-	allowMethods = "GET, POST, PUT, DELETE, OPTIONS"
-	allowHeaders = "Content-Type, Authorization"
+import (
+	"net/http"
+	"strings"
 )
+
+const corsAllowedHeaders = "Authorization, Content-Type, X-Requested-With"
 
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", allowMethods)
-		w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		if isAPIRequest(r.URL.Path) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", corsAllowedHeaders)
+			w.Header().Set("Access-Control-Max-Age", "600")
+		}
 
-		if r.Method == http.MethodOptions {
+		if r.Method == http.MethodOptions && isAPIRequest(r.URL.Path) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isAPIRequest(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
 }

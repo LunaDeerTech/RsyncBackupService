@@ -163,11 +163,13 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.Health)
+	mux.HandleFunc("GET /api/v2/openapi.json", handler.OpenAPIDocument)
 	mux.HandleFunc("GET /api/v1/system/registration", handler.GetRegistrationStatus)
 	mux.HandleFunc("POST /api/v1/auth/register", handler.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", handler.Login)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handler.Refresh)
 	authenticated := middleware.Auth(resolved.jwtSecret)
+	apiKeyAuthenticated := middleware.APIKeyAuth(db)
 	mux.Handle("GET /api/v1/system/smtp", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.GetSMTPConfig))))
 	mux.Handle("PUT /api/v1/system/smtp", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateSMTPConfig))))
 	mux.Handle("POST /api/v1/system/smtp/test", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TestSMTP))))
@@ -215,15 +217,24 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("PUT /api/v1/instances/{id}/permissions", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.UpdateInstancePermissions))))
 	mux.Handle("GET /api/v1/instances/{id}/permissions", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.ListInstancePermissions))))
 	mux.Handle("GET /api/v1/users/me", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUser))))
+	mux.Handle("GET /api/v1/users/me/api-keys", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.ListCurrentUserAPIKeys))))
+	mux.Handle("POST /api/v1/users/me/api-keys", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.CreateCurrentUserAPIKey))))
+	mux.Handle("DELETE /api/v1/users/me/api-keys/{id}", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.DeleteCurrentUserAPIKey))))
 	mux.Handle("GET /api/v1/users/me/subscriptions", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.GetCurrentUserSubscriptions))))
 	mux.Handle("PUT /api/v1/users/me/password", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserPassword))))
 	mux.Handle("PUT /api/v1/users/me/profile", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserProfile))))
 	mux.Handle("PUT /api/v1/users/me/subscriptions", authenticated(middleware.RequireAuth(http.HandlerFunc(handler.UpdateCurrentUserSubscriptions))))
+	mux.Handle("GET /api/v2/instances", apiKeyAuthenticated(middleware.RequireAuth(http.HandlerFunc(handler.ListV2Instances))))
+	mux.Handle("GET /api/v2/instances/{id}/overview", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstanceOverview)))))
+	mux.Handle("GET /api/v2/instances/{id}/current-task", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstanceCurrentTask)))))
+	mux.Handle("GET /api/v2/instances/{id}/plan", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstancePlan)))))
+	mux.Handle("GET /api/v2/instances/{id}/disaster-recovery", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2DisasterRecoveryScore)))))
+	mux.Handle("GET /api/v2/instances/{id}/backups", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListV2InstanceBackups)))))
 	if resolved.frontend != nil {
 		mux.Handle("/", resolved.frontend)
 	}
 
-	return withAPIErrors(mux)
+	return withAPIErrors(middleware.CORS(mux))
 }
 
 func withAPIErrors(next http.Handler) http.Handler {

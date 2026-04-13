@@ -11,6 +11,7 @@ import AppFormItem from '../components/AppFormItem.vue'
 import AppInput from '../components/AppInput.vue'
 import AppButton from '../components/AppButton.vue'
 import NotificationSubscriptions from '../components/NotificationSubscriptions.vue'
+import APIKeyManagement from '../components/APIKeyManagement.vue'
 
 const authStore = useAuthStore()
 const toast = useToastStore()
@@ -112,187 +113,110 @@ async function handleChangePassword() {
 
 <template>
   <div class="profile-page">
-    <!-- Personal info -->
-    <AppCard title="个人信息" class="profile-page__card profile-page__card--profile">
-      <div class="profile-page__hero">
-        <div class="profile-page__avatar">
-          {{ (user?.name ?? user?.email ?? '?').slice(0, 1).toUpperCase() }}
+    <div class="profile-page__column">
+      <AppCard title="个人信息" class="profile-page__card profile-page__card--profile">
+        <div class="profile-page__info">
+          <div class="profile-page__row">
+            <span class="profile-page__label">邮箱</span>
+            <span class="profile-page__value">{{ user?.email ?? '-' }}</span>
+          </div>
+          <div class="profile-page__row">
+            <span class="profile-page__label">角色</span>
+            <span class="profile-page__value">{{ user?.role === 'admin' ? '管理员' : '普通用户' }}</span>
+          </div>
         </div>
-        <div class="profile-page__hero-content">
-          <p class="profile-page__eyebrow">账户概览</p>
-          <h2 class="profile-page__hero-name">{{ user?.name ?? '未设置名称' }}</h2>
-          <p class="profile-page__hero-email">{{ user?.email ?? '-' }}</p>
-        </div>
-        <span class="profile-page__role-pill">{{ user?.role === 'admin' ? '管理员' : '普通用户' }}</span>
-      </div>
 
-      <div class="profile-page__info-grid">
-        <div class="profile-page__info-card">
-          <span class="profile-page__label">登录邮箱</span>
-          <span class="profile-page__value">{{ user?.email ?? '-' }}</span>
+        <div class="profile-page__name-form">
+          <AppFormGroup>
+            <AppFormItem label="名称">
+              <div class="profile-page__name-row">
+                <AppInput v-model="profileName" placeholder="输入您的名称" />
+                <AppButton variant="primary" size="sm" :loading="profileSaving" @click="handleSaveProfile">
+                  保存
+                </AppButton>
+              </div>
+            </AppFormItem>
+          </AppFormGroup>
         </div>
-        <div class="profile-page__info-card">
-          <span class="profile-page__label">当前角色</span>
-          <span class="profile-page__value">{{ user?.role === 'admin' ? '管理员' : '普通用户' }}</span>
-        </div>
-      </div>
+      </AppCard>
 
-      <div class="profile-page__name-form">
-        <AppFormGroup>
-          <AppFormItem label="名称">
-            <div class="profile-page__name-row">
-              <AppInput v-model="profileName" placeholder="输入您的名称" />
-              <AppButton variant="primary" size="sm" :loading="profileSaving" @click="handleSaveProfile">
-                保存
-              </AppButton>
-            </div>
-          </AppFormItem>
-        </AppFormGroup>
-      </div>
-    </AppCard>
+      <AppCard title="修改密码" class="profile-page__card profile-page__card--password">
+        <form @submit.prevent="handleChangePassword">
+          <AppFormGroup>
+            <AppFormItem label="旧密码" :required="true" :error="pwErrors.old_password">
+              <AppInput v-model="pwForm.old_password" type="password" placeholder="请输入旧密码" />
+            </AppFormItem>
+            <AppFormItem label="新密码" :required="true" :error="pwErrors.new_password">
+              <AppInput v-model="pwForm.new_password" type="password" placeholder="请输入新密码（至少 8 位）" />
+            </AppFormItem>
+            <AppFormItem label="确认新密码" :required="true" :error="pwErrors.confirm_password">
+              <AppInput v-model="pwForm.confirm_password" type="password" placeholder="再次输入新密码" />
+            </AppFormItem>
+          </AppFormGroup>
+          <div class="profile-page__pw-submit">
+            <AppButton variant="primary" size="md" :loading="pwSaving" @click="handleChangePassword">
+              修改密码
+            </AppButton>
+          </div>
+        </form>
+      </AppCard>
+    </div>
 
-    <!-- Password change -->
-    <AppCard title="修改密码" class="profile-page__card profile-page__card--password">
-      <form @submit.prevent="handleChangePassword">
-        <AppFormGroup>
-          <AppFormItem label="旧密码" :required="true" :error="pwErrors.old_password">
-            <AppInput v-model="pwForm.old_password" type="password" placeholder="请输入旧密码" />
-          </AppFormItem>
-          <AppFormItem label="新密码" :required="true" :error="pwErrors.new_password">
-            <AppInput v-model="pwForm.new_password" type="password" placeholder="请输入新密码（至少 8 位）" />
-          </AppFormItem>
-          <AppFormItem label="确认新密码" :required="true" :error="pwErrors.confirm_password">
-            <AppInput v-model="pwForm.confirm_password" type="password" placeholder="再次输入新密码" />
-          </AppFormItem>
-        </AppFormGroup>
-        <div class="profile-page__pw-submit">
-          <AppButton variant="primary" size="md" :loading="pwSaving" @click="handleChangePassword">
-            修改密码
-          </AppButton>
-        </div>
-      </form>
-    </AppCard>
+    <div class="profile-page__column">
+      <AppCard title="Key 管理" class="profile-page__card profile-page__card--keys">
+        <APIKeyManagement />
+      </AppCard>
 
-    <!-- Notification subscriptions -->
-    <AppCard title="通知订阅" class="profile-page__card profile-page__card--subscriptions">
-      <p class="profile-page__sub-desc">开启后，当对应实例发生风险事件时将通过邮件通知您</p>
-      <NotificationSubscriptions />
-    </AppCard>
+      <AppCard title="通知订阅" class="profile-page__card profile-page__card--subscriptions">
+        <p class="profile-page__sub-desc">开启后，当对应实例发生风险事件时将通过邮件通知您</p>
+        <NotificationSubscriptions />
+      </AppCard>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .profile-page {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
-  max-width: 1120px;
+  max-width: 1080px;
   align-items: start;
+}
+
+.profile-page__column {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
 }
 
 .profile-page__card {
   min-width: 0;
 }
 
-.profile-page__card--subscriptions {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-
-.profile-page__hero {
+.profile-page__info {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 18px;
-  border-radius: var(--radius-lg);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--primary-500) 14%, white) 0%, transparent 58%),
-    linear-gradient(180deg, var(--surface-sunken) 0%, transparent 100%);
-  border: 1px solid color-mix(in srgb, var(--primary-500) 16%, var(--border-subtle));
-  margin-bottom: 20px;
-}
-
-.profile-page__avatar {
-  width: 52px;
-  height: 52px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 16px;
-  font-size: 22px;
-  font-weight: 700;
-  color: #0b3b4a;
-  background: linear-gradient(135deg, var(--primary-300) 0%, var(--accent-mint-400) 100%);
-  box-shadow: var(--shadow-sm);
-  flex-shrink: 0;
-}
-
-.profile-page__hero-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.profile-page__eyebrow {
-  margin: 0 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.profile-page__hero-name {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.2;
-  color: var(--text-primary);
-}
-
-.profile-page__hero-email {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: var(--text-secondary);
-  word-break: break-all;
-}
-
-.profile-page__role-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary-500) 12%, var(--surface-raised));
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.profile-page__info-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex-direction: column;
   gap: 12px;
   margin-bottom: 20px;
 }
 
-.profile-page__info-card {
+.profile-page__row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--surface-sunken) 68%, transparent);
+  align-items: center;
+  gap: 12px;
 }
 
 .profile-page__label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
+  width: 48px;
+  flex-shrink: 0;
 }
 
 .profile-page__value {
   font-size: 14px;
-  font-weight: 600;
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -313,37 +237,19 @@ async function handleChangePassword() {
 }
 
 .profile-page__sub-desc {
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   font-size: 13px;
   color: var(--text-muted);
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 960px) {
   .profile-page {
     grid-template-columns: 1fr;
-    max-width: 760px;
-  }
-
-  .profile-page__card--subscriptions {
-    grid-column: auto;
-    grid-row: auto;
+    max-width: 720px;
   }
 }
 
 @media (max-width: 640px) {
-  .profile-page__hero {
-    flex-wrap: wrap;
-  }
-
-  .profile-page__role-pill {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .profile-page__info-grid {
-    grid-template-columns: 1fr;
-  }
-
   .profile-page__name-row {
     flex-direction: column;
   }

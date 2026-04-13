@@ -111,8 +111,8 @@ async function handleToggle(item: SubscriptionItem, enabled: boolean) {
   gap: 16px;
   padding: 14px 16px;
   border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--primary-500) 16%, var(--border-subtle));
-  background: linear-gradient(135deg, color-mix(in srgb, var(--primary-500) 10%, white) 0%, transparent 70%);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-sunken) 68%, transparent);
 }
 
 .notification-subs__summary-label {
@@ -123,8 +123,8 @@ async function handleToggle(item: SubscriptionItem, enabled: boolean) {
 
 .notification-subs__summary-value {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 

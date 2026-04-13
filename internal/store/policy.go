@@ -628,7 +628,7 @@ func (db *DB) UpdateTask(task *model.Task) error {
 
 func (db *DB) ListActiveTasks() ([]model.Task, error) {
 	rows, err := db.Query(
-		`SELECT `+taskColumns+`
+		`SELECT ` + taskColumns + `
 		 FROM tasks
 		 WHERE status IN ('queued', 'running')
 		 ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at ASC, id ASC`,
@@ -681,6 +681,22 @@ func (db *DB) ListTasksByInstance(instanceID int64) ([]model.Task, error) {
 	}
 
 	return tasks, nil
+}
+
+func (db *DB) GetCurrentTaskByInstance(instanceID int64) (*model.Task, error) {
+	task, err := scanTask(db.QueryRow(
+		`SELECT `+taskColumns+`
+		 FROM tasks
+		 WHERE instance_id = ? AND status IN ('running', 'queued')
+		 ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at ASC, id ASC
+		 LIMIT 1`,
+		instanceID,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get current task by instance %d: %w", instanceID, err)
+	}
+
+	return task, nil
 }
 
 func (db *DB) HasRunningTask(instanceID int64) (bool, error) {

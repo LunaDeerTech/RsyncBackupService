@@ -38,6 +38,85 @@ func TestNewRouterHealth(t *testing.T) {
 	}
 }
 
+func TestNewRouterServesOpenAPIDocument(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/openapi.json", nil)
+	req.Host = "example.com:8080"
+	recorder := httptest.NewRecorder()
+
+	NewRouter(nil).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want %q", got, "application/json; charset=utf-8")
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &document); err != nil {
+		t.Fatalf("decode openapi document: %v", err)
+	}
+	if document["openapi"] != "3.0.3" {
+		t.Fatalf("openapi version = %v, want %q", document["openapi"], "3.0.3")
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths type = %T, want map[string]any", document["paths"])
+	}
+	if _, exists := paths["/api/v2/instances"]; !exists {
+		t.Fatal("openapi document missing /api/v2/instances path")
+	}
+	if _, exists := paths["/api/v1/users/me/api-keys"]; exists {
+		t.Fatal("openapi document unexpectedly exposes api key management paths")
+	}
+	if _, exists := paths["/api/v2/instances/{id}/plan"]; !exists {
+		t.Fatal("openapi document missing /api/v2/instances/{id}/plan path")
+	}
+	if _, exists := paths["/api/v2/instances/{id}/disaster-recovery"]; !exists {
+		t.Fatal("openapi document missing /api/v2/instances/{id}/disaster-recovery path")
+	}
+	components, ok := document["components"].(map[string]any)
+	if !ok {
+		t.Fatalf("components type = %T, want map[string]any", document["components"])
+	}
+	securitySchemes, ok := components["securitySchemes"].(map[string]any)
+	if !ok {
+		t.Fatalf("securitySchemes type = %T, want map[string]any", components["securitySchemes"])
+	}
+	apiKeyScheme, ok := securitySchemes["ApiKeyAuth"].(map[string]any)
+	if !ok {
+		t.Fatalf("ApiKeyAuth scheme type = %T, want map[string]any", securitySchemes["ApiKeyAuth"])
+	}
+	if apiKeyScheme["type"] != "http" || apiKeyScheme["scheme"] != "bearer" {
+		t.Fatalf("ApiKeyAuth scheme = %#v, want http bearer", apiKeyScheme)
+	}
+	servers, ok := document["servers"].([]any)
+	if !ok || len(servers) != 1 {
+		t.Fatalf("servers = %#v, want one server entry", document["servers"])
+	}
+	server, ok := servers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("server entry type = %T, want map[string]any", servers[0])
+	}
+	if server["url"] != "http://example.com:8080" {
+		t.Fatalf("server url = %v, want %q", server["url"], "http://example.com:8080")
+	}
+}
+
+func TestNewRouterHandlesAPIPreflight(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/api/v2/instances", nil)
+	recorder := httptest.NewRecorder()
+
+	NewRouter(nil).ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "*")
+	}
+}
+
 func TestNewRouterReturnsJSONNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil)
 	recorder := httptest.NewRecorder()

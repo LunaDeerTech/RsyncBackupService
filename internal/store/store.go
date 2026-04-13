@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 6
+const latestSchemaVersion = 7
 
 type DB struct {
 	*sql.DB
@@ -205,6 +205,22 @@ var migrations = []migration{
 		statements: []string{
 			`ALTER TABLE policies ADD COLUMN retry_enabled BOOLEAN NOT NULL DEFAULT 1`,
 			`ALTER TABLE policies ADD COLUMN retry_max_retries INTEGER NOT NULL DEFAULT 3`,
+		},
+	},
+	{
+		version: 7,
+		statements: []string{
+			`CREATE TABLE IF NOT EXISTS api_keys (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				name TEXT NOT NULL,
+				key_prefix TEXT NOT NULL,
+				key_hash TEXT NOT NULL UNIQUE,
+				last_used_at DATETIME,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`,
 		},
 	},
 }
