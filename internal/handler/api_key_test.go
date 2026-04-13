@@ -136,6 +136,24 @@ func TestCurrentUserAPIKeyLifecycleAndV2Access(t *testing.T) {
 		t.Fatalf("current task payload = %+v, want running task", currentTaskPayload)
 	}
 
+	policiesResponse := performAPIKeyJSONRequest(t, router, http.MethodGet, "/api/v2/instances/"+itoa(instanceID)+"/policies", nil, created.Key)
+	if policiesResponse.Code != http.StatusOK {
+		t.Fatalf("GET /api/v2/instances/{id}/policies status = %d, want %d, body = %s", policiesResponse.Code, http.StatusOK, policiesResponse.Body.String())
+	}
+	var policiesEnvelope apiEnvelope
+	if err := json.Unmarshal(policiesResponse.Body.Bytes(), &policiesEnvelope); err != nil {
+		t.Fatalf("decode policies response: %v", err)
+	}
+	var policiesPayload struct {
+		Items []policyResponse `json:"items"`
+	}
+	if err := json.Unmarshal(policiesEnvelope.Data, &policiesPayload); err != nil {
+		t.Fatalf("decode policies payload: %v", err)
+	}
+	if len(policiesPayload.Items) != 1 || policiesPayload.Items[0].ID != policyID || policiesPayload.Items[0].InstanceID != instanceID {
+		t.Fatalf("policies payload = %+v, want one policy %d", policiesPayload, policyID)
+	}
+
 	planResponse := performAPIKeyJSONRequest(t, router, http.MethodGet, "/api/v2/instances/"+itoa(instanceID)+"/plan?within_hours=24", nil, created.Key)
 	if planResponse.Code != http.StatusOK {
 		t.Fatalf("GET /api/v2/instances/{id}/plan status = %d, want %d, body = %s", planResponse.Code, http.StatusOK, planResponse.Body.String())

@@ -229,6 +229,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("GET /api/v2/instances", apiKeyAuthenticated(middleware.RequireAuth(http.HandlerFunc(handler.ListV2Instances))))
 	mux.Handle("GET /api/v2/instances/{id}/overview", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstanceOverview)))))
 	mux.Handle("GET /api/v2/instances/{id}/current-task", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstanceCurrentTask)))))
+	mux.Handle("GET /api/v2/instances/{id}/policies", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListV2InstancePolicies)))))
 	mux.Handle("GET /api/v2/instances/{id}/plan", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2InstancePlan)))))
 	mux.Handle("GET /api/v2/instances/{id}/disaster-recovery", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.GetV2DisasterRecoveryScore)))))
 	mux.Handle("GET /api/v2/instances/{id}/backups", apiKeyAuthenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListV2InstanceBackups)))))

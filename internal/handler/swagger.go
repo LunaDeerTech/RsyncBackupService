@@ -51,6 +51,16 @@ func (h *Handler) OpenAPIDocument(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
+			"/api/v2/instances/{id}/policies": map[string]any{
+				"get": map[string]any{
+					"summary":    "List instance policies",
+					"security":   []map[string]any{{"ApiKeyAuth": []any{}}},
+					"parameters": []map[string]any{openAPIPathParameter("id")},
+					"responses": map[string]any{
+						"200": openAPIEnvelopeResponse("#/components/schemas/PolicyListResponse"),
+					},
+				},
+			},
 			"/api/v2/instances/{id}/plan": map[string]any{
 				"get": map[string]any{
 					"summary":  "List upcoming scheduled tasks for instance",

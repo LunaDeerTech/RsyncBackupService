@@ -185,6 +185,10 @@ func (h *Handler) GetV2InstanceCurrentTask(w http.ResponseWriter, r *http.Reques
 	JSON(w, http.StatusOK, map[string]any{"task": buildTaskResponse(*task, instance.Name)})
 }
 
+func (h *Handler) ListV2InstancePolicies(w http.ResponseWriter, r *http.Request) {
+	h.ListPolicies(w, r)
+}
+
 func (h *Handler) ListV2InstanceBackups(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
@@ -447,6 +451,41 @@ func openAPISchemas() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"task": map[string]any{"allOf": []any{map[string]any{"$ref": "#/components/schemas/Task"}}, "nullable": true},
+			},
+		},
+		"Policy": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":                    map[string]any{"type": "integer"},
+				"instance_id":           map[string]any{"type": "integer"},
+				"name":                  map[string]any{"type": "string"},
+				"type":                  map[string]any{"type": "string"},
+				"target_id":             map[string]any{"type": "integer"},
+				"schedule_type":         map[string]any{"type": "string"},
+				"schedule_value":        map[string]any{"type": "string"},
+				"enabled":               map[string]any{"type": "boolean"},
+				"compression":           map[string]any{"type": "boolean"},
+				"encryption":            map[string]any{"type": "boolean"},
+				"split_enabled":         map[string]any{"type": "boolean"},
+				"split_size_mb":         map[string]any{"type": "integer", "nullable": true},
+				"retry_enabled":         map[string]any{"type": "boolean"},
+				"retry_max_retries":     map[string]any{"type": "integer"},
+				"retention_type":        map[string]any{"type": "string"},
+				"retention_value":       map[string]any{"type": "integer"},
+				"created_at":            map[string]any{"type": "string", "format": "date-time"},
+				"updated_at":            map[string]any{"type": "string", "format": "date-time"},
+				"last_execution_time":   map[string]any{"type": "string", "format": "date-time", "nullable": true},
+				"last_execution_status": map[string]any{"type": "string", "nullable": true},
+				"latest_backup_id":      map[string]any{"type": "integer", "nullable": true},
+			},
+		},
+		"PolicyListResponse": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"items": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"$ref": "#/components/schemas/Policy"},
+				},
 			},
 		},
 		"OverviewInstance": map[string]any{
