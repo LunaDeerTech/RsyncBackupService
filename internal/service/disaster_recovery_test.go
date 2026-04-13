@@ -44,8 +44,112 @@ func TestDRCalculatorCalculateFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("calculateFreshness() error = %v", err)
 	}
-	if math.Abs(score-80) > 0.01 {
-		t.Fatalf("Freshness = %v, want 80", score)
+	if math.Abs(score-91) > 0.01 {
+		t.Fatalf("Freshness = %v, want 91", score)
+	}
+	if len(reasons) != 0 {
+		t.Fatalf("Freshness reasons = %v, want empty", reasons)
+	}
+}
+
+func TestDRCalculatorCalculateFreshnessGraceWindow(t *testing.T) {
+	db := newDRTestDB(t)
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	calculator := NewDRCalculator(db)
+	calculator.now = func() time.Time { return now }
+
+	instance := createDRTestInstance(t, db, "freshness-grace")
+	target := createDRTestTarget(t, db, "freshness-grace-target", "local", "healthy")
+	policy := createDRTestPolicy(t, db, instance.ID, target.ID, "hourly-grace", "interval", "3600", "count", 3)
+	createDRTestBackup(t, db, instance.ID, policy.ID, "success", now.Add(-70*time.Minute))
+
+	score, reasons, err := calculator.calculateFreshness(instance.ID, []model.Policy{*policy}, now)
+	if err != nil {
+		t.Fatalf("calculateFreshness() error = %v", err)
+	}
+	if score != 100 {
+		t.Fatalf("Freshness = %v, want 100 within grace window", score)
+	}
+	if len(reasons) != 0 {
+		t.Fatalf("Freshness reasons = %v, want empty", reasons)
+	}
+}
+
+func TestDRCalculatorCalculateFreshnessCronBoundary(t *testing.T) {
+	db := newDRTestDB(t)
+	now := time.Date(2026, 4, 7, 11, 58, 0, 0, time.UTC)
+	calculator := NewDRCalculator(db)
+	calculator.now = func() time.Time { return now }
+
+	instance := createDRTestInstance(t, db, "freshness-cron")
+	target := createDRTestTarget(t, db, "freshness-cron-target", "local", "healthy")
+	policy := createDRTestPolicy(t, db, instance.ID, target.ID, "hourly-cron", "cron", "0 * * * *", "count", 3)
+	createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 0, 0, 0, time.UTC))
+
+	score, reasons, err := calculator.calculateFreshness(instance.ID, []model.Policy{*policy}, now)
+	if err != nil {
+		t.Fatalf("calculateFreshness() error = %v", err)
+	}
+	if score != 100 {
+		t.Fatalf("Freshness = %v, want 100 near cron boundary", score)
+	}
+	if len(reasons) != 0 {
+		t.Fatalf("Freshness reasons = %v, want empty", reasons)
+	}
+}
+
+func TestDRCalculatorCalculateFreshnessRepresentativePeriod(t *testing.T) {
+	db := newDRTestDB(t)
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	calculator := NewDRCalculator(db)
+	calculator.now = func() time.Time { return now }
+
+	instance := createDRTestInstance(t, db, "freshness-representative")
+	target := createDRTestTarget(t, db, "freshness-representative-target", "local", "healthy")
+	hourly := createDRTestPolicy(t, db, instance.ID, target.ID, "hourly", "interval", "3600", "count", 3)
+	daily := createDRTestPolicy(t, db, instance.ID, target.ID, "daily", "interval", "86400", "count", 3)
+	createDRTestBackup(t, db, instance.ID, hourly.ID, "success", now.Add(-2*time.Hour))
+	createDRTestBackup(t, db, instance.ID, daily.ID, "success", now.Add(-2*time.Hour))
+
+	score, reasons, err := calculator.calculateFreshness(instance.ID, []model.Policy{*hourly, *daily}, now)
+	if err != nil {
+		t.Fatalf("calculateFreshness() error = %v", err)
+	}
+	if score != 100 {
+		t.Fatalf("Freshness = %v, want 100 with representative period", score)
+	}
+	if len(reasons) != 0 {
+		t.Fatalf("Freshness reasons = %v, want empty", reasons)
+	}
+}
+
+func TestDRCalculatorCalculateFreshnessRunningTask(t *testing.T) {
+	db := newDRTestDB(t)
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	calculator := NewDRCalculator(db)
+	calculator.now = func() time.Time { return now }
+
+	instance := createDRTestInstance(t, db, "freshness-running")
+	target := createDRTestTarget(t, db, "freshness-running-target", "local", "healthy")
+	policy := createDRTestPolicy(t, db, instance.ID, target.ID, "hourly-running", "interval", "3600", "count", 3)
+	_, task, err := db.CreatePendingPolicyRun(policy)
+	if err != nil {
+		t.Fatalf("CreatePendingPolicyRun() error = %v", err)
+	}
+	startedAt := now.Add(-2 * time.Minute)
+	task.Status = "running"
+	task.CurrentStep = "syncing"
+	task.StartedAt = &startedAt
+	if err := db.UpdateTask(task); err != nil {
+		t.Fatalf("UpdateTask() error = %v", err)
+	}
+
+	score, reasons, err := calculator.calculateFreshness(instance.ID, []model.Policy{*policy}, now)
+	if err != nil {
+		t.Fatalf("calculateFreshness() error = %v", err)
+	}
+	if score != 100 {
+		t.Fatalf("Freshness = %v, want 100 while task is running", score)
 	}
 	if len(reasons) != 0 {
 		t.Fatalf("Freshness reasons = %v, want empty", reasons)
@@ -212,7 +316,7 @@ func TestDRCalculatorCalculateWithSuccessfulBackupHasPositiveScore(t *testing.T)
 	if score.Total <= 0 {
 		t.Fatalf("Total = %v, want > 0", score.Total)
 	}
-	wantTotal := roundScore(0.35*score.Freshness + 0.30*score.RecoveryPoints + 0.20*score.Redundancy + 0.15*score.Stability)
+	wantTotal := roundScore(0.25*score.Freshness + 0.35*score.RecoveryPoints + 0.30*score.Redundancy + 0.10*score.Stability)
 	if score.Total != wantTotal {
 		t.Fatalf("Total = %v, want %v from weighted formula", score.Total, wantTotal)
 	}

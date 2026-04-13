@@ -16,7 +16,12 @@ import (
 	"rsync-backup-service/internal/store"
 )
 
-const drCacheTTL = 5 * time.Minute
+const (
+	drCacheTTL          = 5 * time.Minute
+	freshnessGraceRatio = 0.20
+	minFreshnessGrace   = 1 * time.Minute
+	maxFreshnessGrace   = 15 * time.Minute
+)
 
 type DisasterRecoveryScore struct {
 	Total          float64   `json:"total"`
@@ -273,12 +278,16 @@ func (c *DRCalculator) calculateFreshness(instanceID int64, policies []model.Pol
 		return 0, append(reasons, "未找到有效的自动备份计划"), nil
 	}
 
-	shortest := periods[0]
-	for _, period := range periods[1:] {
-		if period < shortest {
-			shortest = period
-		}
+	hasRunning, err := c.db.HasRunningTask(instanceID)
+	if err != nil {
+		return 0, nil, err
 	}
+	if hasRunning {
+		return 100, reasons, nil
+	}
+
+	expectedPeriod := representativeFreshnessPeriod(periods)
+	grace := freshnessGraceWindow(expectedPeriod)
 
 	latestBackup, err := c.db.GetLatestSuccessfulBackupByPolicies(instanceID, policyIDs)
 	if err != nil {
@@ -288,19 +297,18 @@ func (c *DRCalculator) calculateFreshness(instanceID int64, policies []model.Pol
 		return 0, nil, err
 	}
 
-	elapsed := backupOccurredAt(latestBackup).Sub(now)
-	if elapsed < 0 {
-		elapsed = -elapsed
-	}
+	nextExpectedRun := backupOccurredAt(latestBackup).Add(expectedPeriod)
 	switch {
-	case elapsed <= shortest:
+	case !now.After(nextExpectedRun.Add(grace)):
 		return 100, reasons, nil
-	case elapsed <= 2*shortest:
-		ratio := float64(elapsed-shortest) / float64(shortest)
-		return 100 - 40*ratio, reasons, nil
-	case elapsed <= 3*shortest:
-		ratio := float64(elapsed-2*shortest) / float64(shortest)
-		return 60 - 30*ratio, append(reasons, "最近成功备份已超过两个周期"), nil
+	case now.Before(nextExpectedRun.Add(grace).Add(expectedPeriod)):
+		overdue := now.Sub(nextExpectedRun.Add(grace))
+		ratio := float64(overdue) / float64(expectedPeriod)
+		return 100 - 30*ratio, reasons, nil
+	case now.Before(nextExpectedRun.Add(grace).Add(2 * expectedPeriod)):
+		overdue := now.Sub(nextExpectedRun.Add(grace).Add(expectedPeriod))
+		ratio := float64(overdue) / float64(expectedPeriod)
+		return 70 - 50*ratio, append(reasons, "最近成功备份已超过两个周期"), nil
 	default:
 		return 20, append(reasons, "最近成功备份严重滞后"), nil
 	}
@@ -545,6 +553,34 @@ func roundScore(value float64) float64 {
 	return math.Round(value*10) / 10
 }
 
+func representativeFreshnessPeriod(periods []time.Duration) time.Duration {
+	if len(periods) == 0 {
+		return 0
+	}
+
+	var total time.Duration
+	for _, period := range periods {
+		total += period
+	}
+
+	return time.Duration(int64(total) / int64(len(periods)))
+}
+
+func freshnessGraceWindow(period time.Duration) time.Duration {
+	if period <= 0 {
+		return minFreshnessGrace
+	}
+
+	grace := time.Duration(float64(period) * freshnessGraceRatio)
+	if grace < minFreshnessGrace {
+		return minFreshnessGrace
+	}
+	if grace > maxFreshnessGrace {
+		return maxFreshnessGrace
+	}
+	return grace
+}
+
 func backupOccurredAt(backup *model.Backup) time.Time {
 	if backup == nil {
 		return time.Time{}
@@ -571,7 +607,11 @@ func policySchedulePeriod(policy model.Policy, now time.Time) (time.Duration, er
 		if err != nil {
 			return 0, err
 		}
-		period := next.Sub(now)
+		following, err := nextCronTime(strings.TrimSpace(policy.ScheduleValue), next)
+		if err != nil {
+			return 0, err
+		}
+		period := following.Sub(next)
 		if period <= 0 {
 			return 0, fmt.Errorf("cron expression %q produced non-positive period", policy.ScheduleValue)
 		}
