@@ -114,7 +114,7 @@ func main() {
 		logger.Info("embedded frontend enabled")
 	}
 
-	router := middleware.Logger(middleware.CORS(middleware.CSRFProtection(handler.NewRouter(db, routerOptions...))))
+	router := middleware.Logger(middleware.CSRFProtection(handler.NewRouter(db, routerOptions...)))
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,
