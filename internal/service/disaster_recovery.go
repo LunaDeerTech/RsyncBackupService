@@ -242,7 +242,7 @@ func (c *DRCalculator) Calculate(ctx context.Context, instanceID int64) (*Disast
 	recoveryPoints = roundScore(recoveryPoints)
 	redundancy = roundScore(redundancy)
 	stability = roundScore(stability)
-	total := roundScore(0.35*freshness + 0.30*recoveryPoints + 0.25*redundancy + 0.10*stability)
+	total := roundScore(0.25*freshness + 0.35*recoveryPoints + 0.30*redundancy + 0.10*stability)
 
 	return &DisasterRecoveryScore{
 		Total:          total,
