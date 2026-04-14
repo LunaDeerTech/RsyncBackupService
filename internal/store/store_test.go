@@ -103,11 +103,12 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 	if err := db.QueryRow(`SELECT value FROM system_configs WHERE key = 'schema_version'`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("query schema version error = %v", err)
 	}
-	if schemaVersion != "8" {
-		t.Fatalf("schema version = %q, want %q", schemaVersion, "8")
+	if schemaVersion != "9" {
+		t.Fatalf("schema version = %q, want %q", schemaVersion, "9")
 	}
 
 	backupColumns := make(map[string]struct{})
+	policyColumns := make(map[string]struct{})
 	columnRows, err := db.Query(`PRAGMA table_info(backups)`)
 	if err != nil {
 		t.Fatalf("query backup table info error = %v", err)
@@ -132,5 +133,31 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 	}
 	if _, ok := backupColumns["retry_root_backup_id"]; !ok {
 		t.Fatal("backups table missing retry_root_backup_id column")
+	}
+
+	policyRows, err := db.Query(`PRAGMA table_info(policies)`)
+	if err != nil {
+		t.Fatalf("query policy table info error = %v", err)
+	}
+	defer policyRows.Close()
+	for policyRows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := policyRows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			t.Fatalf("scan policy table info error = %v", err)
+		}
+		policyColumns[name] = struct{}{}
+	}
+	if err := policyRows.Err(); err != nil {
+		t.Fatalf("iterate policy table info error = %v", err)
+	}
+	if _, ok := policyColumns["bandwidth_limit_kb"]; !ok {
+		t.Fatal("policies table missing bandwidth_limit_kb column")
 	}
 }

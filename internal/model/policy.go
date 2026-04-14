@@ -10,6 +10,7 @@ type Policy struct {
 	TargetID          int64     `json:"target_id"`
 	ScheduleType      string    `json:"schedule_type"`
 	ScheduleValue     string    `json:"schedule_value"`
+	BandwidthLimitKB  int       `json:"bandwidth_limit_kb"`
 	Enabled           bool      `json:"enabled"`
 	Compression       bool      `json:"compression"`
 	Encryption        bool      `json:"encryption"`

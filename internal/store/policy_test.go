@@ -42,6 +42,7 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 		TargetID:          target.ID,
 		ScheduleType:      "cron",
 		ScheduleValue:     "0 1 * * *",
+		BandwidthLimitKB:  2048,
 		Enabled:           true,
 		Compression:       true,
 		Encryption:        true,
@@ -62,7 +63,7 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPolicyByID() error = %v", err)
 	}
-	if loaded.Name != policy.Name || loaded.TargetID != target.ID {
+	if loaded.Name != policy.Name || loaded.TargetID != target.ID || loaded.BandwidthLimitKB != 2048 {
 		t.Fatalf("loaded policy = %+v, want created values", loaded)
 	}
 
@@ -84,6 +85,7 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 
 	policy.ScheduleType = "interval"
 	policy.ScheduleValue = "3600"
+	policy.BandwidthLimitKB = -1
 	policy.RetentionType = "time"
 	policy.RetentionValue = 30
 	policy.SplitEnabled = false
@@ -91,7 +93,7 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 	if err := db.UpdatePolicy(policy); err != nil {
 		t.Fatalf("UpdatePolicy() error = %v", err)
 	}
-	if policy.ScheduleType != "interval" || policy.RetentionType != "time" {
+	if policy.ScheduleType != "interval" || policy.RetentionType != "time" || policy.BandwidthLimitKB != -1 {
 		t.Fatalf("updated policy = %+v, want interval/time settings", policy)
 	}
 

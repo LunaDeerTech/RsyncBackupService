@@ -77,11 +77,12 @@ func TestBuildRsyncArgsSSHToLocal(t *testing.T) {
 	}
 
 	args := BuildRsyncArgs(RsyncConfig{
-		SourcePath:   "/srv/data",
-		SourceType:   "ssh",
-		SourceRemote: remote,
-		DestPath:     "/data/restore",
-		DestType:     "local",
+		SourcePath:       "/srv/data",
+		SourceType:       "ssh",
+		SourceRemote:     remote,
+		DestPath:         "/data/restore",
+		DestType:         "local",
+		BandwidthLimitKB: 2048,
 	})
 
 	want := []string{
@@ -90,11 +91,36 @@ func TestBuildRsyncArgsSSHToLocal(t *testing.T) {
 		"--stats",
 		"--info=progress2",
 		"--rsh=ssh -i /keys/source -p 22 -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+		"--bwlimit=2048",
 		"reader@source.example.com:/srv/data/",
 		"/data/restore/",
 	}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("BuildRsyncArgs() = %#v, want %#v", args, want)
+	}
+}
+
+func TestBuildRsyncArgsDoesNotApplyBandwidthLimitOutsideSourcePull(t *testing.T) {
+	remote := &model.RemoteConfig{
+		Host:           "backup.example.com",
+		Port:           2222,
+		Username:       "rsync",
+		PrivateKeyPath: "/keys/backup",
+	}
+
+	args := BuildRsyncArgs(RsyncConfig{
+		SourcePath:       "/data/source",
+		SourceType:       "local",
+		DestPath:         "/srv/backups",
+		DestType:         "ssh",
+		DestRemote:       remote,
+		BandwidthLimitKB: 2048,
+	})
+
+	for _, arg := range args {
+		if arg == "--bwlimit=2048" {
+			t.Fatalf("BuildRsyncArgs() unexpectedly included bandwidth limit: %#v", args)
+		}
 	}
 }
 

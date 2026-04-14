@@ -169,12 +169,13 @@ func (e *ColdBackupExecutor) Execute(ctx context.Context, task *model.Task, poli
 
 	var syncProgressErr error
 	syncResult, err := e.executeRsync(ctx, RsyncConfig{
-		SourcePath:      instance.SourcePath,
-		SourceType:      instance.SourceType,
-		SourceRemote:    sourceRemote,
-		DestPath:        tempDataDir,
-		DestType:        "local",
-		ExcludePatterns: instance.ExcludePatterns,
+		SourcePath:       instance.SourcePath,
+		SourceType:       instance.SourceType,
+		SourceRemote:     sourceRemote,
+		DestPath:         tempDataDir,
+		DestType:         "local",
+		BandwidthLimitKB: policy.BandwidthLimitKB,
+		ExcludePatterns:  instance.ExcludePatterns,
 	}, func(progress ProgressInfo) {
 		mapped := scaleProgress(progress, 0, 50)
 		if updateErr := e.reportProgress(task, coldTaskSyncStep, mapped, progressCb); updateErr != nil {

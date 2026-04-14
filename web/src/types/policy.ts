@@ -6,6 +6,7 @@ export interface Policy {
   target_id: number
   schedule_type: 'interval' | 'cron'
   schedule_value: string
+  bandwidth_limit_kb: number
   enabled: boolean
   compression: boolean
   encryption: boolean
@@ -28,6 +29,7 @@ export interface CreatePolicyRequest {
   target_id: number
   schedule_type: 'interval' | 'cron'
   schedule_value: string
+  bandwidth_limit_kb: number
   enabled: boolean
   compression: boolean
   encryption: boolean

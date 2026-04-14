@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 8
+const latestSchemaVersion = 9
 
 type DB struct {
 	*sql.DB
@@ -228,6 +228,12 @@ var migrations = []migration{
 		statements: []string{
 			`ALTER TABLE backups ADD COLUMN retry_root_backup_id INTEGER`,
 			`CREATE INDEX IF NOT EXISTS idx_backups_retry_root_backup_id ON backups(retry_root_backup_id)`,
+		},
+	},
+	{
+		version: 9,
+		statements: []string{
+			`ALTER TABLE policies ADD COLUMN bandwidth_limit_kb INTEGER NOT NULL DEFAULT -1`,
 		},
 	},
 }

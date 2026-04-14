@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at`
+	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at`
 	taskColumns   = `id, instance_id, backup_id, type, restore_type, target_path, remote_config_id, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
 )
 
@@ -27,15 +27,18 @@ func (db *DB) CreatePolicy(policy *model.Policy) error {
 		return fmt.Errorf("policy is nil")
 	}
 
+	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
+
 	result, err := db.Exec(
-		`INSERT INTO policies (instance_id, name, type, target_id, schedule_type, schedule_value, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO policies (instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		policy.Name,
 		policy.Type,
 		policy.TargetID,
 		policy.ScheduleType,
 		policy.ScheduleValue,
+		policy.BandwidthLimitKB,
 		policy.Enabled,
 		policy.Compression,
 		policy.Encryption,
@@ -102,15 +105,18 @@ func (db *DB) UpdatePolicy(policy *model.Policy) error {
 		return fmt.Errorf("policy is nil")
 	}
 
+	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
+
 	result, err := db.Exec(
 		`UPDATE policies
-		 SET name = ?, type = ?, target_id = ?, schedule_type = ?, schedule_value = ?, enabled = ?, compression = ?, encryption = ?, encryption_key_hash = ?, split_enabled = ?, split_size_mb = ?, retry_enabled = ?, retry_max_retries = ?, retention_type = ?, retention_value = ?, updated_at = CURRENT_TIMESTAMP
+		 SET name = ?, type = ?, target_id = ?, schedule_type = ?, schedule_value = ?, bandwidth_limit_kb = ?, enabled = ?, compression = ?, encryption = ?, encryption_key_hash = ?, split_enabled = ?, split_size_mb = ?, retry_enabled = ?, retry_max_retries = ?, retention_type = ?, retention_value = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		policy.Name,
 		policy.Type,
 		policy.TargetID,
 		policy.ScheduleType,
 		policy.ScheduleValue,
+		policy.BandwidthLimitKB,
 		policy.Enabled,
 		policy.Compression,
 		policy.Encryption,
@@ -862,6 +868,7 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 		&policy.TargetID,
 		&policy.ScheduleType,
 		&policy.ScheduleValue,
+		&policy.BandwidthLimitKB,
 		&policy.Enabled,
 		&policy.Compression,
 		&policy.Encryption,
@@ -896,8 +903,16 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 		value := int(splitSizeMB.Int64)
 		policy.SplitSizeMB = &value
 	}
+	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
 
 	return &policy, nil
+}
+
+func normalizePolicyBandwidthLimit(value int) int {
+	if value <= 0 {
+		return -1
+	}
+	return value
 }
 
 func scanTask(scanner taskScanner) (*model.Task, error) {

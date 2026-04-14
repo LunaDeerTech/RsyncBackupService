@@ -90,6 +90,7 @@ const policyForm = reactive({
   schedule_input: '',
   interval_value: undefined as number | undefined,
   interval_unit: 'hours' as string,
+  bandwidth_limit_kb: -1,
   enabled: true,
   compression: false,
   encryption: false,
@@ -106,6 +107,7 @@ const policyErrors = reactive({
   name: '',
   target_id: '',
   schedule_input: '',
+  bandwidth_limit_kb: '',
   encryption_key: '',
   split_size_mb: '',
   retry_max_retries: '',
@@ -144,6 +146,7 @@ function resetPolicyForm() {
   policyForm.schedule_input = ''
   policyForm.interval_value = undefined
   policyForm.interval_unit = 'hours'
+  policyForm.bandwidth_limit_kb = -1
   policyForm.enabled = true
   policyForm.compression = false
   policyForm.encryption = false
@@ -201,6 +204,7 @@ function openEditPolicy(row: Record<string, unknown>) {
     }
   }
   policyForm.enabled = row.enabled as boolean
+  policyForm.bandwidth_limit_kb = row.bandwidth_limit_kb as number ?? -1
   policyForm.compression = row.compression as boolean
   policyForm.encryption = row.encryption as boolean
   policyForm.encryption_key = ''
@@ -254,6 +258,10 @@ function validatePolicyForm(): boolean {
     policyErrors.encryption_key = '请输入加密密钥'
     valid = false
   }
+  if (policyForm.bandwidth_limit_kb !== -1 && policyForm.bandwidth_limit_kb <= 0) {
+    policyErrors.bandwidth_limit_kb = '限流值需为 -1 或正整数'
+    valid = false
+  }
   if (policyForm.split_enabled && (!policyForm.split_size_mb || policyForm.split_size_mb <= 0)) {
     policyErrors.split_size_mb = '请输入有效的分卷大小'
     valid = false
@@ -295,6 +303,7 @@ async function handlePolicySubmit() {
       target_id: policyForm.target_id!,
       schedule_type: scheduleType,
       schedule_value: scheduleValue,
+      bandwidth_limit_kb: policyForm.bandwidth_limit_kb,
       enabled: policyForm.enabled,
       compression: policyForm.compression,
       encryption: policyForm.encryption,
@@ -369,6 +378,7 @@ async function handleTogglePolicy(row: Record<string, unknown>, enabled: boolean
       target_id: row.target_id as number,
       schedule_type: row.schedule_type as 'interval' | 'cron',
       schedule_value: row.schedule_value as string,
+      bandwidth_limit_kb: row.bandwidth_limit_kb as number ?? -1,
       enabled,
       compression: row.compression as boolean,
       encryption: row.encryption as boolean,
@@ -580,7 +590,7 @@ defineExpose({ refresh })
 
         <!-- Right column: Retention, retry, and cold options -->
         <div class="policy-modal-col">
-          <div class="form-divider">保留与重试</div>
+          <div class="form-divider">执行策略</div>
           <AppFormGroup>
             <AppFormItem label="保留策略" :required="true">
               <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
@@ -604,38 +614,57 @@ defineExpose({ refresh })
             <p v-if="policyForm.retry_enabled" class="policy-modal-hint">
               失败后依次等待 5s、10s、15s… 再自动重试，重试不阻塞其他任务。
             </p>
+
+            
+            <AppFormItem label="源端限流 (KB/s)" :error="policyErrors.bandwidth_limit_kb">
+              <AppInput v-model="policyForm.bandwidth_limit_kb" type="number" placeholder="-1 表示不限速" />
+            </AppFormItem>
+
+            <p class="policy-modal-hint">
+              仅在从源端 SSH 拉取到本机时生效，输入 -1 表示不限制。
+            </p>
           </AppFormGroup>
 
-          <!-- Cold-only options -->
-          <template v-if="policyForm.type === 'cold'">
-            <div class="form-divider">冷备份选项</div>
-            <AppFormGroup>
-              <AppFormItem label="压缩">
-                <AppSwitch v-model="policyForm.compression" />
-              </AppFormItem>
-
-              <AppFormItem label="加密">
-                <AppSwitch v-model="policyForm.encryption" />
-              </AppFormItem>
-
-              <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
-                :error="policyErrors.encryption_key">
-                <AppInput v-model="policyForm.encryption_key" type="password"
-                  :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
-              </AppFormItem>
-
-              <AppFormItem label="分卷">
-                <AppSwitch v-model="policyForm.split_enabled" />
-              </AppFormItem>
-
-              <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
-                :error="policyErrors.split_size_mb">
-                <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
-              </AppFormItem>
-            </AppFormGroup>
-          </template>
         </div>
       </div>
+
+      <template v-if="policyForm.type === 'cold'">
+        <div class="policy-modal-section policy-modal-section--full">
+          <div class="form-divider">冷备份选项</div>
+          <div class="policy-modal-grid policy-modal-grid--nested">
+            <div class="policy-modal-col">
+              <AppFormGroup>
+                <AppFormItem label="压缩">
+                  <AppSwitch v-model="policyForm.compression" />
+                </AppFormItem>
+
+                <AppFormItem label="加密">
+                  <AppSwitch v-model="policyForm.encryption" />
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
+                  :error="policyErrors.encryption_key">
+                  <AppInput v-model="policyForm.encryption_key" type="password"
+                    :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
+                </AppFormItem>
+              </AppFormGroup>
+            </div>
+
+            <div class="policy-modal-col">
+              <AppFormGroup>
+                <AppFormItem label="分卷">
+                  <AppSwitch v-model="policyForm.split_enabled" />
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
+                  :error="policyErrors.split_size_mb">
+                  <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
+                </AppFormItem>
+              </AppFormGroup>
+            </div>
+          </div>
+        </div>
+      </template>
     </form>
 
     <template #footer>
@@ -816,8 +845,16 @@ defineExpose({ refresh })
   gap: 0 24px;
 }
 
+.policy-modal-grid--nested {
+  margin-top: 8px;
+}
+
 .policy-modal-col {
   min-width: 0;
+}
+
+.policy-modal-section--full {
+  margin-top: 8px;
 }
 
 .policy-modal-hint {

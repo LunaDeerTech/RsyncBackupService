@@ -34,16 +34,17 @@ var (
 )
 
 type RsyncConfig struct {
-	SourcePath      string
-	SourceType      string
-	SourceRemote    *model.RemoteConfig
-	DestPath        string
-	DestType        string
-	DestRemote      *model.RemoteConfig
-	LinkDestPath    string
-	ExcludePatterns []string
-	DisableDelete   bool
-	ExtraArgs       []string
+	SourcePath       string
+	SourceType       string
+	SourceRemote     *model.RemoteConfig
+	DestPath         string
+	DestType         string
+	DestRemote       *model.RemoteConfig
+	LinkDestPath     string
+	BandwidthLimitKB int
+	ExcludePatterns  []string
+	DisableDelete    bool
+	ExtraArgs        []string
 }
 
 type RsyncResult struct {
@@ -99,6 +100,9 @@ func BuildRsyncArgs(cfg RsyncConfig) []string {
 	}
 	if linkDest := strings.TrimSpace(cfg.LinkDestPath); linkDest != "" {
 		args = append(args, "--link-dest="+linkDest)
+	}
+	if shouldApplyRsyncBandwidthLimit(cfg) {
+		args = append(args, "--bwlimit="+strconv.Itoa(cfg.BandwidthLimitKB))
 	}
 	for _, pattern := range model.NormalizeExcludePatterns(cfg.ExcludePatterns) {
 		args = append(args, "--exclude="+pattern)
@@ -321,6 +325,10 @@ func buildSSHArg(cfg RsyncConfig) (string, bool) {
 	}
 
 	return "--rsh=" + strings.Join(parts, " "), true
+}
+
+func shouldApplyRsyncBandwidthLimit(cfg RsyncConfig) bool {
+	return cfg.BandwidthLimitKB > 0 && normalizeRsyncType(cfg.SourceType) == "ssh" && normalizeRsyncType(cfg.DestType) == "local"
 }
 
 func buildEndpoint(endpointType, path string, remote *model.RemoteConfig) string {

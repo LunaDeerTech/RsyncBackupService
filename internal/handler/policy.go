@@ -18,22 +18,23 @@ import (
 const policyErrorNotFound = 40405
 
 type policyRequest struct {
-	InstanceID     *int64 `json:"instance_id,omitempty"`
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	TargetID       int64  `json:"target_id"`
-	ScheduleType   string `json:"schedule_type"`
-	ScheduleValue  string `json:"schedule_value"`
-	Enabled        bool   `json:"enabled"`
-	Compression    bool   `json:"compression"`
-	Encryption     bool   `json:"encryption"`
-	EncryptionKey  string `json:"encryption_key,omitempty"`
-	SplitEnabled   bool   `json:"split_enabled"`
-	SplitSizeMB    *int   `json:"split_size_mb,omitempty"`
-	RetryEnabled   *bool  `json:"retry_enabled,omitempty"`
-	RetryMaxRetries *int  `json:"retry_max_retries,omitempty"`
-	RetentionType  string `json:"retention_type"`
-	RetentionValue int    `json:"retention_value"`
+	InstanceID       *int64 `json:"instance_id,omitempty"`
+	Name             string `json:"name"`
+	Type             string `json:"type"`
+	TargetID         int64  `json:"target_id"`
+	ScheduleType     string `json:"schedule_type"`
+	ScheduleValue    string `json:"schedule_value"`
+	BandwidthLimitKB *int   `json:"bandwidth_limit_kb,omitempty"`
+	Enabled          bool   `json:"enabled"`
+	Compression      bool   `json:"compression"`
+	Encryption       bool   `json:"encryption"`
+	EncryptionKey    string `json:"encryption_key,omitempty"`
+	SplitEnabled     bool   `json:"split_enabled"`
+	SplitSizeMB      *int   `json:"split_size_mb,omitempty"`
+	RetryEnabled     *bool  `json:"retry_enabled,omitempty"`
+	RetryMaxRetries  *int   `json:"retry_max_retries,omitempty"`
+	RetentionType    string `json:"retention_type"`
+	RetentionValue   int    `json:"retention_value"`
 }
 
 type triggerPolicyRequest struct {
@@ -47,6 +48,7 @@ type policyInput struct {
 	TargetID          int64
 	ScheduleType      string
 	ScheduleValue     string
+	BandwidthLimitKB  int
 	Enabled           bool
 	Compression       bool
 	Encryption        bool
@@ -67,6 +69,7 @@ type policyResponse struct {
 	TargetID            int64      `json:"target_id"`
 	ScheduleType        string     `json:"schedule_type"`
 	ScheduleValue       string     `json:"schedule_value"`
+	BandwidthLimitKB    int        `json:"bandwidth_limit_kb"`
 	Enabled             bool       `json:"enabled"`
 	Compression         bool       `json:"compression"`
 	Encryption          bool       `json:"encryption"`
@@ -155,6 +158,7 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		TargetID:          input.TargetID,
 		ScheduleType:      input.ScheduleType,
 		ScheduleValue:     input.ScheduleValue,
+		BandwidthLimitKB:  input.BandwidthLimitKB,
 		Enabled:           input.Enabled,
 		Compression:       input.Compression,
 		Encryption:        input.Encryption,
@@ -177,16 +181,17 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		h.scheduler.ReloadPolicy(policy.ID)
 	}
 	h.writeCurrentUserAudit(r, policy.InstanceID, audit.ActionPolicyCreate, map[string]any{
-		"policy_id":       policy.ID,
-		"instance_id":     policy.InstanceID,
-		"name":            policy.Name,
-		"type":            policy.Type,
-		"target_id":       policy.TargetID,
-		"schedule_type":   policy.ScheduleType,
-		"schedule_value":  policy.ScheduleValue,
-		"enabled":         policy.Enabled,
-		"retention_type":  policy.RetentionType,
-		"retention_value": policy.RetentionValue,
+		"policy_id":          policy.ID,
+		"instance_id":        policy.InstanceID,
+		"name":               policy.Name,
+		"type":               policy.Type,
+		"target_id":          policy.TargetID,
+		"schedule_type":      policy.ScheduleType,
+		"schedule_value":     policy.ScheduleValue,
+		"bandwidth_limit_kb": policy.BandwidthLimitKB,
+		"enabled":            policy.Enabled,
+		"retention_type":     policy.RetentionType,
+		"retention_value":    policy.RetentionValue,
 	})
 
 	JSON(w, http.StatusCreated, buildPolicyResponse(*policy, model.PolicyExecutionSummary{}))
@@ -231,6 +236,7 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	current.TargetID = input.TargetID
 	current.ScheduleType = input.ScheduleType
 	current.ScheduleValue = input.ScheduleValue
+	current.BandwidthLimitKB = input.BandwidthLimitKB
 	current.Enabled = input.Enabled
 	current.Compression = input.Compression
 	current.Encryption = input.Encryption
@@ -253,16 +259,17 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		h.scheduler.ReloadPolicy(current.ID)
 	}
 	h.writeCurrentUserAudit(r, current.InstanceID, audit.ActionPolicyUpdate, map[string]any{
-		"policy_id":       current.ID,
-		"instance_id":     current.InstanceID,
-		"name":            current.Name,
-		"type":            current.Type,
-		"target_id":       current.TargetID,
-		"schedule_type":   current.ScheduleType,
-		"schedule_value":  current.ScheduleValue,
-		"enabled":         current.Enabled,
-		"retention_type":  current.RetentionType,
-		"retention_value": current.RetentionValue,
+		"policy_id":          current.ID,
+		"instance_id":        current.InstanceID,
+		"name":               current.Name,
+		"type":               current.Type,
+		"target_id":          current.TargetID,
+		"schedule_type":      current.ScheduleType,
+		"schedule_value":     current.ScheduleValue,
+		"bandwidth_limit_kb": current.BandwidthLimitKB,
+		"enabled":            current.Enabled,
+		"retention_type":     current.RetentionType,
+		"retention_value":    current.RetentionValue,
 	})
 
 	summary, err := h.loadPolicySummary(instanceID, current.ID)
@@ -444,6 +451,17 @@ func (h *Handler) normalizePolicyInput(instanceID int64, request policyRequest, 
 
 	encryptionKey := strings.TrimSpace(request.EncryptionKey)
 
+	bandwidthLimitKB := -1
+	if current != nil {
+		bandwidthLimitKB = current.BandwidthLimitKB
+	}
+	if request.BandwidthLimitKB != nil {
+		bandwidthLimitKB = *request.BandwidthLimitKB
+	}
+	if bandwidthLimitKB != -1 && bandwidthLimitKB <= 0 {
+		return policyInput{}, fmt.Errorf("bandwidth_limit_kb must be -1 or a positive integer")
+	}
+
 	retryEnabled := true
 	retryMaxRetries := 3
 	if current != nil {
@@ -465,17 +483,18 @@ func (h *Handler) normalizePolicyInput(instanceID int64, request policyRequest, 
 	}
 
 	input := policyInput{
-		InstanceID:      instanceID,
-		Name:            name,
-		Type:            policyType,
-		TargetID:        request.TargetID,
-		ScheduleType:    scheduleType,
-		ScheduleValue:   scheduleValue,
-		Enabled:         request.Enabled,
-		RetryEnabled:    retryEnabled,
-		RetryMaxRetries: retryMaxRetries,
-		RetentionType:   retentionType,
-		RetentionValue:  request.RetentionValue,
+		InstanceID:       instanceID,
+		Name:             name,
+		Type:             policyType,
+		TargetID:         request.TargetID,
+		ScheduleType:     scheduleType,
+		ScheduleValue:    scheduleValue,
+		BandwidthLimitKB: bandwidthLimitKB,
+		Enabled:          request.Enabled,
+		RetryEnabled:     retryEnabled,
+		RetryMaxRetries:  retryMaxRetries,
+		RetentionType:    retentionType,
+		RetentionValue:   request.RetentionValue,
 	}
 
 	if policyType == "rolling" {
@@ -539,6 +558,7 @@ func buildPolicyResponse(policy model.Policy, summary model.PolicyExecutionSumma
 		TargetID:            policy.TargetID,
 		ScheduleType:        policy.ScheduleType,
 		ScheduleValue:       policy.ScheduleValue,
+		BandwidthLimitKB:    policy.BandwidthLimitKB,
 		Enabled:             policy.Enabled,
 		Compression:         policy.Compression,
 		Encryption:          policy.Encryption,
