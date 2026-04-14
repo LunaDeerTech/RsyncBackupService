@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/store"
 )
 
@@ -214,12 +215,36 @@ func TestInstanceValidationAndIdleRestrictions(t *testing.T) {
 	viewer := createHandlerTestUser(t, db, "viewer@example.com", "Viewer", "viewer", "ViewerPass123")
 	router := NewRouter(db, WithJWTSecret("secret"))
 
+	openListConfig, err := openlist.EncodeStoredConfig("secret", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	openListRemote := &model.RemoteConfig{
+		Name:          "openlist-remote",
+		Type:          "openlist",
+		Host:          "https://openlist.example.com",
+		Username:      "admin",
+		CloudProvider: stringPtr("openlist"),
+		CloudConfig:   openListConfig,
+	}
+	if err := db.CreateRemoteConfig(openListRemote); err != nil {
+		t.Fatalf("CreateRemoteConfig(openlist) error = %v", err)
+	}
+
 	missingRemote := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/instances", map[string]any{
 		"name":        "ssh-no-remote",
 		"source_type": "ssh",
 		"source_path": "/srv/mysql",
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, missingRemote, http.StatusBadRequest, authErrorInvalidRequest, "remote_config_id is required for ssh source")
+
+	wrongRemoteType := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/instances", map[string]any{
+		"name":             "ssh-with-openlist-remote",
+		"source_type":      "ssh",
+		"source_path":      "/srv/mysql",
+		"remote_config_id": openListRemote.ID,
+	}, mustAccessTokenForUser(t, admin, "secret"))
+	assertAPIError(t, wrongRemoteType, http.StatusBadRequest, authErrorInvalidRequest, "remote_config_id must reference an ssh remote config")
 
 	invalidLocalRemote := performAuthorizedJSONRequest(t, router, http.MethodPost, "/api/v1/instances", map[string]any{
 		"name":             "local-with-remote",

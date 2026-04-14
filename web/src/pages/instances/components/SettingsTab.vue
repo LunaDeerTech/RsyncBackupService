@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { updateInstance, updateInstancePermissions, listInstancePermissions, deleteInstance } from '../../../api/instances'
 import { listRemotes } from '../../../api/remotes'
 import { listUsers } from '../../../api/users'
@@ -56,7 +56,9 @@ const sourceTypeOptions = [
 ]
 
 const remoteOptions = computed(() =>
-  remotes.value.map((r) => ({ label: r.name, value: r.id })),
+  remotes.value
+    .filter((remote) => remote.type === 'ssh')
+    .map((remote) => ({ label: remote.name, value: remote.id })),
 )
 
 const excludePatternHelpText = EXCLUDE_PATTERN_HELP_EXAMPLES.join('\n')
@@ -281,6 +283,21 @@ function refresh() {
   settingsForm.exclude_patterns_text = excludePatternsToText(props.instance.exclude_patterns)
   settingsForm.remote_config_id = props.instance.remote_config_id
 }
+
+watch(() => settingsForm.source_type, () => {
+  if (settingsForm.source_type !== 'ssh') {
+    settingsForm.remote_config_id = undefined
+  }
+})
+
+watch(remoteOptions, (options) => {
+  if (!settingsForm.remote_config_id) {
+    return
+  }
+  if (!options.some((option) => option.value === settingsForm.remote_config_id)) {
+    settingsForm.remote_config_id = undefined
+  }
+})
 
 onMounted(() => {
   if (authStore.isAdmin) {

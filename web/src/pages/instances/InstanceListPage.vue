@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { listInstances, createInstance } from '../../api/instances'
 import { listRemotes } from '../../api/remotes'
@@ -97,7 +97,9 @@ const sourceTypeOptions = [
 ]
 
 const remoteOptions = computed(() =>
-  remotes.value.map((r) => ({ label: r.name, value: r.id })),
+  remotes.value
+    .filter((remote) => remote.type === 'ssh')
+    .map((remote) => ({ label: remote.name, value: remote.id })),
 )
 
 // statusVariant / statusLabel / backupStatusVariant / backupStatusLabel removed – using StatusBadge
@@ -131,6 +133,21 @@ onMounted(() => {
   fetchList()
   if (authStore.isAdmin) {
     fetchRemotes()
+  }
+})
+
+watch(() => form.source_type, () => {
+  if (form.source_type !== 'ssh') {
+    form.remote_config_id = undefined
+  }
+})
+
+watch(remoteOptions, (options) => {
+  if (!form.remote_config_id) {
+    return
+  }
+  if (!options.some((option) => option.value === form.remote_config_id)) {
+    form.remote_config_id = undefined
   }
 })
 
