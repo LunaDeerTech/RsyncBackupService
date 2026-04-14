@@ -269,8 +269,8 @@ func (db *DB) CreateBackup(backup *model.Backup) error {
 	backup.TriggerSource = normalizeBackupTriggerSource(backup.TriggerSource)
 
 	result, err := db.Exec(
-		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, retry_root_backup_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		backup.InstanceID,
 		backup.PolicyID,
 		backup.TriggerSource,
@@ -284,6 +284,7 @@ func (db *DB) CreateBackup(backup *model.Backup) error {
 		backup.DurationSeconds,
 		backup.ErrorMessage,
 		backup.RsyncStats,
+		backup.RetryRootBackupID,
 	)
 	if err != nil {
 		return fmt.Errorf("create backup: %w", err)
@@ -495,7 +496,7 @@ func (db *DB) UpdateBackup(backup *model.Backup) error {
 
 	result, err := db.Exec(
 		`UPDATE backups
-		 SET instance_id = ?, policy_id = ?, trigger_source = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?
+		 SET instance_id = ?, policy_id = ?, trigger_source = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?, retry_root_backup_id = ?
 		 WHERE id = ?`,
 		backup.InstanceID,
 		backup.PolicyID,
@@ -510,6 +511,7 @@ func (db *DB) UpdateBackup(backup *model.Backup) error {
 		backup.DurationSeconds,
 		backup.ErrorMessage,
 		backup.RsyncStats,
+		backup.RetryRootBackupID,
 		backup.ID,
 	)
 	if err != nil {
@@ -742,6 +744,17 @@ func (db *DB) CreatePendingPolicyRun(policy *model.Policy) (*model.Backup, *mode
 }
 
 func (db *DB) CreatePendingPolicyRunWithSource(policy *model.Policy, triggerSource string) (*model.Backup, *model.Task, error) {
+	return db.createPendingPolicyRunWithSource(policy, triggerSource, nil)
+}
+
+func (db *DB) CreatePendingPolicyRetryRunWithSource(policy *model.Policy, triggerSource string, retryRootBackupID int64) (*model.Backup, *model.Task, error) {
+	if retryRootBackupID <= 0 {
+		return nil, nil, fmt.Errorf("retry root backup id must be positive")
+	}
+	return db.createPendingPolicyRunWithSource(policy, triggerSource, retryRootBackupID)
+}
+
+func (db *DB) createPendingPolicyRunWithSource(policy *model.Policy, triggerSource string, retryRootBackupID any) (*model.Backup, *model.Task, error) {
 	if policy == nil {
 		return nil, nil, fmt.Errorf("policy is nil")
 	}
@@ -755,8 +768,8 @@ func (db *DB) CreatePendingPolicyRunWithSource(policy *model.Policy, triggerSour
 	defer tx.Rollback()
 
 	backupResult, err := tx.Exec(
-		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		`INSERT INTO backups (instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, retry_root_backup_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		policy.ID,
 		triggerSource,
@@ -770,6 +783,7 @@ func (db *DB) CreatePendingPolicyRunWithSource(policy *model.Policy, triggerSour
 		0,
 		"",
 		"",
+		retryRootBackupID,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create pending backup for policy %d: %w", policy.ID, err)

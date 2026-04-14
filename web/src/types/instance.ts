@@ -71,6 +71,7 @@ export interface BackupTrendPoint {
 
 export interface InstanceStats {
   backup_count: number
+  available_backup_count: number
   success_backup_count: number
   failure_backup_count: number
   total_backup_size_bytes: number

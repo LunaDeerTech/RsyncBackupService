@@ -56,6 +56,7 @@ type v2OverviewInstance struct {
 
 type v2InstanceStats struct {
 	BackupCount          int64                    `json:"backup_count"`
+	AvailableBackupCount int64                    `json:"available_backup_count"`
 	SuccessBackupCount   int64                    `json:"success_backup_count"`
 	FailureBackupCount   int64                    `json:"failure_backup_count"`
 	TotalBackupSizeBytes int64                    `json:"total_backup_size_bytes"`
@@ -318,6 +319,7 @@ func buildV2InstanceOverviewResponse(instance model.Instance, stats model.Instan
 func buildV2InstanceStats(stats model.InstanceStats) v2InstanceStats {
 	response := v2InstanceStats{
 		BackupCount:          stats.BackupCount,
+		AvailableBackupCount: stats.AvailableBackupCount,
 		SuccessBackupCount:   stats.SuccessBackupCount,
 		FailureBackupCount:   stats.FailureBackupCount,
 		TotalBackupSizeBytes: stats.TotalBackupSizeBytes,
@@ -513,6 +515,7 @@ func openAPISchemas() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"backup_count":            map[string]any{"type": "integer"},
+				"available_backup_count":  map[string]any{"type": "integer"},
 				"success_backup_count":    map[string]any{"type": "integer"},
 				"failure_backup_count":    map[string]any{"type": "integer"},
 				"total_backup_size_bytes": map[string]any{"type": "integer"},

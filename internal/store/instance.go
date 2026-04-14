@@ -11,7 +11,7 @@ import (
 
 const (
 	instanceColumns = `id, name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at`
-	backupColumns   = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at`
+	backupColumns   = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at, retry_root_backup_id`
 )
 
 type instanceScanner interface {
@@ -315,16 +315,38 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 	stats := &model.InstanceStats{}
 
 	if err := db.QueryRow(
+		`WITH ranked_backups AS (
+			SELECT status,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY COALESCE(retry_root_backup_id, id)
+				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+			   ) AS rn
+			FROM backups
+			WHERE instance_id = ?
+		),
+		final_backups AS (
+			SELECT status
+			FROM ranked_backups
+			WHERE rn = 1 AND status IN ('success', 'failed')
+		)
+		SELECT COUNT(*),
+		       COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0)
+		FROM final_backups`,
+		instanceID,
+	).Scan(&stats.BackupCount, &stats.SuccessBackupCount, &stats.FailureBackupCount); err != nil {
+		return nil, fmt.Errorf("get instance %d backup stats: %w", instanceID, err)
+	}
+
+	if err := db.QueryRow(
 		`SELECT COUNT(*),
-		        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
 		        COALESCE(SUM(actual_size_bytes), 0),
 		        COALESCE(SUM(backup_size_bytes), 0)
 		 FROM backups
-		 WHERE instance_id = ?`,
+		 WHERE instance_id = ? AND status = 'success'`,
 		instanceID,
-	).Scan(&stats.BackupCount, &stats.SuccessBackupCount, &stats.FailureBackupCount, &stats.TotalBackupSizeBytes, &stats.TotalBackupDiskBytes); err != nil {
-		return nil, fmt.Errorf("get instance %d backup stats: %w", instanceID, err)
+	).Scan(&stats.AvailableBackupCount, &stats.TotalBackupSizeBytes, &stats.TotalBackupDiskBytes); err != nil {
+		return nil, fmt.Errorf("get instance %d available backup stats: %w", instanceID, err)
 	}
 
 	if err := db.QueryRow(`SELECT COUNT(*) FROM policies WHERE instance_id = ?`, instanceID).Scan(&stats.PolicyCount); err != nil {
@@ -345,17 +367,30 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 			SELECT date('now', '-6 days')
 			UNION ALL
 			SELECT date(day, '+1 day') FROM days WHERE day < date('now')
-		 )
-		 SELECT days.day,
-		        COUNT(backups.id),
-		        COALESCE(SUM(CASE WHEN backups.status = 'success' THEN 1 ELSE 0 END), 0),
-		        COALESCE(SUM(CASE WHEN backups.status = 'failed' THEN 1 ELSE 0 END), 0)
-		 FROM days
-		 LEFT JOIN backups
-		   ON backups.instance_id = ?
-		  AND substr(COALESCE(backups.completed_at, backups.started_at, backups.created_at), 1, 10) = days.day
-		 GROUP BY days.day
-		 ORDER BY days.day ASC`,
+		 ),
+		ranked_backups AS (
+			SELECT status,
+			       substr(COALESCE(completed_at, started_at, created_at), 1, 10) AS occurred_day,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY COALESCE(retry_root_backup_id, id)
+				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+			   ) AS rn
+			FROM backups
+			WHERE instance_id = ?
+		),
+		final_backups AS (
+			SELECT status, occurred_day
+			FROM ranked_backups
+			WHERE rn = 1 AND status IN ('success', 'failed')
+		)
+		SELECT days.day,
+		       COUNT(final_backups.occurred_day),
+		       COALESCE(SUM(CASE WHEN final_backups.status = 'success' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN final_backups.status = 'failed' THEN 1 ELSE 0 END), 0)
+		FROM days
+		LEFT JOIN final_backups ON final_backups.occurred_day = days.day
+		GROUP BY days.day
+		ORDER BY days.day ASC`,
 		instanceID,
 	)
 	if err != nil {
@@ -493,10 +528,11 @@ func splitExcludePatterns(value string) []string {
 
 func scanBackup(scanner backupScanner) (*model.Backup, error) {
 	var (
-		backup       model.Backup
-		startedAt    sql.NullString
-		completedAt  sql.NullString
-		rawCreatedAt string
+		backup            model.Backup
+		startedAt         sql.NullString
+		completedAt       sql.NullString
+		rawCreatedAt      string
+		retryRootBackupID sql.NullInt64
 	)
 
 	if err := scanner.Scan(
@@ -515,6 +551,7 @@ func scanBackup(scanner backupScanner) (*model.Backup, error) {
 		&backup.ErrorMessage,
 		&backup.RsyncStats,
 		&rawCreatedAt,
+		&retryRootBackupID,
 	); err != nil {
 		return nil, err
 	}
@@ -524,6 +561,9 @@ func scanBackup(scanner backupScanner) (*model.Backup, error) {
 		return nil, fmt.Errorf("parse created_at %q: %w", rawCreatedAt, err)
 	}
 	backup.CreatedAt = createdAt
+	if retryRootBackupID.Valid {
+		backup.RetryRootBackupID = &retryRootBackupID.Int64
+	}
 
 	if startedAt.Valid {
 		parsedStartedAt, err := parseSQLiteTime(startedAt.String)

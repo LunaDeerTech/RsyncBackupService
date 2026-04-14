@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 7
+const latestSchemaVersion = 8
 
 type DB struct {
 	*sql.DB
@@ -221,6 +221,13 @@ var migrations = []migration{
 				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 			)`,
 			`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`,
+		},
+	},
+	{
+		version: 8,
+		statements: []string{
+			`ALTER TABLE backups ADD COLUMN retry_root_backup_id INTEGER`,
+			`CREATE INDEX IF NOT EXISTS idx_backups_retry_root_backup_id ON backups(retry_root_backup_id)`,
 		},
 	},
 }

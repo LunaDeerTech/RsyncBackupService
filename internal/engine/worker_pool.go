@@ -549,8 +549,18 @@ func (wp *WorkerPool) scheduleRetry(task *model.Task, backup *model.Backup, poli
 		afterFunc = time.AfterFunc
 	}
 	afterFunc(delay, func() {
-		wp.executeRetry(policy, nextAttempt, encryptionKey, backup.TriggerSource)
+		wp.executeRetry(policy, nextAttempt, encryptionKey, backup.TriggerSource, retryRootBackupID(backup))
 	})
+}
+
+func retryRootBackupID(backup *model.Backup) int64 {
+	if backup == nil {
+		return 0
+	}
+	if backup.RetryRootBackupID != nil && *backup.RetryRootBackupID > 0 {
+		return *backup.RetryRootBackupID
+	}
+	return backup.ID
 }
 
 func (wp *WorkerPool) shouldTreatRunErrAsCancellation(runErr error, task *model.Task, backup *model.Backup) bool {
@@ -566,12 +576,12 @@ func (wp *WorkerPool) shouldTreatRunErrAsCancellation(runErr error, task *model.
 	return false
 }
 
-func (wp *WorkerPool) executeRetry(policy *model.Policy, attempt int, encryptionKey string, triggerSource string) {
+func (wp *WorkerPool) executeRetry(policy *model.Policy, attempt int, encryptionKey string, triggerSource string, retryRootBackupID int64) {
 	if wp == nil || wp.db == nil || wp.queue == nil || policy == nil {
 		return
 	}
 
-	retryBackup, retryTask, err := wp.db.CreatePendingPolicyRunWithSource(policy, triggerSource)
+	retryBackup, retryTask, err := wp.db.CreatePendingPolicyRetryRunWithSource(policy, triggerSource, retryRootBackupID)
 	if err != nil {
 		slog.Error("create retry backup+task failed",
 			"policy_id", policy.ID,

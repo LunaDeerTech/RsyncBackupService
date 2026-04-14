@@ -103,7 +103,34 @@ func TestNewAndMigrateCreatesSchema(t *testing.T) {
 	if err := db.QueryRow(`SELECT value FROM system_configs WHERE key = 'schema_version'`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("query schema version error = %v", err)
 	}
-	if schemaVersion != "7" {
-		t.Fatalf("schema version = %q, want %q", schemaVersion, "7")
+	if schemaVersion != "8" {
+		t.Fatalf("schema version = %q, want %q", schemaVersion, "8")
+	}
+
+	backupColumns := make(map[string]struct{})
+	columnRows, err := db.Query(`PRAGMA table_info(backups)`)
+	if err != nil {
+		t.Fatalf("query backup table info error = %v", err)
+	}
+	defer columnRows.Close()
+	for columnRows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := columnRows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			t.Fatalf("scan backup table info error = %v", err)
+		}
+		backupColumns[name] = struct{}{}
+	}
+	if err := columnRows.Err(); err != nil {
+		t.Fatalf("iterate backup table info error = %v", err)
+	}
+	if _, ok := backupColumns["retry_root_backup_id"]; !ok {
+		t.Fatal("backups table missing retry_root_backup_id column")
 	}
 }

@@ -431,7 +431,7 @@ func (c *DRCalculator) calculateStability(instanceID int64, targets map[int64]*m
 		return 0, blockingReasons, nil
 	}
 
-	backups, err := c.db.ListRecentBackupsByInstanceAllStatuses(instanceID, 10)
+	backups, err := c.db.ListRecentLogicalBackupsByInstance(instanceID, 10)
 	if err != nil {
 		return 0, nil, err
 	}

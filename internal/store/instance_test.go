@@ -138,8 +138,9 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 
 	policyID := createStoreTestPolicy(t, db, instance.ID, target.ID, "daily-backup")
 	firstBackupID := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 150, 120, "datetime('now', '-1 day')")
-	_ = firstBackupID
-	secondBackupID := insertStoreTestBackup(t, db, instance.ID, policyID, "success", 80, 60, "CURRENT_TIMESTAMP")
+	secondBackupID := insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, firstBackupID, "success", 80, 60, "CURRENT_TIMESTAMP")
+	thirdBackupID := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 40, 20, "datetime('now', '-2 day')")
+	_ = thirdBackupID
 	insertStoreTestTask(t, db, instance.ID, secondBackupID)
 	insertStoreTestNotificationSubscription(t, db, viewer.ID, instance.ID)
 	insertStoreTestAuditLog(t, db, viewer.ID, instance.ID)
@@ -154,8 +155,11 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 	if stats.SuccessBackupCount != 1 || stats.FailureBackupCount != 1 {
 		t.Fatalf("stats success/failure = (%d, %d), want (1, 1)", stats.SuccessBackupCount, stats.FailureBackupCount)
 	}
-	if stats.TotalBackupSizeBytes != 180 {
-		t.Fatalf("stats.TotalBackupSizeBytes = %d, want %d", stats.TotalBackupSizeBytes, 180)
+	if stats.AvailableBackupCount != 1 {
+		t.Fatalf("stats.AvailableBackupCount = %d, want %d", stats.AvailableBackupCount, 1)
+	}
+	if stats.TotalBackupSizeBytes != 60 {
+		t.Fatalf("stats.TotalBackupSizeBytes = %d, want %d", stats.TotalBackupSizeBytes, 60)
 	}
 	if stats.PolicyCount != 1 {
 		t.Fatalf("stats.PolicyCount = %d, want %d", stats.PolicyCount, 1)
@@ -189,6 +193,45 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 	assertInstanceRelatedRowCount(t, db, `SELECT COUNT(*) FROM notification_subscriptions WHERE instance_id = ?`, instance.ID, 0)
 	assertInstanceRelatedRowCount(t, db, `SELECT COUNT(*) FROM audit_logs WHERE instance_id = ?`, instance.ID, 0)
 	assertInstanceRelatedRowCount(t, db, `SELECT COUNT(*) FROM instances WHERE id = ?`, second.ID, 1)
+}
+
+func TestCountConsecutiveFailuresIgnoresIntermediateRetryFailures(t *testing.T) {
+	db := newTestDB(t)
+	instance := &model.Instance{
+		Name:       "retry-count-instance",
+		SourceType: "local",
+		SourcePath: "/srv/retry-count-instance",
+		Status:     "idle",
+	}
+	if err := db.CreateInstance(instance); err != nil {
+		t.Fatalf("CreateInstance() error = %v", err)
+	}
+
+	target := &model.BackupTarget{
+		Name:          "retry-count-target",
+		BackupType:    "rolling",
+		StorageType:   "local",
+		StoragePath:   t.TempDir(),
+		HealthStatus:  "healthy",
+		HealthMessage: "ok",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	policyID := createStoreTestPolicy(t, db, instance.ID, target.ID, "retry-aware-policy")
+	rootSuccess := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('now', '-3 hour')")
+	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, rootSuccess, "success", 64, 32, "datetime('now', '-2 hour')")
+	rootFailure := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('now', '-1 hour')")
+	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, rootFailure, "failed", 32, 16, "CURRENT_TIMESTAMP")
+
+	failures, err := db.CountConsecutiveFailures(instance.ID, policyID)
+	if err != nil {
+		t.Fatalf("CountConsecutiveFailures() error = %v", err)
+	}
+	if failures != 1 {
+		t.Fatalf("CountConsecutiveFailures() = %d, want %d", failures, 1)
+	}
 }
 
 func createStoreTestPolicy(t *testing.T, db *DB, instanceID, targetID int64, name string) int64 {
@@ -226,9 +269,19 @@ func createStoreTestPolicy(t *testing.T, db *DB, instanceID, targetID int64, nam
 
 func insertStoreTestBackup(t *testing.T, db *DB, instanceID, policyID int64, status string, backupSize, actualSize int64, completedAtExpr string) int64 {
 	t.Helper()
+	return insertStoreTestBackupWithNullableRetryRoot(t, db, instanceID, policyID, nil, status, backupSize, actualSize, completedAtExpr)
+}
 
-	query := `INSERT INTO backups (instance_id, policy_id, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ` + completedAtExpr + `, ` + completedAtExpr + `, ?, ?, ?, ` + completedAtExpr + `)`
+func insertStoreTestBackupWithRetryRoot(t *testing.T, db *DB, instanceID, policyID, retryRootBackupID int64, status string, backupSize, actualSize int64, completedAtExpr string) int64 {
+	t.Helper()
+	return insertStoreTestBackupWithNullableRetryRoot(t, db, instanceID, policyID, &retryRootBackupID, status, backupSize, actualSize, completedAtExpr)
+}
+
+func insertStoreTestBackupWithNullableRetryRoot(t *testing.T, db *DB, instanceID, policyID int64, retryRootBackupID *int64, status string, backupSize, actualSize int64, completedAtExpr string) int64 {
+	t.Helper()
+
+	query := `INSERT INTO backups (instance_id, policy_id, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, retry_root_backup_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ` + completedAtExpr + `, ` + completedAtExpr + `, ?, ?, ?, ?, ` + completedAtExpr + `)`
 	result, err := db.Exec(
 		query,
 		instanceID,
@@ -241,6 +294,7 @@ func insertStoreTestBackup(t *testing.T, db *DB, instanceID, policyID int64, sta
 		60,
 		"",
 		`{"files":10}`,
+		retryRootBackupID,
 	)
 	if err != nil {
 		t.Fatalf("insert backup error = %v", err)

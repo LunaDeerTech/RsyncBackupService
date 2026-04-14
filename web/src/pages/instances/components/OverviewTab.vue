@@ -67,7 +67,7 @@ const successRateColor = computed(() => {
 })
 
 // ── Countup animations ──
-const animSuccessCount = useCountUp(computed(() => stats.value?.success_backup_count ?? 0))
+const animAvailableBackupCount = useCountUp(computed(() => stats.value?.available_backup_count ?? 0))
 const animSuccessRate = useCountUp(computed(() => successRate.value ?? 0))
 const animDrTotal = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.total) : 0))
 const animDrFreshness = useCountUp(computed(() => drScore.value ? Math.round(drScore.value.freshness) : 0))
@@ -306,9 +306,9 @@ defineExpose({ refresh })
         <AppCard>
           <button class="stat-card stat-card--clickable" @click="emit('change-tab', 'backups')">
             <div class="stat-card__content">
-              <span class="stat-card__value">{{ animSuccessCount }}</span>
+              <span class="stat-card__value">{{ animAvailableBackupCount }}</span>
               <span class="stat-card__label">可用备份</span>
-              <span class="stat-card__sub">共 {{ stats?.backup_count ?? 0 }} 次备份</span>
+              <span class="stat-card__sub">累计 {{ stats?.backup_count ?? 0 }} 次备份</span>
             </div>
             <Database :size="22" class="stat-icon stat-icon--primary" />
           </button>

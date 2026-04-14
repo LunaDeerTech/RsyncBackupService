@@ -183,10 +183,21 @@ func (db *DB) ListUnresolvedRiskEvents() ([]model.RiskEvent, error) {
 
 func (db *DB) CountConsecutiveFailures(instanceID int64, policyID int64) (int, error) {
 	rows, err := db.Query(
-		`SELECT status
-		 FROM backups
-		 WHERE instance_id = ? AND policy_id = ? AND status IN ('success', 'failed')
-		 ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC`,
+		`WITH ranked_backups AS (
+			SELECT status,
+			       COALESCE(completed_at, started_at, created_at) AS occurred_at,
+			       id,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY COALESCE(retry_root_backup_id, id)
+				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+			   ) AS rn
+			FROM backups
+			WHERE instance_id = ? AND policy_id = ?
+		)
+		SELECT status
+		FROM ranked_backups
+		WHERE rn = 1 AND status IN ('success', 'failed')
+		ORDER BY occurred_at DESC, id DESC`,
 		instanceID,
 		policyID,
 	)

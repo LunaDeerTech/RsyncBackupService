@@ -219,9 +219,10 @@ func TestDRCalculatorCalculateStability(t *testing.T) {
 		policy := createDRTestPolicy(t, db, instance.ID, target.ID, "stability", "interval", "3600", "count", 5)
 		createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 55, 0, 0, time.UTC))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 45, 0, 0, time.UTC))
-		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", time.Date(2026, 4, 7, 11, 35, 0, 0, time.UTC))
+		retryRoot := createDRTestBackup(t, db, instance.ID, policy.ID, "failed", time.Date(2026, 4, 7, 11, 34, 0, 0, time.UTC))
+		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, retryRoot.ID, "success", time.Date(2026, 4, 7, 11, 35, 0, 0, time.UTC))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 25, 0, 0, time.UTC))
-		createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 15, 0, 0, time.UTC))
+		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", time.Date(2026, 4, 7, 11, 15, 0, 0, time.UTC))
 
 		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
 		if err != nil {
@@ -388,21 +389,32 @@ func createDRTestPolicy(t *testing.T, db *store.DB, instanceID, targetID int64, 
 
 func createDRTestBackup(t *testing.T, db *store.DB, instanceID, policyID int64, status string, completedAt time.Time) *model.Backup {
 	t.Helper()
+	return createDRTestBackupWithOptionalRetryRoot(t, db, instanceID, policyID, nil, status, completedAt)
+}
+
+func createDRTestBackupWithRetryRoot(t *testing.T, db *store.DB, instanceID, policyID, retryRootBackupID int64, status string, completedAt time.Time) *model.Backup {
+	t.Helper()
+	return createDRTestBackupWithOptionalRetryRoot(t, db, instanceID, policyID, &retryRootBackupID, status, completedAt)
+}
+
+func createDRTestBackupWithOptionalRetryRoot(t *testing.T, db *store.DB, instanceID, policyID int64, retryRootBackupID *int64, status string, completedAt time.Time) *model.Backup {
+	t.Helper()
 	startedAt := completedAt.Add(-5 * time.Minute)
 	backup := &model.Backup{
-		InstanceID:      instanceID,
-		PolicyID:        policyID,
-		TriggerSource:   model.BackupTriggerSourceScheduled,
-		Type:            "rolling",
-		Status:          status,
-		SnapshotPath:    "/backup/snapshots/" + strconv.FormatInt(policyID, 10),
-		BackupSizeBytes: 128,
-		ActualSizeBytes: 64,
-		StartedAt:       &startedAt,
-		CompletedAt:     &completedAt,
-		DurationSeconds: int64(completedAt.Sub(startedAt).Seconds()),
-		ErrorMessage:    "",
-		RsyncStats:      "{}",
+		InstanceID:        instanceID,
+		PolicyID:          policyID,
+		TriggerSource:     model.BackupTriggerSourceScheduled,
+		RetryRootBackupID: retryRootBackupID,
+		Type:              "rolling",
+		Status:            status,
+		SnapshotPath:      "/backup/snapshots/" + strconv.FormatInt(policyID, 10),
+		BackupSizeBytes:   128,
+		ActualSizeBytes:   64,
+		StartedAt:         &startedAt,
+		CompletedAt:       &completedAt,
+		DurationSeconds:   int64(completedAt.Sub(startedAt).Seconds()),
+		ErrorMessage:      "",
+		RsyncStats:        "{}",
 	}
 	if status != "success" {
 		backup.ErrorMessage = "backup failed"

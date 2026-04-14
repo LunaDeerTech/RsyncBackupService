@@ -48,21 +48,22 @@ func NormalizeExcludePatterns(patterns []string) []string {
 }
 
 type Backup struct {
-	ID              int64      `json:"id"`
-	InstanceID      int64      `json:"instance_id"`
-	PolicyID        int64      `json:"policy_id"`
-	TriggerSource   string     `json:"trigger_source"`
-	Type            string     `json:"type"`
-	Status          string     `json:"status"`
-	SnapshotPath    string     `json:"snapshot_path"`
-	BackupSizeBytes int64      `json:"backup_size_bytes"`
-	ActualSizeBytes int64      `json:"actual_size_bytes"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	DurationSeconds int64      `json:"duration_seconds"`
-	ErrorMessage    string     `json:"error_message"`
-	RsyncStats      string     `json:"rsync_stats"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID                int64      `json:"id"`
+	InstanceID        int64      `json:"instance_id"`
+	PolicyID          int64      `json:"policy_id"`
+	TriggerSource     string     `json:"trigger_source"`
+	RetryRootBackupID *int64     `json:"-"`
+	Type              string     `json:"type"`
+	Status            string     `json:"status"`
+	SnapshotPath      string     `json:"snapshot_path"`
+	BackupSizeBytes   int64      `json:"backup_size_bytes"`
+	ActualSizeBytes   int64      `json:"actual_size_bytes"`
+	StartedAt         *time.Time `json:"started_at,omitempty"`
+	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	DurationSeconds   int64      `json:"duration_seconds"`
+	ErrorMessage      string     `json:"error_message"`
+	RsyncStats        string     `json:"rsync_stats"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 type BackupTrendPoint struct {
@@ -74,6 +75,7 @@ type BackupTrendPoint struct {
 
 type InstanceStats struct {
 	BackupCount          int64              `json:"backup_count"`
+	AvailableBackupCount int64              `json:"available_backup_count"`
 	SuccessBackupCount   int64              `json:"success_backup_count"`
 	FailureBackupCount   int64              `json:"failure_backup_count"`
 	TotalBackupSizeBytes int64              `json:"total_backup_size_bytes"`

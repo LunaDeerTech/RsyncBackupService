@@ -69,6 +69,49 @@ func (db *DB) ListRecentBackupsByInstanceAllStatuses(instanceID int64, limit int
 	return backups, nil
 }
 
+func (db *DB) ListRecentLogicalBackupsByInstance(instanceID int64, limit int) ([]model.Backup, error) {
+	if limit <= 0 {
+		return []model.Backup{}, nil
+	}
+
+	rows, err := db.Query(
+		`WITH ranked_backups AS (
+			SELECT `+backupColumns+`,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY COALESCE(retry_root_backup_id, id)
+				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+			   ) AS rn
+			FROM backups
+			WHERE instance_id = ?
+		)
+		SELECT `+backupColumns+`
+		FROM ranked_backups
+		WHERE rn = 1 AND status IN ('success', 'failed')
+		ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+		LIMIT ?`,
+		instanceID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recent logical backups for instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	backups := make([]model.Backup, 0, limit)
+	for rows.Next() {
+		backup, err := scanBackup(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan recent logical backup for instance %d: %w", instanceID, err)
+		}
+		backups = append(backups, *backup)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent logical backups for instance %d: %w", instanceID, err)
+	}
+
+	return backups, nil
+}
+
 func (db *DB) ListSuccessfulBackupsByPolicy(policyID int64, limit int) ([]model.Backup, error) {
 	if limit <= 0 {
 		return []model.Backup{}, nil
