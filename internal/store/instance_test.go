@@ -141,6 +141,8 @@ func TestInstanceCRUDStatsAndDeleteCleanup(t *testing.T) {
 	secondBackupID := insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, firstBackupID, "success", 80, 60, "CURRENT_TIMESTAMP")
 	thirdBackupID := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 40, 20, "datetime('now', '-2 day')")
 	_ = thirdBackupID
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.complete", "CURRENT_TIMESTAMP")
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.fail", "datetime('now', '-2 day')")
 	insertStoreTestTask(t, db, instance.ID, secondBackupID)
 	insertStoreTestNotificationSubscription(t, db, viewer.ID, instance.ID)
 	insertStoreTestAuditLog(t, db, viewer.ID, instance.ID)
@@ -224,6 +226,8 @@ func TestCountConsecutiveFailuresIgnoresIntermediateRetryFailures(t *testing.T) 
 	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, rootSuccess, "success", 64, 32, "datetime('now', '-2 hour')")
 	rootFailure := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('now', '-1 hour')")
 	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, rootFailure, "failed", 32, 16, "CURRENT_TIMESTAMP")
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.complete", "datetime('now', '-2 hour')")
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.fail", "CURRENT_TIMESTAMP")
 
 	failures, err := db.CountConsecutiveFailures(instance.ID, policyID)
 	if err != nil {
@@ -350,6 +354,16 @@ func insertStoreTestAuditLog(t *testing.T, db *DB, userID, instanceID int64) {
 		"cleanup me",
 	); err != nil {
 		t.Fatalf("insert audit log error = %v", err)
+	}
+}
+
+func insertStoreTestBackupAudit(t *testing.T, db *DB, instanceID int64, action string, createdAtExpr string) {
+	t.Helper()
+
+	query := `INSERT INTO audit_logs (instance_id, user_id, action, detail, created_at)
+		VALUES (?, NULL, ?, ?, ` + createdAtExpr + `)`
+	if _, err := db.Exec(query, instanceID, action, `{"source":"test"}`); err != nil {
+		t.Fatalf("insert backup audit log error = %v", err)
 	}
 }
 

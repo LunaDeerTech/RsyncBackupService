@@ -70,6 +70,8 @@ func TestInstanceCRUDStatsAndPermissions(t *testing.T) {
 	firstBackupID := insertHandlerTestBackup(t, db, instance.ID, policyID, "failed", 150, 120, "datetime('now', '-1 day')")
 	_ = firstBackupID
 	secondBackupID := insertHandlerTestBackup(t, db, instance.ID, policyID, "success", 80, 60, "CURRENT_TIMESTAMP")
+	insertHandlerTestBackupAudit(t, db, instance.ID, "backup.complete", "CURRENT_TIMESTAMP")
+	insertHandlerTestBackupAudit(t, db, instance.ID, "backup.fail", "datetime('now', '-1 day')")
 	insertHandlerTestTask(t, db, instance.ID, secondBackupID)
 	insertHandlerTestNotificationSubscription(t, db, viewer.ID, instance.ID)
 	insertHandlerTestAuditLog(t, db, admin.ID, instance.ID)
@@ -372,5 +374,14 @@ func insertHandlerTestAuditLog(t *testing.T, db *store.DB, userID, instanceID in
 
 	if _, err := db.Exec(`INSERT INTO audit_logs (instance_id, user_id, action, detail, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`, instanceID, userID, "instance.updated", "seed"); err != nil {
 		t.Fatalf("insert audit log error = %v", err)
+	}
+}
+
+func insertHandlerTestBackupAudit(t *testing.T, db *store.DB, instanceID int64, action string, createdAtExpr string) {
+	t.Helper()
+
+	query := `INSERT INTO audit_logs (instance_id, user_id, action, detail, created_at) VALUES (?, NULL, ?, ?, ` + createdAtExpr + `)`
+	if _, err := db.Exec(query, instanceID, action, `{"source":"test"}`); err != nil {
+		t.Fatalf("insert backup audit log error = %v", err)
 	}
 }

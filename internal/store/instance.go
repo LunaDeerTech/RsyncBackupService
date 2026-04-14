@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	instanceColumns = `id, name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at`
-	backupColumns   = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at, retry_root_backup_id`
+	instanceColumns      = `id, name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at`
+	backupColumns        = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at, retry_root_backup_id`
+	backupCompleteAction = "backup.complete"
+	backupFailAction     = "backup.fail"
 )
 
 type instanceScanner interface {
@@ -315,25 +317,20 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 	stats := &model.InstanceStats{}
 
 	if err := db.QueryRow(
-		`WITH ranked_backups AS (
-			SELECT status,
-			       ROW_NUMBER() OVER (
-				   PARTITION BY COALESCE(retry_root_backup_id, id)
-				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
-			   ) AS rn
-			FROM backups
-			WHERE instance_id = ?
-		),
-		final_backups AS (
-			SELECT status
-			FROM ranked_backups
-			WHERE rn = 1 AND status IN ('success', 'failed')
+		`WITH execution_logs AS (
+			SELECT action
+			FROM audit_logs
+			WHERE instance_id = ? AND action IN (?, ?)
 		)
 		SELECT COUNT(*),
-		       COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0)
-		FROM final_backups`,
+		       COALESCE(SUM(CASE WHEN action = ? THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN action = ? THEN 1 ELSE 0 END), 0)
+		FROM execution_logs`,
 		instanceID,
+		backupCompleteAction,
+		backupFailAction,
+		backupCompleteAction,
+		backupFailAction,
 	).Scan(&stats.BackupCount, &stats.SuccessBackupCount, &stats.FailureBackupCount); err != nil {
 		return nil, fmt.Errorf("get instance %d backup stats: %w", instanceID, err)
 	}
@@ -368,30 +365,25 @@ func (db *DB) GetInstanceStats(instanceID int64) (*model.InstanceStats, error) {
 			UNION ALL
 			SELECT date(day, '+1 day') FROM days WHERE day < date('now')
 		 ),
-		ranked_backups AS (
-			SELECT status,
-			       substr(COALESCE(completed_at, started_at, created_at), 1, 10) AS occurred_day,
-			       ROW_NUMBER() OVER (
-				   PARTITION BY COALESCE(retry_root_backup_id, id)
-				   ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
-			   ) AS rn
-			FROM backups
-			WHERE instance_id = ?
-		),
-		final_backups AS (
-			SELECT status, occurred_day
-			FROM ranked_backups
-			WHERE rn = 1 AND status IN ('success', 'failed')
+		execution_logs AS (
+			SELECT action,
+			       substr(created_at, 1, 10) AS occurred_day
+			FROM audit_logs
+			WHERE instance_id = ? AND action IN (?, ?)
 		)
 		SELECT days.day,
-		       COUNT(final_backups.occurred_day),
-		       COALESCE(SUM(CASE WHEN final_backups.status = 'success' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN final_backups.status = 'failed' THEN 1 ELSE 0 END), 0)
+		       COUNT(execution_logs.occurred_day),
+		       COALESCE(SUM(CASE WHEN execution_logs.action = ? THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN execution_logs.action = ? THEN 1 ELSE 0 END), 0)
 		FROM days
-		LEFT JOIN final_backups ON final_backups.occurred_day = days.day
+		LEFT JOIN execution_logs ON execution_logs.occurred_day = days.day
 		GROUP BY days.day
 		ORDER BY days.day ASC`,
 		instanceID,
+		backupCompleteAction,
+		backupFailAction,
+		backupCompleteAction,
+		backupFailAction,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get instance %d trend: %w", instanceID, err)

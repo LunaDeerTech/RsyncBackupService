@@ -25,6 +25,7 @@ func TestCurrentUserAPIKeyLifecycleAndV2Access(t *testing.T) {
 	targetID := createHandlerTestBackupTarget(t, db, "target-one")
 	policyID := createHandlerTestPolicy(t, db, instanceID, targetID, "daily")
 	backupID := insertHandlerTestBackup(t, db, instanceID, policyID, "success", 128, 96, "CURRENT_TIMESTAMP")
+	insertHandlerTestBackupAudit(t, db, instanceID, "backup.complete", "CURRENT_TIMESTAMP")
 	insertHandlerTestTaskWithStatus(t, db, instanceID, backupID, "running")
 	if err := db.SetInstancePermissions(instanceID, []model.InstancePermission{{UserID: viewer.ID, Permission: "readonly"}}); err != nil {
 		t.Fatalf("SetInstancePermissions() error = %v", err)
