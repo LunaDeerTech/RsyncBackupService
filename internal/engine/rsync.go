@@ -89,7 +89,7 @@ func BuildRsyncArgs(cfg RsyncConfig) []string {
 		return nil
 	}
 
-	args := []string{"-avz"}
+	args := []string{"-avz", "--no-owner", "--no-group"}
 	if !cfg.DisableDelete {
 		args = append(args, "--delete")
 	}
