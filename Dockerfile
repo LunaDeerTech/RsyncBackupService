@@ -17,7 +17,7 @@ COPY --from=frontend /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -o /rbs ./cmd/server/main.go
 
 FROM alpine:3.19
-RUN apk add --no-cache rsync openssh-client ca-certificates tzdata libnss_wrapper
+RUN apk add --no-cache rsync openssh-client ca-certificates tzdata nss_wrapper
 COPY --from=backend /rbs /usr/local/bin/rbs
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
