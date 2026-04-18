@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -40,6 +41,7 @@ type RollingBackupExecutor struct {
 	now          func() time.Time
 	dialSSH      func(context.Context, model.RemoteConfig) (*ssh.Client, error)
 	executeRsync func(context.Context, RsyncConfig, func(ProgressInfo)) (*RsyncResult, error)
+	removeAll    func(string) error
 }
 
 type relayStats struct {
@@ -60,7 +62,8 @@ func NewRollingBackupExecutor(rsync *RsyncExecutor, db *store.DB) *RollingBackup
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
-		dialSSH: service.DialSSHClient,
+		dialSSH:   service.DialSSHClient,
+		removeAll: os.RemoveAll,
 	}
 	executor.executeRsync = executor.rs.Execute
 
@@ -533,6 +536,7 @@ func (e *RollingBackupExecutor) failRun(task *model.Task, backup *model.Backup, 
 		if err := e.db.UpdateBackup(backup); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
+		e.cleanupFailedSnapshot(backup)
 	}
 	if task != nil {
 		task.Status = "failed"
@@ -563,6 +567,7 @@ func (e *RollingBackupExecutor) cancelRun(task *model.Task, backup *model.Backup
 		if err := e.db.UpdateBackup(backup); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
+		e.cleanupFailedSnapshot(backup)
 	}
 	if task != nil {
 		task.Status = "cancelled"
@@ -602,6 +607,22 @@ func (e *RollingBackupExecutor) completeRun(task *model.Task, backup *model.Back
 	task.EstimatedEnd = nil
 	task.ErrorMessage = ""
 	return e.db.UpdateTask(task)
+}
+
+func (e *RollingBackupExecutor) cleanupFailedSnapshot(backup *model.Backup) {
+	if backup == nil || strings.TrimSpace(backup.SnapshotPath) == "" {
+		return
+	}
+	if e.removeAll == nil {
+		return
+	}
+	if err := e.removeAll(backup.SnapshotPath); err != nil {
+		slog.Warn("cleanup failed rolling snapshot directory failed",
+			"backup_id", backup.ID,
+			"path", backup.SnapshotPath,
+			"error", err,
+		)
+	}
 }
 
 func (e *RollingBackupExecutor) prepareDirectory(ctx context.Context, storageType, dir string, remote *model.RemoteConfig) error {

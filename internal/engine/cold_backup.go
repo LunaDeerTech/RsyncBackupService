@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	pathpkg "path"
@@ -67,6 +68,7 @@ type ColdBackupExecutor struct {
 	movePath               func(string, string) error
 	sleep                  func(context.Context, time.Duration) error
 	openListSessionFactory func(context.Context, *model.RemoteConfig) (coldBackupOpenListSession, error)
+	removeAll              func(string) error
 }
 
 func NewColdBackupExecutor(rsync *RsyncExecutor, db *store.DB, dataDir string) *ColdBackupExecutor {
@@ -85,8 +87,9 @@ func NewColdBackupExecutor(rsync *RsyncExecutor, db *store.DB, dataDir string) *
 		encryptFile: func(ctx context.Context, inputPath, outputPath string, key []byte) error {
 			return backupcrypto.EncryptFileWithContext(ctx, inputPath, outputPath, key)
 		},
-		movePath: movePath,
-		sleep:    sleepWithContext,
+		movePath:  movePath,
+		sleep:     sleepWithContext,
+		removeAll: os.RemoveAll,
 	}
 	executor.executeRsync = executor.rsync.Execute
 	executor.openListSessionFactory = func(ctx context.Context, remote *model.RemoteConfig) (coldBackupOpenListSession, error) {
@@ -548,6 +551,7 @@ func (e *ColdBackupExecutor) failRun(task *model.Task, backup *model.Backup, run
 		if err := e.db.UpdateBackup(backup); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
+		e.cleanupFailedRunDir(backup)
 	}
 	if task != nil {
 		task.Status = "failed"
@@ -578,6 +582,7 @@ func (e *ColdBackupExecutor) cancelRun(task *model.Task, backup *model.Backup, r
 		if err := e.db.UpdateBackup(backup); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
+		e.cleanupFailedRunDir(backup)
 	}
 	if task != nil {
 		task.Status = "cancelled"
@@ -617,6 +622,23 @@ func (e *ColdBackupExecutor) completeRun(task *model.Task, backup *model.Backup,
 	task.EstimatedEnd = nil
 	task.ErrorMessage = ""
 	return e.db.UpdateTask(task)
+}
+
+func (e *ColdBackupExecutor) cleanupFailedRunDir(backup *model.Backup) {
+	if backup == nil || strings.TrimSpace(backup.SnapshotPath) == "" {
+		return
+	}
+	if e.removeAll == nil {
+		return
+	}
+	runDir := filepath.Dir(backup.SnapshotPath)
+	if err := e.removeAll(runDir); err != nil {
+		slog.Warn("cleanup failed cold backup run directory failed",
+			"backup_id", backup.ID,
+			"path", runDir,
+			"error", err,
+		)
+	}
 }
 
 func (e *ColdBackupExecutor) reportProgress(task *model.Task, step string, progress ProgressInfo, externalCb func(ProgressInfo)) error {
