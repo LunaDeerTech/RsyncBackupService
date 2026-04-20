@@ -432,19 +432,19 @@ func (c *DRCalculator) calculateStability(instanceID int64, targets map[int64]*m
 		return 0, blockingReasons, nil
 	}
 
-	backups, err := c.db.ListRecentLogicalBackupsByInstance(instanceID, stabilityWindowSize)
+	statuses, err := c.db.ListRecentBackupExecutionStatusesByInstance(instanceID, stabilityWindowSize)
 	if err != nil {
 		return 0, nil, err
 	}
-	if len(backups) == 0 {
+	if len(statuses) == 0 {
 		return 20, []string{"近期没有备份执行记录"}, nil
 	}
 
 	successCount := 0
 	consecutiveFailures := 0
 	maxConsecutiveFailures := 0
-	for _, backup := range backups {
-		if strings.EqualFold(backup.Status, "success") {
+	for _, status := range statuses {
+		if strings.EqualFold(status, "success") {
 			successCount++
 			consecutiveFailures = 0
 			continue
@@ -455,7 +455,7 @@ func (c *DRCalculator) calculateStability(instanceID int64, targets map[int64]*m
 		}
 	}
 
-	score := (float64(successCount) / float64(len(backups))) * 80
+	score := (float64(successCount) / float64(len(statuses))) * 80
 	score += 20
 	reasons := make([]string, 0)
 	if maxConsecutiveFailures >= 4 {

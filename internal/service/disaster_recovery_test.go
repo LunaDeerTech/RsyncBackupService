@@ -223,6 +223,11 @@ func TestDRCalculatorCalculateStability(t *testing.T) {
 		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, retryRoot.ID, "success", time.Date(2026, 4, 7, 11, 35, 0, 0, time.UTC))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "success", time.Date(2026, 4, 7, 11, 25, 0, 0, time.UTC))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", time.Date(2026, 4, 7, 11, 15, 0, 0, time.UTC))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", time.Date(2026, 4, 7, 11, 55, 0, 0, time.UTC))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", time.Date(2026, 4, 7, 11, 45, 0, 0, time.UTC))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", time.Date(2026, 4, 7, 11, 35, 0, 0, time.UTC))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", time.Date(2026, 4, 7, 11, 25, 0, 0, time.UTC))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.fail", time.Date(2026, 4, 7, 11, 15, 0, 0, time.UTC))
 
 		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
 		if err != nil {
@@ -248,11 +253,18 @@ func TestDRCalculatorCalculateStability(t *testing.T) {
 		for index, status := range statuses {
 			completedAt := base.Add(-time.Duration(index) * time.Minute)
 			createDRTestBackup(t, db, instance.ID, policy.ID, status, completedAt)
+			action := "backup.fail"
+			if status == "success" {
+				action = "backup.complete"
+			}
+			insertDRTestBackupAudit(t, db, instance.ID, action, completedAt)
 		}
 
 		oldRetryRoot := createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-10*time.Minute))
 		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, oldRetryRoot.ID, "success", base.Add(-9*time.Minute).Add(-30*time.Second))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-11*time.Minute))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", base.Add(-9*time.Minute).Add(-30*time.Second))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.fail", base.Add(-11*time.Minute))
 
 		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
 		if err != nil {
@@ -280,6 +292,10 @@ func TestDRCalculatorCalculateStability(t *testing.T) {
 		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, second.ID, "success", base.Add(-30*time.Second))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-2*time.Minute))
 		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-3*time.Minute))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", base.Add(30*time.Second))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.complete", base.Add(-30*time.Second))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.fail", base.Add(-2*time.Minute))
+		insertDRTestBackupAudit(t, db, instance.ID, "backup.fail", base.Add(-3*time.Minute))
 
 		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
 		if err != nil {
@@ -480,4 +496,18 @@ func createDRTestBackupWithOptionalRetryRoot(t *testing.T, db *store.DB, instanc
 		t.Fatalf("CreateBackup() error = %v", err)
 	}
 	return backup
+}
+
+func insertDRTestBackupAudit(t *testing.T, db *store.DB, instanceID int64, action string, createdAt time.Time) {
+	t.Helper()
+
+	if _, err := db.Exec(
+		`INSERT INTO audit_logs (instance_id, user_id, action, detail, created_at) VALUES (?, NULL, ?, ?, ?)`,
+		instanceID,
+		action,
+		`{"source":"test"}`,
+		createdAt.UTC().Format("2006-01-02 15:04:05"),
+	); err != nil {
+		t.Fatalf("insert backup audit log error = %v", err)
+	}
 }

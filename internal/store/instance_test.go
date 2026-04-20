@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"rsync-backup-service/internal/model"
 )
@@ -292,6 +293,50 @@ func TestListRecentLogicalBackupsByInstanceUsesLatestFinalResults(t *testing.T) 
 		if backup.ID == oldRetryRoot {
 			t.Fatalf("logical backups still include retry root %d instead of final retry result", oldRetryRoot)
 		}
+	}
+}
+
+func TestListRecentBackupExecutionStatusesByInstanceUsesAuditLogs(t *testing.T) {
+	db := newTestDB(t)
+
+	instance := &model.Instance{Name: "audit-window", SourceType: "local", SourcePath: "/srv/audit-window", Status: "idle"}
+	if err := db.CreateInstance(instance); err != nil {
+		t.Fatalf("CreateInstance() error = %v", err)
+	}
+
+	target := &model.BackupTarget{
+		Name:         "audit-window-target",
+		BackupType:   "rolling",
+		StorageType:  "local",
+		StoragePath:  "/backup/audit-window",
+		HealthStatus: "healthy",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	policyID := createStoreTestPolicy(t, db, instance.ID, target.ID, "audit-window-policy")
+	base := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	retryRoot := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('2026-04-07 12:00:00', '-1 minute')")
+	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, retryRoot, "success", 64, 32, "datetime('2026-04-07 12:00:00', '-30 seconds')")
+	insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('2026-04-07 12:00:00', '-2 minutes')")
+	insertStoreTestBackup(t, db, instance.ID, policyID, "success", 32, 16, "datetime('2026-04-07 12:00:00', '-3 minutes')")
+
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.complete", "'"+base.Add(-30*time.Second).UTC().Format("2006-01-02 15:04:05")+"'")
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.fail", "'"+base.Add(-2*time.Minute).UTC().Format("2006-01-02 15:04:05")+"'")
+	insertStoreTestBackupAudit(t, db, instance.ID, "backup.complete", "'"+base.Add(-3*time.Minute).UTC().Format("2006-01-02 15:04:05")+"'")
+
+	statuses, err := db.ListRecentBackupExecutionStatusesByInstance(instance.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentBackupExecutionStatusesByInstance() error = %v", err)
+	}
+
+	if len(statuses) != 3 {
+		t.Fatalf("len(statuses) = %d, want 3 final audit results", len(statuses))
+	}
+	if statuses[0] != "success" || statuses[1] != "failed" || statuses[2] != "success" {
+		t.Fatalf("statuses = %#v, want []string{\"success\", \"failed\", \"success\"}", statuses)
 	}
 }
 

@@ -69,6 +69,48 @@ func (db *DB) ListRecentBackupsByInstanceAllStatuses(instanceID int64, limit int
 	return backups, nil
 }
 
+func (db *DB) ListRecentBackupExecutionStatusesByInstance(instanceID int64, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+
+	rows, err := db.Query(
+		`SELECT action
+		 FROM audit_logs
+		 WHERE instance_id = ? AND action IN (?, ?)
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT ?`,
+		instanceID,
+		backupCompleteAction,
+		backupFailAction,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recent backup execution statuses for instance %d: %w", instanceID, err)
+	}
+	defer rows.Close()
+
+	statuses := make([]string, 0, limit)
+	for rows.Next() {
+		var action string
+		if err := rows.Scan(&action); err != nil {
+			return nil, fmt.Errorf("scan recent backup execution status for instance %d: %w", instanceID, err)
+		}
+
+		switch action {
+		case backupCompleteAction:
+			statuses = append(statuses, "success")
+		case backupFailAction:
+			statuses = append(statuses, "failed")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent backup execution statuses for instance %d: %w", instanceID, err)
+	}
+
+	return statuses, nil
+}
+
 func (db *DB) ListRecentLogicalBackupsByInstance(instanceID int64, limit int) ([]model.Backup, error) {
 	if limit <= 0 {
 		return []model.Backup{}, nil
