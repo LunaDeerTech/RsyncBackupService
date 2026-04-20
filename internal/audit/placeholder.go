@@ -24,6 +24,8 @@ const (
 	ActionBackupRetryExhausted     = "backup.retry_exhausted"
 	ActionBackupMoveRetry          = "backup.move_retry"
 	ActionBackupMoveRetryExhausted = "backup.move_retry_exhausted"
+	ActionHookCommandSuccess       = "hook.command_success"
+	ActionHookCommandFail          = "hook.command_fail"
 	ActionRestoreTrigger           = "restore.trigger"
 	ActionRestoreComplete          = "restore.complete"
 	ActionRestoreFail              = "restore.fail"

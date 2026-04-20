@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const latestSchemaVersion = 9
+const latestSchemaVersion = 10
 
 type DB struct {
 	*sql.DB
@@ -234,6 +234,13 @@ var migrations = []migration{
 		version: 9,
 		statements: []string{
 			`ALTER TABLE policies ADD COLUMN bandwidth_limit_kb INTEGER NOT NULL DEFAULT -1`,
+		},
+	},
+	{
+		version: 10,
+		statements: []string{
+			`ALTER TABLE policies ADD COLUMN pre_commands TEXT NOT NULL DEFAULT '[]'`,
+			`ALTER TABLE policies ADD COLUMN post_commands TEXT NOT NULL DEFAULT '[]'`,
 		},
 	},
 }

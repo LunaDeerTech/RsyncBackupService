@@ -18,23 +18,25 @@ import (
 const policyErrorNotFound = 40405
 
 type policyRequest struct {
-	InstanceID       *int64 `json:"instance_id,omitempty"`
-	Name             string `json:"name"`
-	Type             string `json:"type"`
-	TargetID         int64  `json:"target_id"`
-	ScheduleType     string `json:"schedule_type"`
-	ScheduleValue    string `json:"schedule_value"`
-	BandwidthLimitKB *int   `json:"bandwidth_limit_kb,omitempty"`
-	Enabled          bool   `json:"enabled"`
-	Compression      bool   `json:"compression"`
-	Encryption       bool   `json:"encryption"`
-	EncryptionKey    string `json:"encryption_key,omitempty"`
-	SplitEnabled     bool   `json:"split_enabled"`
-	SplitSizeMB      *int   `json:"split_size_mb,omitempty"`
-	RetryEnabled     *bool  `json:"retry_enabled,omitempty"`
-	RetryMaxRetries  *int   `json:"retry_max_retries,omitempty"`
-	RetentionType    string `json:"retention_type"`
-	RetentionValue   int    `json:"retention_value"`
+	InstanceID       *int64              `json:"instance_id,omitempty"`
+	Name             string              `json:"name"`
+	Type             string              `json:"type"`
+	TargetID         int64               `json:"target_id"`
+	ScheduleType     string              `json:"schedule_type"`
+	ScheduleValue    string              `json:"schedule_value"`
+	BandwidthLimitKB *int                `json:"bandwidth_limit_kb,omitempty"`
+	Enabled          bool                `json:"enabled"`
+	Compression      bool                `json:"compression"`
+	Encryption       bool                `json:"encryption"`
+	EncryptionKey    string              `json:"encryption_key,omitempty"`
+	SplitEnabled     bool                `json:"split_enabled"`
+	SplitSizeMB      *int                `json:"split_size_mb,omitempty"`
+	RetryEnabled     *bool               `json:"retry_enabled,omitempty"`
+	RetryMaxRetries  *int                `json:"retry_max_retries,omitempty"`
+	RetentionType    string              `json:"retention_type"`
+	RetentionValue   int                 `json:"retention_value"`
+	PreCommands      []model.HookCommand `json:"pre_commands,omitempty"`
+	PostCommands     []model.HookCommand `json:"post_commands,omitempty"`
 }
 
 type triggerPolicyRequest struct {
@@ -59,31 +61,35 @@ type policyInput struct {
 	RetryMaxRetries   int
 	RetentionType     string
 	RetentionValue    int
+	PreCommands       []model.HookCommand
+	PostCommands      []model.HookCommand
 }
 
 type policyResponse struct {
-	ID                  int64      `json:"id"`
-	InstanceID          int64      `json:"instance_id"`
-	Name                string     `json:"name"`
-	Type                string     `json:"type"`
-	TargetID            int64      `json:"target_id"`
-	ScheduleType        string     `json:"schedule_type"`
-	ScheduleValue       string     `json:"schedule_value"`
-	BandwidthLimitKB    int        `json:"bandwidth_limit_kb"`
-	Enabled             bool       `json:"enabled"`
-	Compression         bool       `json:"compression"`
-	Encryption          bool       `json:"encryption"`
-	SplitEnabled        bool       `json:"split_enabled"`
-	SplitSizeMB         *int       `json:"split_size_mb,omitempty"`
-	RetryEnabled        bool       `json:"retry_enabled"`
-	RetryMaxRetries     int        `json:"retry_max_retries"`
-	RetentionType       string     `json:"retention_type"`
-	RetentionValue      int        `json:"retention_value"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
-	LastExecutionTime   *time.Time `json:"last_execution_time,omitempty"`
-	LastExecutionStatus *string    `json:"last_execution_status,omitempty"`
-	LatestBackupID      *int64     `json:"latest_backup_id,omitempty"`
+	ID                  int64               `json:"id"`
+	InstanceID          int64               `json:"instance_id"`
+	Name                string              `json:"name"`
+	Type                string              `json:"type"`
+	TargetID            int64               `json:"target_id"`
+	ScheduleType        string              `json:"schedule_type"`
+	ScheduleValue       string              `json:"schedule_value"`
+	BandwidthLimitKB    int                 `json:"bandwidth_limit_kb"`
+	Enabled             bool                `json:"enabled"`
+	Compression         bool                `json:"compression"`
+	Encryption          bool                `json:"encryption"`
+	SplitEnabled        bool                `json:"split_enabled"`
+	SplitSizeMB         *int                `json:"split_size_mb,omitempty"`
+	RetryEnabled        bool                `json:"retry_enabled"`
+	RetryMaxRetries     int                 `json:"retry_max_retries"`
+	RetentionType       string              `json:"retention_type"`
+	RetentionValue      int                 `json:"retention_value"`
+	PreCommands         []model.HookCommand `json:"pre_commands"`
+	PostCommands        []model.HookCommand `json:"post_commands"`
+	CreatedAt           time.Time           `json:"created_at"`
+	UpdatedAt           time.Time           `json:"updated_at"`
+	LastExecutionTime   *time.Time          `json:"last_execution_time,omitempty"`
+	LastExecutionStatus *string             `json:"last_execution_status,omitempty"`
+	LatestBackupID      *int64              `json:"latest_backup_id,omitempty"`
 }
 
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +175,8 @@ func (h *Handler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		RetryMaxRetries:   input.RetryMaxRetries,
 		RetentionType:     input.RetentionType,
 		RetentionValue:    input.RetentionValue,
+		PreCommands:       input.PreCommands,
+		PostCommands:      input.PostCommands,
 	}
 	if err := h.db.CreatePolicy(policy); err != nil {
 		writePolicyError(w, err, "failed to create policy")
@@ -247,6 +255,8 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	current.RetryMaxRetries = input.RetryMaxRetries
 	current.RetentionType = input.RetentionType
 	current.RetentionValue = input.RetentionValue
+	current.PreCommands = input.PreCommands
+	current.PostCommands = input.PostCommands
 
 	if err := h.db.UpdatePolicy(current); err != nil {
 		writePolicyError(w, err, "failed to update policy")
@@ -482,6 +492,9 @@ func (h *Handler) normalizePolicyInput(instanceID int64, request policyRequest, 
 		retryMaxRetries = 0
 	}
 
+	preCommands := normalizeHookCommands(request.PreCommands)
+	postCommands := normalizeHookCommands(request.PostCommands)
+
 	input := policyInput{
 		InstanceID:       instanceID,
 		Name:             name,
@@ -495,6 +508,8 @@ func (h *Handler) normalizePolicyInput(instanceID int64, request policyRequest, 
 		RetryMaxRetries:  retryMaxRetries,
 		RetentionType:    retentionType,
 		RetentionValue:   request.RetentionValue,
+		PreCommands:      preCommands,
+		PostCommands:     postCommands,
 	}
 
 	if policyType == "rolling" {
@@ -568,6 +583,8 @@ func buildPolicyResponse(policy model.Policy, summary model.PolicyExecutionSumma
 		RetryMaxRetries:     policy.RetryMaxRetries,
 		RetentionType:       policy.RetentionType,
 		RetentionValue:      policy.RetentionValue,
+		PreCommands:         policy.PreCommands,
+		PostCommands:        policy.PostCommands,
 		CreatedAt:           policy.CreatedAt,
 		UpdatedAt:           policy.UpdatedAt,
 		LastExecutionTime:   cloneOptionalTime(summary.LastExecutionTime),
@@ -730,4 +747,26 @@ func cloneOptionalTime(value *time.Time) *time.Time {
 
 	cloned := *value
 	return &cloned
+}
+
+func normalizeHookCommands(cmds []model.HookCommand) []model.HookCommand {
+	if len(cmds) == 0 {
+		return []model.HookCommand{}
+	}
+	result := make([]model.HookCommand, 0, len(cmds))
+	for _, cmd := range cmds {
+		command := strings.TrimSpace(cmd.Command)
+		if command == "" {
+			continue
+		}
+		location := strings.TrimSpace(cmd.Location)
+		if location == "" {
+			location = "local"
+		}
+		result = append(result, model.HookCommand{
+			Location: location,
+			Command:  command,
+		})
+	}
+	return result
 }

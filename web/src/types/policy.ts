@@ -1,3 +1,8 @@
+export interface HookCommand {
+  location: string
+  command: string
+}
+
 export interface Policy {
   id: number
   instance_id: number
@@ -16,6 +21,8 @@ export interface Policy {
   retry_max_retries: number
   retention_type: 'time' | 'count'
   retention_value: number
+  pre_commands: HookCommand[]
+  post_commands: HookCommand[]
   created_at: string
   updated_at: string
   last_execution_time?: string
@@ -40,6 +47,8 @@ export interface CreatePolicyRequest {
   retry_max_retries: number
   retention_type: 'time' | 'count'
   retention_value: number
+  pre_commands: HookCommand[]
+  post_commands: HookCommand[]
 }
 
 export interface UpdatePolicyRequest extends CreatePolicyRequest {}

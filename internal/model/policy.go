@@ -2,27 +2,35 @@ package model
 
 import "time"
 
+// HookCommand represents a command to be executed before or after a backup.
+type HookCommand struct {
+	Location string `json:"location"` // "local" or remote config ID as string
+	Command  string `json:"command"`
+}
+
 type Policy struct {
-	ID                int64     `json:"id"`
-	InstanceID        int64     `json:"instance_id"`
-	Name              string    `json:"name"`
-	Type              string    `json:"type"`
-	TargetID          int64     `json:"target_id"`
-	ScheduleType      string    `json:"schedule_type"`
-	ScheduleValue     string    `json:"schedule_value"`
-	BandwidthLimitKB  int       `json:"bandwidth_limit_kb"`
-	Enabled           bool      `json:"enabled"`
-	Compression       bool      `json:"compression"`
-	Encryption        bool      `json:"encryption"`
-	EncryptionKeyHash *string   `json:"-"`
-	SplitEnabled      bool      `json:"split_enabled"`
-	SplitSizeMB       *int      `json:"split_size_mb,omitempty"`
-	RetryEnabled      bool      `json:"retry_enabled"`
-	RetryMaxRetries   int       `json:"retry_max_retries"`
-	RetentionType     string    `json:"retention_type"`
-	RetentionValue    int       `json:"retention_value"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                int64         `json:"id"`
+	InstanceID        int64         `json:"instance_id"`
+	Name              string        `json:"name"`
+	Type              string        `json:"type"`
+	TargetID          int64         `json:"target_id"`
+	ScheduleType      string        `json:"schedule_type"`
+	ScheduleValue     string        `json:"schedule_value"`
+	BandwidthLimitKB  int           `json:"bandwidth_limit_kb"`
+	Enabled           bool          `json:"enabled"`
+	Compression       bool          `json:"compression"`
+	Encryption        bool          `json:"encryption"`
+	EncryptionKeyHash *string       `json:"-"`
+	SplitEnabled      bool          `json:"split_enabled"`
+	SplitSizeMB       *int          `json:"split_size_mb,omitempty"`
+	RetryEnabled      bool          `json:"retry_enabled"`
+	RetryMaxRetries   int           `json:"retry_max_retries"`
+	RetentionType     string        `json:"retention_type"`
+	RetentionValue    int           `json:"retention_value"`
+	PreCommands       []HookCommand `json:"pre_commands"`
+	PostCommands      []HookCommand `json:"post_commands"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 type PolicyExecutionSummary struct {

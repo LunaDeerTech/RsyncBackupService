@@ -30,6 +30,8 @@ export const actionLabels: Record<string, string> = {
   'risk.create': '风险检测',
   'risk.escalate': '风险升级',
   'risk.resolve': '风险解决',
+  'hook.command_success': '钩子命令成功',
+  'hook.command_fail': '钩子命令失败',
 }
 
 export function getActionLabel(action: string): string {
@@ -37,12 +39,12 @@ export function getActionLabel(action: string): string {
 }
 
 export function getActionBadgeVariant(action: string): 'success' | 'warning' | 'error' | 'info' | 'default' {
-  if (action.endsWith('.fail') || action === 'backup.cleanup_failed') return 'error'
+  if (action.endsWith('.fail') || action === 'backup.cleanup_failed' || action === 'hook.command_fail') return 'error'
   if (action === 'backup.move_retry_exhausted') return 'error'
   if (action === 'risk.create' || action === 'risk.escalate') return 'error'
   if (action === 'backup.retry' || action === 'backup.retry_exhausted' || action === 'backup.move_retry') return 'warning'
   if (action.endsWith('.delete')) return 'warning'
-  if (action.endsWith('.complete') || action === 'risk.resolve') return 'success'
+  if (action.endsWith('.complete') || action === 'risk.resolve' || action === 'hook.command_success') return 'success'
   if (action.endsWith('.create') || action.endsWith('.trigger')) return 'info'
   return 'default'
 }
@@ -179,6 +181,13 @@ export function formatAuditDetail(action: string, detail: Record<string, any>): 
     if (detail.host) parts.push(fmt('主机', detail.host))
     if (detail.port) parts.push(fmt('端口', detail.port))
     if (detail.username) parts.push(fmt('用户名', detail.username))
+  } else if (action.startsWith('hook.')) {
+    const phaseLabels: Record<string, string> = { pre: '前置', post: '后置' }
+    if (detail.phase) parts.push(fmt('阶段', phaseLabels[detail.phase] ?? detail.phase))
+    if (detail.index) parts.push(fmt('序号', `#${detail.index}`))
+    if (detail.location) parts.push(fmt('位置', detail.location === 'local' ? '本地' : `远程 (#${detail.location})`))
+    if (detail.command) parts.push(fmt('命令', detail.command))
+    if (detail.error) parts.push(fmt('错误', detail.error))
   } else if (action.startsWith('risk.')) {
     if (detail.message) parts.push(detail.message)
     if (detail.source) parts.push(fmt('来源', riskSourceLabels[detail.source] ?? detail.source))

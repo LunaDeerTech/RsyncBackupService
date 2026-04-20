@@ -197,6 +197,14 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 	}()
 
 	var runErr error
+	isBackupTask := loadedTask.Type == "rolling" || loadedTask.Type == "cold"
+
+	if isBackupTask && policy != nil && len(policy.PreCommands) > 0 {
+		if err := executeHookCommands(runCtx, policy.PreCommands, wp.db, wp.audit, "pre", loadedTask.InstanceID, loadedTask.ID); err != nil {
+			return wp.failTask(loadedTask, backup, fmt.Errorf("pre-command: %w", err))
+		}
+	}
+
 	switch loadedTask.Type {
 	case "rolling":
 		if wp.rolling == nil {
@@ -247,6 +255,13 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 		return runErr
 	}
 	wp.cleanupRetryState(backup)
+
+	if isBackupTask && policy != nil && len(policy.PostCommands) > 0 {
+		if err := executeHookCommands(runCtx, policy.PostCommands, wp.db, wp.audit, "post", loadedTask.InstanceID, loadedTask.ID); err != nil {
+			slog.Error("post-command failed", "task_id", loadedTask.ID, "error", err)
+		}
+	}
+
 	if wp.retention != nil && taskUsesManagedBackup(loadedTask) {
 		if err := wp.retention.CleanByPolicy(runCtx, policy); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("retention cleanup after backup failed", "task_id", loadedTask.ID, "policy_id", policy.ID, "error", err)

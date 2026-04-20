@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 )
 
 const (
-	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at`
+	policyColumns = `id, instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, pre_commands, post_commands, created_at, updated_at`
 	taskColumns   = `id, instance_id, backup_id, type, restore_type, target_path, remote_config_id, status, progress, current_step, started_at, completed_at, estimated_end, error_message, created_at`
 )
 
@@ -29,9 +30,18 @@ func (db *DB) CreatePolicy(policy *model.Policy) error {
 
 	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
 
+	preCommandsJSON, err := marshalHookCommands(policy.PreCommands)
+	if err != nil {
+		return fmt.Errorf("marshal pre_commands: %w", err)
+	}
+	postCommandsJSON, err := marshalHookCommands(policy.PostCommands)
+	if err != nil {
+		return fmt.Errorf("marshal post_commands: %w", err)
+	}
+
 	result, err := db.Exec(
-		`INSERT INTO policies (instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO policies (instance_id, name, type, target_id, schedule_type, schedule_value, bandwidth_limit_kb, enabled, compression, encryption, encryption_key_hash, split_enabled, split_size_mb, retry_enabled, retry_max_retries, retention_type, retention_value, pre_commands, post_commands, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		policy.InstanceID,
 		policy.Name,
 		policy.Type,
@@ -49,6 +59,8 @@ func (db *DB) CreatePolicy(policy *model.Policy) error {
 		policy.RetryMaxRetries,
 		policy.RetentionType,
 		policy.RetentionValue,
+		preCommandsJSON,
+		postCommandsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("create policy: %w", err)
@@ -107,9 +119,18 @@ func (db *DB) UpdatePolicy(policy *model.Policy) error {
 
 	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
 
+	preCommandsJSON, err := marshalHookCommands(policy.PreCommands)
+	if err != nil {
+		return fmt.Errorf("marshal pre_commands: %w", err)
+	}
+	postCommandsJSON, err := marshalHookCommands(policy.PostCommands)
+	if err != nil {
+		return fmt.Errorf("marshal post_commands: %w", err)
+	}
+
 	result, err := db.Exec(
 		`UPDATE policies
-		 SET name = ?, type = ?, target_id = ?, schedule_type = ?, schedule_value = ?, bandwidth_limit_kb = ?, enabled = ?, compression = ?, encryption = ?, encryption_key_hash = ?, split_enabled = ?, split_size_mb = ?, retry_enabled = ?, retry_max_retries = ?, retention_type = ?, retention_value = ?, updated_at = CURRENT_TIMESTAMP
+		 SET name = ?, type = ?, target_id = ?, schedule_type = ?, schedule_value = ?, bandwidth_limit_kb = ?, enabled = ?, compression = ?, encryption = ?, encryption_key_hash = ?, split_enabled = ?, split_size_mb = ?, retry_enabled = ?, retry_max_retries = ?, retention_type = ?, retention_value = ?, pre_commands = ?, post_commands = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		policy.Name,
 		policy.Type,
@@ -127,6 +148,8 @@ func (db *DB) UpdatePolicy(policy *model.Policy) error {
 		policy.RetryMaxRetries,
 		policy.RetentionType,
 		policy.RetentionValue,
+		preCommandsJSON,
+		postCommandsJSON,
 		policy.ID,
 	)
 	if err != nil {
@@ -856,6 +879,8 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 		policy            model.Policy
 		encryptionKeyHash sql.NullString
 		splitSizeMB       sql.NullInt64
+		rawPreCommands    string
+		rawPostCommands   string
 		rawCreated        string
 		rawUpdated        string
 	)
@@ -879,6 +904,8 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 		&policy.RetryMaxRetries,
 		&policy.RetentionType,
 		&policy.RetentionValue,
+		&rawPreCommands,
+		&rawPostCommands,
 		&rawCreated,
 		&rawUpdated,
 	); err != nil {
@@ -904,6 +931,8 @@ func scanPolicy(scanner policyScanner) (*model.Policy, error) {
 		policy.SplitSizeMB = &value
 	}
 	policy.BandwidthLimitKB = normalizePolicyBandwidthLimit(policy.BandwidthLimitKB)
+	policy.PreCommands = unmarshalHookCommands(rawPreCommands)
+	policy.PostCommands = unmarshalHookCommands(rawPostCommands)
 
 	return &policy, nil
 }
@@ -913,6 +942,28 @@ func normalizePolicyBandwidthLimit(value int) int {
 		return -1
 	}
 	return value
+}
+
+func marshalHookCommands(cmds []model.HookCommand) (string, error) {
+	if len(cmds) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(cmds)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func unmarshalHookCommands(raw string) []model.HookCommand {
+	if raw == "" || raw == "[]" {
+		return []model.HookCommand{}
+	}
+	var cmds []model.HookCommand
+	if err := json.Unmarshal([]byte(raw), &cmds); err != nil {
+		return []model.HookCommand{}
+	}
+	return cmds
 }
 
 func scanTask(scanner taskScanner) (*model.Task, error) {

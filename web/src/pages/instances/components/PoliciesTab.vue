@@ -2,6 +2,7 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { listPolicies, createPolicy, updatePolicy, deletePolicy, triggerPolicy } from '../../../api/policies'
 import { listTargets } from '../../../api/targets'
+import { listRemotes } from '../../../api/remotes'
 import { useAuthStore } from '../../../stores/auth'
 import { useToastStore } from '../../../stores/toast'
 import { useConfirm } from '../../../composables/useConfirm'
@@ -15,8 +16,11 @@ import {
 } from '../../../utils/status-config'
 import type { Policy, CreatePolicyRequest, UpdatePolicyRequest } from '../../../types/policy'
 import type { BackupTarget } from '../../../types/target'
+import type { RemoteConfig } from '../../../types/remote'
 import type { TableColumn } from '../../../components/AppTable.vue'
+import type { TabItem } from '../../../components/AppTabs.vue'
 import AppTable from '../../../components/AppTable.vue'
+import AppTabs from '../../../components/AppTabs.vue'
 import AppModal from '../../../components/AppModal.vue'
 import AppFormGroup from '../../../components/AppFormGroup.vue'
 import AppFormItem from '../../../components/AppFormItem.vue'
@@ -26,7 +30,7 @@ import AppButton from '../../../components/AppButton.vue'
 import AppSwitch from '../../../components/AppSwitch.vue'
 import ListViewToggle from '../../../components/ListViewToggle.vue'
 import StatusBadge from '../../../components/StatusBadge.vue'
-import { Play, Plus, Pencil, Trash2 } from 'lucide-vue-next'
+import { Play, Plus, Pencil, Trash2, GripVertical, X } from 'lucide-vue-next'
 
 const props = defineProps<{
   instanceId: number
@@ -45,7 +49,26 @@ const policyEditing = ref(false)
 const policyEditingId = ref<number | null>(null)
 const policySubmitting = ref(false)
 const targets = ref<BackupTarget[]>([])
+const remotes = ref<RemoteConfig[]>([])
 
+// ── Modal tab state ──
+const modalActiveTab = ref('basic')
+const modalTabs: TabItem[] = [
+  { key: 'basic', label: '基本' },
+  { key: 'advanced', label: '高级' },
+  { key: 'commands', label: '前后命令' },
+]
+
+// ── Command types ──
+interface HookCommand {
+  id: number
+  location: string   // 'local' or remote config id as string
+  command: string
+}
+let hookCommandIdCounter = 0
+const preCommands = ref<HookCommand[]>([])
+const postCommands = ref<HookCommand[]>([])
+const dragState = ref<{ list: 'pre' | 'post'; index: number } | null>(null)
 const inferredPolicyViewMode: ListViewMode = typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'list'
 listViewPreferenceStore.initializeViewMode(SHARED_LIST_VIEW_PREFERENCE_KEY, inferredPolicyViewMode)
 
@@ -80,6 +103,18 @@ const retentionTypeOptions = [
   { label: '按时间（天）', value: 'time' },
   { label: '按数量（条）', value: 'count' },
 ]
+
+const commandLocationOptions = computed(() => {
+  const opts: { label: string; value: string }[] = [
+    { label: '本地', value: 'local' },
+  ]
+  for (const r of remotes.value) {
+    if (r.type === 'ssh') {
+      opts.push({ label: r.name, value: String(r.id) })
+    }
+  }
+  return opts
+})
 
 // ── Form ──
 const policyForm = reactive({
@@ -158,6 +193,49 @@ function resetPolicyForm() {
   policyForm.retention_type = 'count'
   policyForm.retention_value = 7
   Object.keys(policyErrors).forEach((k) => (policyErrors as Record<string, string>)[k] = '')
+  preCommands.value = []
+  postCommands.value = []
+  modalActiveTab.value = 'basic'
+}
+
+// ── Command helpers ──
+function addCommand(list: 'pre' | 'post') {
+  const cmd: HookCommand = { id: ++hookCommandIdCounter, location: 'local', command: '' }
+  if (list === 'pre') preCommands.value.push(cmd)
+  else postCommands.value.push(cmd)
+}
+
+function removeCommand(list: 'pre' | 'post', index: number) {
+  if (list === 'pre') preCommands.value.splice(index, 1)
+  else postCommands.value.splice(index, 1)
+}
+
+function onDragStart(list: 'pre' | 'post', index: number, e: DragEvent) {
+  dragState.value = { list, index }
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', '')
+  }
+}
+
+function onDragOver(list: 'pre' | 'post', _index: number, e: DragEvent) {
+  if (!dragState.value || dragState.value.list !== list) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+function onDrop(list: 'pre' | 'post', index: number, e: DragEvent) {
+  e.preventDefault()
+  if (!dragState.value || dragState.value.list !== list) return
+  const fromIndex = dragState.value.index
+  const arr = list === 'pre' ? preCommands.value : postCommands.value
+  const [item] = arr.splice(fromIndex, 1)
+  arr.splice(index, 0, item)
+  dragState.value = null
+}
+
+function onDragEnd() {
+  dragState.value = null
 }
 
 function openCreatePolicy() {
@@ -165,6 +243,7 @@ function openCreatePolicy() {
   policyEditing.value = false
   policyEditingId.value = null
   policyModalVisible.value = true
+  fetchRemotes()
 }
 
 function openEditPolicy(row: Record<string, unknown>) {
@@ -214,7 +293,17 @@ function openEditPolicy(row: Record<string, unknown>) {
   policyForm.retry_max_retries = row.retry_max_retries as number ?? 3
   policyForm.retention_type = row.retention_type as 'time' | 'count'
   policyForm.retention_value = row.retention_value as number
+  // Load hook commands
+  const rawPre = row.pre_commands as Array<{ location: string; command: string }> | undefined
+  const rawPost = row.post_commands as Array<{ location: string; command: string }> | undefined
+  if (rawPre && rawPre.length) {
+    preCommands.value = rawPre.map(c => ({ id: ++hookCommandIdCounter, location: c.location, command: c.command }))
+  }
+  if (rawPost && rawPost.length) {
+    postCommands.value = rawPost.map(c => ({ id: ++hookCommandIdCounter, location: c.location, command: c.command }))
+  }
   policyModalVisible.value = true
+  fetchRemotes()
 }
 
 // Reset target when policy type changes
@@ -314,6 +403,8 @@ async function handlePolicySubmit() {
       retry_max_retries: policyForm.retry_enabled ? policyForm.retry_max_retries : 0,
       retention_type: policyForm.retention_type,
       retention_value: policyForm.retention_value,
+      pre_commands: preCommands.value.map(c => ({ location: c.location, command: c.command })),
+      post_commands: postCommands.value.map(c => ({ location: c.location, command: c.command })),
     }
 
     if (policyEditing.value && policyEditingId.value !== null) {
@@ -388,6 +479,8 @@ async function handleTogglePolicy(row: Record<string, unknown>, enabled: boolean
       retry_max_retries: row.retry_max_retries as number ?? 3,
       retention_type: row.retention_type as 'time' | 'count',
       retention_value: row.retention_value as number,
+      pre_commands: (row.pre_commands as Array<{ location: string; command: string }>) ?? [],
+      post_commands: (row.post_commands as Array<{ location: string; command: string }>) ?? [],
     }
     await updatePolicy(props.instanceId, row.id as number, data)
     await fetchPolicies()
@@ -414,6 +507,15 @@ async function fetchTargets() {
   try {
     const res = await listTargets({ page: 1, page_size: 200 })
     targets.value = res.items ?? []
+  } catch {
+    // silent
+  }
+}
+
+async function fetchRemotes() {
+  try {
+    const res = await listRemotes({ page: 1, page_size: 200 })
+    remotes.value = res.items ?? []
   } catch {
     // silent
   }
@@ -548,123 +650,201 @@ defineExpose({ refresh })
   <!-- Policy Create/Edit Modal -->
   <AppModal v-model:visible="policyModalVisible" :title="policyEditing ? '编辑策略' : '新增策略'" width="720px">
     <form @submit.prevent="handlePolicySubmit">
-      <div class="policy-modal-grid">
-        <!-- Left column: Basic config -->
-        <div class="policy-modal-col">
-          <div class="form-divider">基本配置</div>
-          <AppFormGroup>
-            <AppFormItem label="策略名称" :required="true" :error="policyErrors.name">
-              <AppInput v-model="policyForm.name" placeholder="例如：每日滚动备份" />
-            </AppFormItem>
-
-            <AppFormItem label="类型" :required="true">
-              <AppSelect v-model="policyForm.type" :options="policyTypeOptions" :disabled="policyEditing" />
-            </AppFormItem>
-
-            <AppFormItem label="目标" :required="true" :error="policyErrors.target_id">
-              <AppSelect v-model="policyForm.target_id" :options="filteredTargetOptions" placeholder="请选择备份目标" />
-            </AppFormItem>
-
-            <AppFormItem label="调度周期" :required="true">
-              <AppSelect v-model="policyForm.schedule_mode" :options="scheduleOptions" />
-            </AppFormItem>
-
-            <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true"
-              :error="policyErrors.schedule_input">
-              <div class="schedule-interval-row">
-                <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
-                <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
-              </div>
-            </AppFormItem>
-
-            <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true"
-              :error="policyErrors.schedule_input">
-              <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
-            </AppFormItem>
-
-            <AppFormItem label="启用">
-              <AppSwitch v-model="policyForm.enabled" />
-            </AppFormItem>
-          </AppFormGroup>
-        </div>
-
-        <!-- Right column: Retention, retry, and cold options -->
-        <div class="policy-modal-col">
-          <div class="form-divider">执行策略</div>
-          <AppFormGroup>
-            <AppFormItem label="保留策略" :required="true">
-              <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
-            </AppFormItem>
-
-            <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true"
-              :error="policyErrors.retention_value">
-              <AppInput v-model="policyForm.retention_value" type="number"
-                :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
-            </AppFormItem>
-
-            <AppFormItem label="失败自动重试">
-              <AppSwitch v-model="policyForm.retry_enabled" />
-            </AppFormItem>
-
-            <AppFormItem v-if="policyForm.retry_enabled" label="最大重试次数" :required="true"
-              :error="policyErrors.retry_max_retries">
-              <AppInput v-model="policyForm.retry_max_retries" type="number" placeholder="1-10，默认 3" />
-            </AppFormItem>
-
-            <p v-if="policyForm.retry_enabled" class="policy-modal-hint">
-              失败后依次等待 5s、10s、15s… 再自动重试，重试不阻塞其他任务。
-            </p>
-
-            
-            <AppFormItem label="源端限流 (KB/s)" :error="policyErrors.bandwidth_limit_kb">
-              <AppInput v-model="policyForm.bandwidth_limit_kb" type="number" placeholder="-1 表示不限速" />
-            </AppFormItem>
-
-            <p class="policy-modal-hint">
-              仅在从源端 SSH 拉取到本机时生效，输入 -1 表示不限制。
-            </p>
-          </AppFormGroup>
-
-        </div>
-      </div>
-
-      <template v-if="policyForm.type === 'cold'">
-        <div class="policy-modal-section policy-modal-section--full">
-          <div class="form-divider">冷备份选项</div>
-          <div class="policy-modal-grid policy-modal-grid--nested">
+      <AppTabs :tabs="modalTabs" :active-key="modalActiveTab" @update:active-key="modalActiveTab = $event">
+        <!-- Tab 1: 基本 -->
+        <template #tab-basic>
+          <div class="policy-modal-grid">
             <div class="policy-modal-col">
               <AppFormGroup>
-                <AppFormItem label="压缩">
-                  <AppSwitch v-model="policyForm.compression" />
+                <AppFormItem label="策略名称" :required="true" :error="policyErrors.name">
+                  <AppInput v-model="policyForm.name" placeholder="例如：每日滚动备份" />
                 </AppFormItem>
 
-                <AppFormItem label="加密">
-                  <AppSwitch v-model="policyForm.encryption" />
+                <AppFormItem label="类型" :required="true">
+                  <AppSelect v-model="policyForm.type" :options="policyTypeOptions" :disabled="policyEditing" />
                 </AppFormItem>
 
-                <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
-                  :error="policyErrors.encryption_key">
-                  <AppInput v-model="policyForm.encryption_key" type="password"
-                    :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
+                <AppFormItem label="目标" :required="true" :error="policyErrors.target_id">
+                  <AppSelect v-model="policyForm.target_id" :options="filteredTargetOptions" placeholder="请选择备份目标" />
+                </AppFormItem>
+
+                <AppFormItem label="调度周期" :required="true">
+                  <AppSelect v-model="policyForm.schedule_mode" :options="scheduleOptions" />
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.schedule_mode === 'interval'" label="执行间隔" :required="true"
+                  :error="policyErrors.schedule_input">
+                  <div class="schedule-interval-row">
+                    <AppInput v-model="policyForm.interval_value" type="number" placeholder="数值" />
+                    <AppSelect v-model="policyForm.interval_unit" :options="intervalUnitOptions" />
+                  </div>
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.schedule_mode === 'cron_custom'" label="Cron 表达式" :required="true"
+                  :error="policyErrors.schedule_input">
+                  <AppInput v-model="policyForm.schedule_input" placeholder="分 时 日 月 周，如 0 2 * * *" />
                 </AppFormItem>
               </AppFormGroup>
             </div>
 
             <div class="policy-modal-col">
               <AppFormGroup>
-                <AppFormItem label="分卷">
-                  <AppSwitch v-model="policyForm.split_enabled" />
+                <AppFormItem label="保留策略" :required="true">
+                  <AppSelect v-model="policyForm.retention_type" :options="retentionTypeOptions" />
                 </AppFormItem>
 
-                <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
-                  :error="policyErrors.split_size_mb">
-                  <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
+                <AppFormItem :label="policyForm.retention_type === 'time' ? '保留天数' : '保留条数'" :required="true"
+                  :error="policyErrors.retention_value">
+                  <AppInput v-model="policyForm.retention_value" type="number"
+                    :placeholder="policyForm.retention_type === 'time' ? '天数' : '条数'" />
+                </AppFormItem>
+
+                <AppFormItem label="启用">
+                  <AppSwitch v-model="policyForm.enabled" />
                 </AppFormItem>
               </AppFormGroup>
             </div>
           </div>
-        </div>
-      </template>
+        </template>
+
+        <!-- Tab 2: 高级 -->
+        <template #tab-advanced>
+          <div class="policy-modal-grid">
+            <div class="policy-modal-col">
+              <AppFormGroup>
+                <AppFormItem label="失败自动重试">
+                  <AppSwitch v-model="policyForm.retry_enabled" />
+                </AppFormItem>
+
+                <AppFormItem v-if="policyForm.retry_enabled" label="最大重试次数" :required="true"
+                  :error="policyErrors.retry_max_retries">
+                  <AppInput v-model="policyForm.retry_max_retries" type="number" placeholder="1-10，默认 3" />
+                </AppFormItem>
+
+                <p v-if="policyForm.retry_enabled" class="policy-modal-hint">
+                  失败后依次等待 5s、10s、15s… 再自动重试，重试不阻塞其他任务。
+                </p>
+
+                <AppFormItem label="源端限流 (KB/s)" :error="policyErrors.bandwidth_limit_kb">
+                  <AppInput v-model="policyForm.bandwidth_limit_kb" type="number" placeholder="-1 表示不限速" />
+                </AppFormItem>
+
+                <p class="policy-modal-hint">
+                  仅在从源端 SSH 拉取到本机时生效，输入 -1 表示不限制。
+                </p>
+              </AppFormGroup>
+            </div>
+
+            <div class="policy-modal-col">
+              <template v-if="policyForm.type === 'cold'">
+                <div class="form-divider" style="margin-top: 0; border-top: none; padding-top: 0;">冷备份选项</div>
+                <AppFormGroup>
+                  <AppFormItem label="压缩">
+                    <AppSwitch v-model="policyForm.compression" />
+                  </AppFormItem>
+
+                  <AppFormItem label="加密">
+                    <AppSwitch v-model="policyForm.encryption" />
+                  </AppFormItem>
+
+                  <AppFormItem v-if="policyForm.encryption" label="加密密钥" :required="!policyEditing"
+                    :error="policyErrors.encryption_key">
+                    <AppInput v-model="policyForm.encryption_key" type="password"
+                      :placeholder="policyEditing ? '留空保持不变' : '请输入加密密钥'" />
+                  </AppFormItem>
+
+                  <AppFormItem label="分卷">
+                    <AppSwitch v-model="policyForm.split_enabled" />
+                  </AppFormItem>
+
+                  <AppFormItem v-if="policyForm.split_enabled" label="分卷大小 (MB)" :required="true"
+                    :error="policyErrors.split_size_mb">
+                    <AppInput v-model="policyForm.split_size_mb" type="number" placeholder="如 1024" />
+                  </AppFormItem>
+                </AppFormGroup>
+              </template>
+              <div v-else class="policy-modal-empty-hint">
+                当前为滚动备份模式，无额外高级选项。
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Tab 3: 前后命令 -->
+        <template #tab-commands>
+          <div class="hook-commands-section">
+            <!-- Pre-backup commands -->
+            <div class="hook-commands-block">
+              <div class="hook-commands-label">备份前执行命令</div>
+              <div class="hook-commands-list">
+                <div
+                  v-for="(cmd, idx) in preCommands"
+                  :key="cmd.id"
+                  class="hook-command-row"
+                  :class="{ 'hook-command-row--dragging': dragState?.list === 'pre' && dragState.index === idx }"
+                  draggable="true"
+                  @dragstart="onDragStart('pre', idx, $event)"
+                  @dragover="onDragOver('pre', idx, $event)"
+                  @drop="onDrop('pre', idx, $event)"
+                  @dragend="onDragEnd"
+                >
+                  <div class="hook-command-grip" title="拖拽排序">
+                    <GripVertical :size="16" />
+                  </div>
+                  <div class="hook-command-location">
+                    <AppSelect v-model="cmd.location" :options="commandLocationOptions" />
+                  </div>
+                  <div class="hook-command-input">
+                    <AppInput v-model="cmd.command" placeholder="输入要执行的命令" />
+                  </div>
+                  <button type="button" class="hook-command-remove" @click="removeCommand('pre', idx)" title="删除">
+                    <X :size="14" />
+                  </button>
+                </div>
+                <button type="button" class="hook-command-add" @click="addCommand('pre')">
+                  <Plus :size="14" />
+                  <span>添加命令</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Post-backup commands -->
+            <div class="hook-commands-block">
+              <div class="hook-commands-label">备份后执行命令</div>
+              <div class="hook-commands-list">
+                <div
+                  v-for="(cmd, idx) in postCommands"
+                  :key="cmd.id"
+                  class="hook-command-row"
+                  :class="{ 'hook-command-row--dragging': dragState?.list === 'post' && dragState.index === idx }"
+                  draggable="true"
+                  @dragstart="onDragStart('post', idx, $event)"
+                  @dragover="onDragOver('post', idx, $event)"
+                  @drop="onDrop('post', idx, $event)"
+                  @dragend="onDragEnd"
+                >
+                  <div class="hook-command-grip" title="拖拽排序">
+                    <GripVertical :size="16" />
+                  </div>
+                  <div class="hook-command-location">
+                    <AppSelect v-model="cmd.location" :options="commandLocationOptions" />
+                  </div>
+                  <div class="hook-command-input">
+                    <AppInput v-model="cmd.command" placeholder="输入要执行的命令" />
+                  </div>
+                  <button type="button" class="hook-command-remove" @click="removeCommand('post', idx)" title="删除">
+                    <X :size="14" />
+                  </button>
+                </div>
+                <button type="button" class="hook-command-add" @click="addCommand('post')">
+                  <Plus :size="14" />
+                  <span>添加命令</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </AppTabs>
     </form>
 
     <template #footer>
@@ -838,25 +1018,6 @@ defineExpose({ refresh })
   flex-shrink: 0;
 }
 
-/* Policy modal two-column layout */
-.policy-modal-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 24px;
-}
-
-.policy-modal-grid--nested {
-  margin-top: 8px;
-}
-
-.policy-modal-col {
-  min-width: 0;
-}
-
-.policy-modal-section--full {
-  margin-top: 8px;
-}
-
 .policy-modal-hint {
   font-size: var(--font-size-xs, 12px);
   color: var(--text-muted);
@@ -864,10 +1025,136 @@ defineExpose({ refresh })
   line-height: 1.5;
 }
 
+/* Policy modal two-column layout */
+.policy-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+}
+
+.policy-modal-col {
+  min-width: 0;
+}
+
+.policy-modal-empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
 @media (max-width: 680px) {
   .policy-modal-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Hook commands (Tab 3) ── */
+.hook-commands-section {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.hook-commands-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hook-commands-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.hook-commands-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hook-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  transition: box-shadow var(--transition-fast), opacity var(--transition-fast);
+}
+
+.hook-command-row--dragging {
+  opacity: 0.5;
+}
+
+.hook-command-row:hover {
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.hook-command-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  padding: 2px;
+}
+
+.hook-command-grip:active {
+  cursor: grabbing;
+}
+
+.hook-command-location {
+  flex-shrink: 0;
+  width: 130px;
+}
+
+.hook-command-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.hook-command-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.hook-command-remove:hover {
+  background: color-mix(in srgb, var(--error-500) 12%, transparent);
+  color: var(--error-500);
+}
+
+.hook-command-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border: 2px dashed var(--border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.hook-command-add:hover {
+  border-color: var(--primary-500);
+  color: var(--primary-500);
+  background: color-mix(in srgb, var(--primary-500) 5%, transparent);
 }
 
 @media (max-width: 767px) {
