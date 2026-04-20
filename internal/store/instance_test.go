@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"rsync-backup-service/internal/model"
@@ -235,6 +236,62 @@ func TestCountConsecutiveFailuresIgnoresIntermediateRetryFailures(t *testing.T) 
 	}
 	if failures != 1 {
 		t.Fatalf("CountConsecutiveFailures() = %d, want %d", failures, 1)
+	}
+}
+
+func TestListRecentLogicalBackupsByInstanceUsesLatestFinalResults(t *testing.T) {
+	db := newTestDB(t)
+
+	instance := &model.Instance{Name: "logical-window", SourceType: "local", SourcePath: "/srv/logical-window", Status: "idle"}
+	if err := db.CreateInstance(instance); err != nil {
+		t.Fatalf("CreateInstance() error = %v", err)
+	}
+
+	target := &model.BackupTarget{
+		Name:         "logical-window-target",
+		BackupType:   "rolling",
+		StorageType:  "local",
+		StoragePath:  "/backup/logical-window",
+		HealthStatus: "healthy",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	policyID := createStoreTestPolicy(t, db, instance.ID, target.ID, "logical-window-policy")
+	for minute := 0; minute < 10; minute++ {
+		status := "success"
+		if minute >= 8 {
+			status = "failed"
+		}
+		insertStoreTestBackup(t, db, instance.ID, policyID, status, 32, 16, "datetime('2026-04-07 12:00:00', '-"+strconv.Itoa(minute)+" minutes')")
+	}
+
+	oldRetryRoot := insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('2026-04-07 12:00:00', '-10 minutes')")
+	insertStoreTestBackupWithRetryRoot(t, db, instance.ID, policyID, oldRetryRoot, "success", 64, 32, "datetime('2026-04-07 12:00:00', '-9 minutes', '-30 seconds')")
+	insertStoreTestBackup(t, db, instance.ID, policyID, "failed", 32, 16, "datetime('2026-04-07 12:00:00', '-11 minutes')")
+
+	backups, err := db.ListRecentLogicalBackupsByInstance(instance.ID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentLogicalBackupsByInstance() error = %v", err)
+	}
+	if len(backups) != 10 {
+		t.Fatalf("len(backups) = %d, want 10", len(backups))
+	}
+
+	successCount := 0
+	for _, backup := range backups {
+		if backup.Status == "success" {
+			successCount++
+		}
+	}
+	if successCount != 8 {
+		t.Fatalf("successCount = %d, want 8 from latest ten final results", successCount)
+	}
+	for _, backup := range backups {
+		if backup.ID == oldRetryRoot {
+			t.Fatalf("logical backups still include retry root %d instead of final retry result", oldRetryRoot)
+		}
 	}
 }
 

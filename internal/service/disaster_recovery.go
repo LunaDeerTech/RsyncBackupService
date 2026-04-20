@@ -21,6 +21,7 @@ const (
 	freshnessGraceRatio = 0.20
 	minFreshnessGrace   = 1 * time.Minute
 	maxFreshnessGrace   = 15 * time.Minute
+	stabilityWindowSize = 10
 )
 
 type DisasterRecoveryScore struct {
@@ -431,7 +432,7 @@ func (c *DRCalculator) calculateStability(instanceID int64, targets map[int64]*m
 		return 0, blockingReasons, nil
 	}
 
-	backups, err := c.db.ListRecentLogicalBackupsByInstance(instanceID, 10)
+	backups, err := c.db.ListRecentLogicalBackupsByInstance(instanceID, stabilityWindowSize)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -457,7 +458,7 @@ func (c *DRCalculator) calculateStability(instanceID int64, targets map[int64]*m
 	score := (float64(successCount) / float64(len(backups))) * 80
 	score += 20
 	reasons := make([]string, 0)
-	if maxConsecutiveFailures >= 3 {
+	if maxConsecutiveFailures >= 4 {
 		score = math.Min(score, 15)
 		reasons = append(reasons, "最近存在连续失败记录")
 	}

@@ -236,6 +236,63 @@ func TestDRCalculatorCalculateStability(t *testing.T) {
 		}
 	})
 
+	t.Run("uses only latest ten final results", func(t *testing.T) {
+		db := newDRTestDB(t)
+		calculator := NewDRCalculator(db)
+		instance := createDRTestInstance(t, db, "stability-window")
+		target := createDRTestTarget(t, db, "stability-window-target", "local", "healthy")
+		policy := createDRTestPolicy(t, db, instance.ID, target.ID, "stability-window", "interval", "3600", "count", 12)
+
+		base := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+		statuses := []string{"success", "success", "success", "success", "success", "success", "success", "success", "failed", "failed"}
+		for index, status := range statuses {
+			completedAt := base.Add(-time.Duration(index) * time.Minute)
+			createDRTestBackup(t, db, instance.ID, policy.ID, status, completedAt)
+		}
+
+		oldRetryRoot := createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-10*time.Minute))
+		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, oldRetryRoot.ID, "success", base.Add(-9*time.Minute).Add(-30*time.Second))
+		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-11*time.Minute))
+
+		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
+		if err != nil {
+			t.Fatalf("calculateStability() error = %v", err)
+		}
+		if math.Abs(score-84) > 0.01 {
+			t.Fatalf("Stability = %v, want 84 from latest ten final results", score)
+		}
+		if len(reasons) != 0 {
+			t.Fatalf("Stability reasons = %v, want empty", reasons)
+		}
+	})
+
+	t.Run("consecutive failure threshold uses final results", func(t *testing.T) {
+		db := newDRTestDB(t)
+		calculator := NewDRCalculator(db)
+		instance := createDRTestInstance(t, db, "stability-final-failures")
+		target := createDRTestTarget(t, db, "stability-final-failures-target", "local", "healthy")
+		policy := createDRTestPolicy(t, db, instance.ID, target.ID, "stability-final-failures", "interval", "3600", "count", 5)
+
+		base := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+		first := createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base)
+		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, first.ID, "success", base.Add(30*time.Second))
+		second := createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-1*time.Minute))
+		createDRTestBackupWithRetryRoot(t, db, instance.ID, policy.ID, second.ID, "success", base.Add(-30*time.Second))
+		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-2*time.Minute))
+		createDRTestBackup(t, db, instance.ID, policy.ID, "failed", base.Add(-3*time.Minute))
+
+		score, reasons, err := calculator.calculateStability(instance.ID, map[int64]*model.BackupTarget{target.ID: target})
+		if err != nil {
+			t.Fatalf("calculateStability() error = %v", err)
+		}
+		if math.Abs(score-60) > 0.01 {
+			t.Fatalf("Stability = %v, want 60 when only two final failures remain", score)
+		}
+		if len(reasons) != 0 {
+			t.Fatalf("Stability reasons = %v, want empty when final results avoid three consecutive failures", reasons)
+		}
+	})
+
 	t.Run("blocking risk", func(t *testing.T) {
 		db := newDRTestDB(t)
 		calculator := NewDRCalculator(db)
