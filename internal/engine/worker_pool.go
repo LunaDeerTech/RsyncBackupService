@@ -239,6 +239,14 @@ func (wp *WorkerPool) processTask(ctx context.Context, task *model.Task) error {
 			wp.writeExecutionAudit(runCtx, loadedTask, backup, policy)
 			return runErr
 		}
+		reconciled, err := wp.reconcileSuccessfulManagedTask(loadedTask, backup)
+		if err != nil {
+			slog.Error("reconcile successful backup task failed", "task_id", loadedTask.ID, "backup_id", loadedTask.BackupID, "error", err)
+		} else if reconciled {
+			runErr = nil
+		}
+	}
+	if runErr != nil {
 		if taskUsesManagedBackup(loadedTask) && policy != nil && policy.RetryEnabled && policy.RetryMaxRetries > 0 {
 			attempt := wp.getRetryAttempt(backup)
 			if attempt < policy.RetryMaxRetries {
@@ -506,6 +514,43 @@ func (wp *WorkerPool) handleRiskAfterFailure(ctx context.Context, task *model.Ta
 			slog.Error("restore failure risk detection failed", "task_id", task.ID, "instance_id", task.InstanceID, "error", err)
 		}
 	}
+}
+
+func (wp *WorkerPool) reconcileSuccessfulManagedTask(task *model.Task, backup *model.Backup) (bool, error) {
+	if wp == nil || wp.db == nil || task == nil || !taskUsesManagedBackup(task) || task.BackupID == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(task.Status), "success") {
+		return false, nil
+	}
+
+	persistedBackup, err := wp.db.GetBackupByID(*task.BackupID)
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(persistedBackup.Status), "success") {
+		return false, nil
+	}
+
+	persistedTask, err := wp.db.GetTaskByID(task.ID)
+	if err != nil {
+		return false, err
+	}
+	if strings.EqualFold(strings.TrimSpace(persistedTask.Status), "success") {
+		if backup != nil {
+			*backup = *persistedBackup
+		}
+		*task = *persistedTask
+		return true, nil
+	}
+
+	if err := wp.db.UpdateTask(task); err != nil {
+		return false, err
+	}
+	if backup != nil {
+		*backup = *persistedBackup
+	}
+	return true, nil
 }
 
 // ── Retry support ──
