@@ -533,18 +533,29 @@ func (e *RollingBackupExecutor) failRun(task *model.Task, backup *model.Backup, 
 		backup.CompletedAt = &completedAt
 		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 		backup.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateBackup(backup); err != nil {
-			persistErr = errors.Join(persistErr, err)
-		}
-		e.cleanupFailedSnapshot(backup)
 	}
 	if task != nil {
 		task.Status = "failed"
 		task.CompletedAt = &completedAt
 		task.EstimatedEnd = nil
 		task.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateTask(task); err != nil {
+	}
+	if backup != nil && task != nil {
+		if err := e.db.UpdateBackupAndTask(backup, task); err != nil {
 			persistErr = errors.Join(persistErr, err)
+		}
+		e.cleanupFailedSnapshot(backup)
+	} else {
+		if backup != nil {
+			if err := e.db.UpdateBackup(backup); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
+			e.cleanupFailedSnapshot(backup)
+		}
+		if task != nil {
+			if err := e.db.UpdateTask(task); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
 		}
 	}
 
@@ -564,18 +575,29 @@ func (e *RollingBackupExecutor) cancelRun(task *model.Task, backup *model.Backup
 		backup.CompletedAt = &completedAt
 		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 		backup.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateBackup(backup); err != nil {
-			persistErr = errors.Join(persistErr, err)
-		}
-		e.cleanupFailedSnapshot(backup)
 	}
 	if task != nil {
 		task.Status = "cancelled"
 		task.CompletedAt = &completedAt
 		task.EstimatedEnd = nil
 		task.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateTask(task); err != nil {
+	}
+	if backup != nil && task != nil {
+		if err := e.db.UpdateBackupAndTask(backup, task); err != nil {
 			persistErr = errors.Join(persistErr, err)
+		}
+		e.cleanupFailedSnapshot(backup)
+	} else {
+		if backup != nil {
+			if err := e.db.UpdateBackup(backup); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
+			e.cleanupFailedSnapshot(backup)
+		}
+		if task != nil {
+			if err := e.db.UpdateTask(task); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
 		}
 	}
 
@@ -596,9 +618,6 @@ func (e *RollingBackupExecutor) completeRun(task *model.Task, backup *model.Back
 	backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 	backup.ErrorMessage = ""
 	backup.RsyncStats = rsyncStats
-	if err := e.db.UpdateBackup(backup); err != nil {
-		return err
-	}
 
 	task.Status = "success"
 	task.Progress = 100
@@ -606,7 +625,7 @@ func (e *RollingBackupExecutor) completeRun(task *model.Task, backup *model.Back
 	task.CompletedAt = &completedAt
 	task.EstimatedEnd = nil
 	task.ErrorMessage = ""
-	return e.db.UpdateTask(task)
+	return e.db.UpdateBackupAndTask(backup, task)
 }
 
 func (e *RollingBackupExecutor) cleanupFailedSnapshot(backup *model.Backup) {

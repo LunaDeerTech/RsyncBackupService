@@ -548,18 +548,29 @@ func (e *ColdBackupExecutor) failRun(task *model.Task, backup *model.Backup, run
 		backup.CompletedAt = &completedAt
 		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 		backup.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateBackup(backup); err != nil {
-			persistErr = errors.Join(persistErr, err)
-		}
-		e.cleanupFailedRunDir(backup)
 	}
 	if task != nil {
 		task.Status = "failed"
 		task.CompletedAt = &completedAt
 		task.EstimatedEnd = nil
 		task.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateTask(task); err != nil {
+	}
+	if backup != nil && task != nil {
+		if err := e.db.UpdateBackupAndTask(backup, task); err != nil {
 			persistErr = errors.Join(persistErr, err)
+		}
+		e.cleanupFailedRunDir(backup)
+	} else {
+		if backup != nil {
+			if err := e.db.UpdateBackup(backup); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
+			e.cleanupFailedRunDir(backup)
+		}
+		if task != nil {
+			if err := e.db.UpdateTask(task); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
 		}
 	}
 
@@ -579,18 +590,29 @@ func (e *ColdBackupExecutor) cancelRun(task *model.Task, backup *model.Backup, r
 		backup.CompletedAt = &completedAt
 		backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 		backup.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateBackup(backup); err != nil {
-			persistErr = errors.Join(persistErr, err)
-		}
-		e.cleanupFailedRunDir(backup)
 	}
 	if task != nil {
 		task.Status = "cancelled"
 		task.CompletedAt = &completedAt
 		task.EstimatedEnd = nil
 		task.ErrorMessage = strings.TrimSpace(runErr.Error())
-		if err := e.db.UpdateTask(task); err != nil {
+	}
+	if backup != nil && task != nil {
+		if err := e.db.UpdateBackupAndTask(backup, task); err != nil {
 			persistErr = errors.Join(persistErr, err)
+		}
+		e.cleanupFailedRunDir(backup)
+	} else {
+		if backup != nil {
+			if err := e.db.UpdateBackup(backup); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
+			e.cleanupFailedRunDir(backup)
+		}
+		if task != nil {
+			if err := e.db.UpdateTask(task); err != nil {
+				persistErr = errors.Join(persistErr, err)
+			}
 		}
 	}
 
@@ -611,9 +633,6 @@ func (e *ColdBackupExecutor) completeRun(task *model.Task, backup *model.Backup,
 	backup.DurationSeconds = elapsedSeconds(backup.StartedAt, completedAt)
 	backup.ErrorMessage = ""
 	backup.RsyncStats = rsyncStats
-	if err := e.db.UpdateBackup(backup); err != nil {
-		return err
-	}
 
 	task.Status = "success"
 	task.Progress = 100
@@ -621,7 +640,7 @@ func (e *ColdBackupExecutor) completeRun(task *model.Task, backup *model.Backup,
 	task.CompletedAt = &completedAt
 	task.EstimatedEnd = nil
 	task.ErrorMessage = ""
-	return e.db.UpdateTask(task)
+	return e.db.UpdateBackupAndTask(backup, task)
 }
 
 func (e *ColdBackupExecutor) cleanupFailedRunDir(backup *model.Backup) {

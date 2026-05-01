@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"rsync-backup-service/internal/crypto"
 	"rsync-backup-service/internal/model"
@@ -173,6 +174,85 @@ func TestPolicyCRUDSummaryAndTrigger(t *testing.T) {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func TestUpdateBackupAndTaskIsAtomic(t *testing.T) {
+	db := newTestDB(t)
+
+	instance := &model.Instance{
+		Name:       "atomic-instance",
+		SourceType: "local",
+		SourcePath: "/srv/atomic",
+		Status:     "idle",
+	}
+	if err := db.CreateInstance(instance); err != nil {
+		t.Fatalf("CreateInstance() error = %v", err)
+	}
+
+	target := &model.BackupTarget{
+		Name:          "atomic-target",
+		BackupType:    "cold",
+		StorageType:   "local",
+		StoragePath:   t.TempDir(),
+		HealthStatus:  "healthy",
+		HealthMessage: "ok",
+	}
+	if err := db.CreateBackupTarget(target); err != nil {
+		t.Fatalf("CreateBackupTarget() error = %v", err)
+	}
+
+	policy := &model.Policy{
+		InstanceID:     instance.ID,
+		Name:           "atomic-policy",
+		Type:           "cold",
+		TargetID:       target.ID,
+		ScheduleType:   "interval",
+		ScheduleValue:  "3600",
+		Enabled:        true,
+		RetentionType:  "count",
+		RetentionValue: 3,
+	}
+	if err := db.CreatePolicy(policy); err != nil {
+		t.Fatalf("CreatePolicy() error = %v", err)
+	}
+
+	backup, task, err := db.CreatePendingPolicyRun(policy)
+	if err != nil {
+		t.Fatalf("CreatePendingPolicyRun() error = %v", err)
+	}
+
+	startedAt := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(2 * time.Minute)
+	backup.Status = "success"
+	backup.StartedAt = &startedAt
+	backup.CompletedAt = &completedAt
+	backup.DurationSeconds = 120
+	backup.SnapshotPath = "/srv/atomic/snapshot"
+	task.Status = "success"
+	task.StartedAt = &startedAt
+	task.CompletedAt = &completedAt
+	task.Progress = 100
+	task.CurrentStep = "completed"
+
+	if _, err := db.Exec(`DELETE FROM tasks WHERE id = ?`, task.ID); err != nil {
+		t.Fatalf("DELETE task error = %v", err)
+	}
+
+	err = db.UpdateBackupAndTask(backup, task)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("UpdateBackupAndTask() error = %v, want sql.ErrNoRows", err)
+	}
+
+	loadedBackup, err := db.GetBackupByID(backup.ID)
+	if err != nil {
+		t.Fatalf("GetBackupByID() error = %v", err)
+	}
+	if loadedBackup.Status != "pending" {
+		t.Fatalf("backup.Status = %q, want pending after rollback", loadedBackup.Status)
+	}
+	if loadedBackup.CompletedAt != nil {
+		t.Fatalf("backup.CompletedAt = %v, want nil after rollback", loadedBackup.CompletedAt)
+	}
 }
 
 func assertPolicyRowCount(t *testing.T, db *DB, query string, arg any, want int) {

@@ -564,6 +564,102 @@ func (db *DB) UpdateBackup(backup *model.Backup) error {
 	return nil
 }
 
+func (db *DB) UpdateBackupAndTask(backup *model.Backup, task *model.Task) error {
+	if backup == nil {
+		return fmt.Errorf("backup is nil")
+	}
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+
+	backup.TriggerSource = normalizeBackupTriggerSource(backup.TriggerSource)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin update backup %d and task %d: %w", backup.ID, task.ID, err)
+	}
+	defer tx.Rollback()
+
+	backupResult, err := tx.Exec(
+		`UPDATE backups
+		 SET instance_id = ?, policy_id = ?, trigger_source = ?, type = ?, status = ?, snapshot_path = ?, backup_size_bytes = ?, actual_size_bytes = ?, started_at = ?, completed_at = ?, duration_seconds = ?, error_message = ?, rsync_stats = ?, retry_root_backup_id = ?
+		 WHERE id = ?`,
+		backup.InstanceID,
+		backup.PolicyID,
+		backup.TriggerSource,
+		backup.Type,
+		backup.Status,
+		backup.SnapshotPath,
+		backup.BackupSizeBytes,
+		backup.ActualSizeBytes,
+		backup.StartedAt,
+		backup.CompletedAt,
+		backup.DurationSeconds,
+		backup.ErrorMessage,
+		backup.RsyncStats,
+		backup.RetryRootBackupID,
+		backup.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update backup %d: %w", backup.ID, err)
+	}
+
+	backupAffected, err := backupResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read update result for backup %d: %w", backup.ID, err)
+	}
+	if backupAffected == 0 {
+		return fmt.Errorf("update backup %d: %w", backup.ID, sql.ErrNoRows)
+	}
+
+	taskResult, err := tx.Exec(
+		`UPDATE tasks
+		 SET instance_id = ?, backup_id = ?, type = ?, restore_type = ?, target_path = ?, status = ?, progress = ?, current_step = ?, started_at = ?, completed_at = ?, estimated_end = ?, error_message = ?
+		 WHERE id = ?`,
+		task.InstanceID,
+		task.BackupID,
+		task.Type,
+		task.RestoreType,
+		task.TargetPath,
+		task.Status,
+		task.Progress,
+		task.CurrentStep,
+		task.StartedAt,
+		task.CompletedAt,
+		task.EstimatedEnd,
+		task.ErrorMessage,
+		task.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update task %d: %w", task.ID, err)
+	}
+
+	taskAffected, err := taskResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read update result for task %d: %w", task.ID, err)
+	}
+	if taskAffected == 0 {
+		return fmt.Errorf("update task %d: %w", task.ID, sql.ErrNoRows)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update backup %d and task %d: %w", backup.ID, task.ID, err)
+	}
+
+	updatedBackup, err := db.GetBackupByID(backup.ID)
+	if err != nil {
+		return fmt.Errorf("load updated backup %d: %w", backup.ID, err)
+	}
+	updatedTask, err := db.GetTaskByID(task.ID)
+	if err != nil {
+		return fmt.Errorf("load updated task %d: %w", task.ID, err)
+	}
+
+	*backup = *updatedBackup
+	*task = *updatedTask
+	return nil
+}
+
 func (db *DB) CreateTask(task *model.Task) error {
 	if task == nil {
 		return fmt.Errorf("task is nil")
