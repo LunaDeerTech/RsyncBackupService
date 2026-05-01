@@ -520,7 +520,7 @@ func (wp *WorkerPool) reconcileSuccessfulManagedTask(task *model.Task, backup *m
 	if wp == nil || wp.db == nil || task == nil || !taskUsesManagedBackup(task) || task.BackupID == nil {
 		return false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(task.Status), "success") {
+	if !isSuccessStatus(task.Status) {
 		return false, nil
 	}
 
@@ -528,7 +528,7 @@ func (wp *WorkerPool) reconcileSuccessfulManagedTask(task *model.Task, backup *m
 	if err != nil {
 		return false, err
 	}
-	if !strings.EqualFold(strings.TrimSpace(persistedBackup.Status), "success") {
+	if !isSuccessStatus(persistedBackup.Status) {
 		return false, nil
 	}
 
@@ -536,7 +536,7 @@ func (wp *WorkerPool) reconcileSuccessfulManagedTask(task *model.Task, backup *m
 	if err != nil {
 		return false, err
 	}
-	if strings.EqualFold(strings.TrimSpace(persistedTask.Status), "success") {
+	if isSuccessStatus(persistedTask.Status) {
 		if backup != nil {
 			*backup = *persistedBackup
 		}
@@ -551,6 +551,10 @@ func (wp *WorkerPool) reconcileSuccessfulManagedTask(task *model.Task, backup *m
 		*backup = *persistedBackup
 	}
 	return true, nil
+}
+
+func isSuccessStatus(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "success")
 }
 
 // ── Retry support ──
