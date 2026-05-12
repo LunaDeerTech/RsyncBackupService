@@ -186,6 +186,91 @@ func TestRegisterRespectsRegistrationSwitchAfterBootstrap(t *testing.T) {
 	assertAPIError(t, second, http.StatusForbidden, authErrorRegistrationOff, "registration is disabled")
 }
 
+func TestForgotPasswordResetsKnownUserWithoutEnumeration(t *testing.T) {
+	db := newAuthTestDB(t)
+	user := createHandlerTestUser(t, db, "user@example.com", "User", "viewer", "OldPass123")
+	sender := newRecordingPasswordSender()
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		withPasswordSender(sender),
+		withPasswordGenerator(sequencePasswordGenerator("ResetPass456")),
+	)
+
+	response := performAuthRequest(t, router, http.MethodPost, "/api/v1/auth/forgot-password", map[string]string{"email": user.Email})
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/forgot-password status = %d, want %d", response.Code, http.StatusOK)
+	}
+
+	var envelope apiEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode forgot-password response: %v", err)
+	}
+	if envelope.Message != "ok" {
+		t.Fatalf("response message = %q, want %q", envelope.Message, "ok")
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode forgot-password payload: %v", err)
+	}
+	if payload["message"] != "如果该邮箱已注册，系统将发送新的登录密码，请注意查收邮件" {
+		t.Fatalf("payload message = %q, want generic success message", payload["message"])
+	}
+	if sender.PasswordFor(user.Email) != "ResetPass456" {
+		t.Fatalf("reset password = %q, want %q", sender.PasswordFor(user.Email), "ResetPass456")
+	}
+
+	updated, err := db.GetUserByID(user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID(user) error = %v", err)
+	}
+	if !authcrypto.CheckPassword("ResetPass456", updated.PasswordHash) {
+		t.Fatal("updated password hash does not match generated password")
+	}
+	if authcrypto.CheckPassword("OldPass123", updated.PasswordHash) {
+		t.Fatal("old password still matches after forgot-password reset")
+	}
+}
+
+func TestForgotPasswordReturnsSameResponseForUnknownEmail(t *testing.T) {
+	db := newAuthTestDB(t)
+	sender := newRecordingPasswordSender()
+	router := NewRouter(
+		db,
+		WithJWTSecret("secret"),
+		withPasswordSender(sender),
+		withPasswordGenerator(sequencePasswordGenerator("ShouldNotBeUsed123")),
+	)
+
+	response := performAuthRequest(t, router, http.MethodPost, "/api/v1/auth/forgot-password", map[string]string{"email": "missing@example.com"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/auth/forgot-password status = %d, want %d", response.Code, http.StatusOK)
+	}
+
+	var envelope apiEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode forgot-password response: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode forgot-password payload: %v", err)
+	}
+	if payload["message"] != "如果该邮箱已注册，系统将发送新的登录密码，请注意查收邮件" {
+		t.Fatalf("payload message = %q, want generic success message", payload["message"])
+	}
+	if sender.PasswordFor("missing@example.com") != "" {
+		t.Fatalf("password sender unexpectedly recorded password %q for unknown email", sender.PasswordFor("missing@example.com"))
+	}
+}
+
+func TestForgotPasswordRejectsInvalidEmail(t *testing.T) {
+	db := newAuthTestDB(t)
+	router := NewRouter(db, WithJWTSecret("secret"))
+
+	response := performAuthRequest(t, router, http.MethodPost, "/api/v1/auth/forgot-password", map[string]string{"email": "not-an-email"})
+	assertAPIError(t, response, http.StatusBadRequest, authErrorInvalidRequest, "invalid email")
+}
+
 type apiEnvelope struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`

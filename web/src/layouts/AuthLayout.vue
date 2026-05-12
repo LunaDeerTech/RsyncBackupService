@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ThemeToggle from '../components/ThemeToggle.vue'
+import { PROJECT_GITHUB_URL } from '../constants/external-links'
 
 interface Props {
   eyebrow: string
@@ -20,13 +21,18 @@ defineProps<Props>()
 
     <div class="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8">
       <header class="flex items-center justify-center py-4 sm:justify-between">
-        <RouterLink to="/" class="inline-flex items-center gap-3 text-content-primary transition hover:text-primary-600">
+        <a
+          :href="PROJECT_GITHUB_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-3 text-content-primary transition hover:text-primary-600"
+        >
           <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-11 w-11 rounded-2xl shadow-glow" />
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.36em] text-content-muted">Secure Access</p>
             <p class="text-lg font-semibold">Rsync Backup Service</p>
           </div>
-        </RouterLink>
+        </a>
       </header>
 
       <main class="flex flex-1 items-center justify-center py-8">

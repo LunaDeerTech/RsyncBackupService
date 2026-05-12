@@ -62,7 +62,7 @@ function isStateChangingMethod(method?: string) {
 }
 
 function isAuthRoute(url?: string) {
-  return typeof url === 'string' && /^\/auth\/(login|register|refresh)$/.test(url)
+  return typeof url === 'string' && /^\/auth\/(login|register|forgot-password|refresh)$/.test(url)
 }
 
 function redirectToLogin() {

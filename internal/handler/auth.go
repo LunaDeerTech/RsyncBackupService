@@ -21,16 +21,17 @@ import (
 )
 
 const (
-	authErrorInvalidRequest  = 40002
-	authErrorUserExists      = 40901
-	authErrorUnauthorized    = 40101
-	authErrorRegistrationOff = 40303
-	authErrorTooManyAttempts = 42901
-	authErrorInternal        = 50001
-	loginFailureLimit        = 5
-	loginLockDuration        = 15 * time.Minute
-	randomPasswordLength     = 12
-	passwordAlphabet         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	authErrorInvalidRequest   = 40002
+	authErrorUserExists       = 40901
+	authErrorUnauthorized     = 40101
+	authErrorRegistrationOff  = 40303
+	authErrorTooManyAttempts  = 42901
+	authErrorInternal         = 50001
+	loginFailureLimit         = 5
+	loginLockDuration         = 15 * time.Minute
+	randomPasswordLength      = 12
+	passwordAlphabet          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	forgotPasswordSuccessHint = "如果该邮箱已注册，系统将发送新的登录密码，请注意查收邮件"
 )
 
 type registerRequest struct {
@@ -44,6 +45,10 @@ type loginRequest struct {
 
 type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
+}
+
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
 }
 
 type loginAttempt struct {
@@ -218,6 +223,49 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": refreshToken,
 		"user":          user,
 	})
+}
+
+func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+		return
+	}
+
+	var request forgotPasswordRequest
+	if !decodeRequestBody(w, r, &request) {
+		return
+	}
+
+	email, err := normalizeEmail(request.Email)
+	if err != nil {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "invalid email")
+		return
+	}
+
+	user, err := h.db.GetUserByEmail(email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			JSON(w, http.StatusOK, map[string]string{"message": forgotPasswordSuccessHint})
+			return
+		}
+
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to query user")
+		return
+	}
+
+	if err := h.resetUserPassword(r.Context(), user); err != nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
+		return
+	}
+
+	h.writeAuditLog(r.Context(), 0, user.ID, audit.ActionUserPasswordReset, map[string]any{
+		"reset_user_id":    user.ID,
+		"reset_user_email": user.Email,
+		"reset_user_name":  user.Name,
+		"reset_user_role":  user.Role,
+		"source":           "forgot_password",
+	})
+	JSON(w, http.StatusOK, map[string]string{"message": forgotPasswordSuccessHint})
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {

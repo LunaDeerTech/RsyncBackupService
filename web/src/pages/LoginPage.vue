@@ -98,7 +98,12 @@ async function handleSubmit() {
       </div>
 
       <div>
-        <label class="text-sm font-medium text-content-primary" for="login-password">密码</label>
+        <div class="flex items-center justify-between gap-3">
+          <label class="text-sm font-medium text-content-primary" for="login-password">密码</label>
+          <RouterLink to="/forgot-password" class="text-sm font-medium text-primary-600 transition hover:text-primary-500">
+            忘记密码？去重置
+          </RouterLink>
+        </div>
         <input
           id="login-password"
           v-model="form.password"

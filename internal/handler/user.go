@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -294,25 +295,8 @@ func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	password, passwordHash, err := h.generatePasswordHash()
-	if err != nil {
+	if err := h.resetUserPassword(r.Context(), user); err != nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, err.Error())
-		return
-	}
-
-	user.PasswordHash = passwordHash
-	if err := h.db.UpdateUser(user); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			Error(w, http.StatusNotFound, userErrorNotFound, "user not found")
-			return
-		}
-
-		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to reset password")
-		return
-	}
-
-	if err := h.passwordSender.SendPassword(r.Context(), user.Email, password); err != nil {
-		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to deliver password")
 		return
 	}
 	h.writeCurrentUserAudit(r, 0, audit.ActionUserPasswordReset, map[string]any{
@@ -323,6 +307,27 @@ func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	})
 
 	JSON(w, http.StatusOK, map[string]string{"message": "password reset"})
+}
+
+func (h *Handler) resetUserPassword(ctx context.Context, user *model.User) error {
+	password, passwordHash, err := h.generatePasswordHash()
+	if err != nil {
+		return err
+	}
+
+	user.PasswordHash = passwordHash
+	if err := h.db.UpdateUser(user); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("user not found")
+		}
+		return fmt.Errorf("failed to reset password")
+	}
+
+	if err := h.passwordSender.SendPassword(ctx, user.Email, password); err != nil {
+		return fmt.Errorf("failed to deliver password")
+	}
+
+	return nil
 }
 
 func (h *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {

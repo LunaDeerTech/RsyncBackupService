@@ -168,6 +168,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.HandleFunc("GET /api/v1/system/registration", handler.GetRegistrationStatus)
 	mux.HandleFunc("POST /api/v1/auth/register", handler.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", handler.Login)
+	mux.HandleFunc("POST /api/v1/auth/forgot-password", handler.ForgotPassword)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handler.Refresh)
 	authenticated := middleware.Auth(resolved.jwtSecret)
 	apiKeyAuthenticated := middleware.APIKeyAuth(db)

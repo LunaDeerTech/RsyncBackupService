@@ -17,6 +17,7 @@ import {
 import ThemeToggle from '../components/ThemeToggle.vue'
 import AppProgress from '../components/AppProgress.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import { PROJECT_GITHUB_URL } from '../constants/external-links'
 import { useAuthStore } from '../stores/auth'
 import { useTaskStore } from '../stores/task'
 import { taskStatusMap, getStatusConfig } from '../utils/status-config'
@@ -113,8 +114,15 @@ watch(() => route.path, () => {
         <Menu v-if="!drawerOpen" :size="20" />
         <X v-else :size="20" />
       </button>
-      <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
-      <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+      <a
+        :href="PROJECT_GITHUB_URL"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-3 text-content-primary transition hover:text-primary-600"
+      >
+        <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
+        <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+      </a>
       <div class="ml-auto flex items-center gap-2">
         <button
           v-if="taskStore.runningCount > 0"
@@ -145,8 +153,15 @@ watch(() => route.path, () => {
     >
       <!-- Sidebar header -->
       <div class="flex h-14 items-center gap-3 border-b border-outline px-5">
-        <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
-        <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+        <a
+          :href="PROJECT_GITHUB_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-3 text-content-primary transition hover:text-primary-600"
+        >
+          <img src="/brand/logo-final.svg" alt="Rsync Backup Service" class="h-8 w-8 rounded-lg" />
+          <span class="text-sm font-semibold text-content-primary">Rsync Backup Service</span>
+        </a>
       </div>
 
       <!-- Navigation -->

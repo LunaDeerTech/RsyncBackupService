@@ -4,6 +4,7 @@ import DashboardPage from '../pages/DashboardPage.vue'
 import InstanceListPage from '../pages/instances/InstanceListPage.vue'
 import LoginPage from '../pages/LoginPage.vue'
 import RegisterPage from '../pages/RegisterPage.vue'
+import ForgotPasswordPage from '../pages/ForgotPasswordPage.vue'
 import { useAuthStore } from '../stores/auth'
 
 const routes: RouteRecordRaw[] = [
@@ -24,6 +25,14 @@ const routes: RouteRecordRaw[] = [
     path: '/register',
     name: 'register',
     component: RegisterPage,
+    meta: {
+      publicOnly: true,
+    },
+  },
+  {
+    path: '/forgot-password',
+    name: 'forgot-password',
+    component: ForgotPasswordPage,
     meta: {
       publicOnly: true,
     },
