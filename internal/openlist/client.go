@@ -49,6 +49,10 @@ type FsObject struct {
 	MountDetails *StorageDetails `json:"mount_details"`
 }
 
+type fsListResponse struct {
+	Content []FsObject `json:"content"`
+}
+
 type apiEnvelope struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
@@ -291,6 +295,20 @@ func (s *Session) Get(ctx context.Context, remotePath string) (*FsObject, error)
 		return nil, err
 	}
 	return &object, nil
+}
+
+func (s *Session) List(ctx context.Context, remotePath string) ([]FsObject, error) {
+	var response fsListResponse
+	if err := s.postJSON(ctx, "/api/fs/list", map[string]any{
+		"path":     NormalizePath(remotePath),
+		"password": "",
+		"page":     1,
+		"per_page": 0,
+		"refresh":  true,
+	}, &response); err != nil {
+		return nil, err
+	}
+	return response.Content, nil
 }
 
 func (s *Session) Mkdir(ctx context.Context, remotePath string) error {

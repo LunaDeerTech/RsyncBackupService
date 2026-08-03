@@ -49,5 +49,5 @@ export function downloadBackup(instanceId: number, backupId: number) {
 }
 
 export function deleteBackup(instanceId: number, backupId: number) {
-  return apiClient.delete<void>(`/instances/${instanceId}/backups/${backupId}`)
+  return apiClient.delete<void>(`/instances/${instanceId}/backups/${backupId}`, { timeout: 5 * 60 * 1000 })
 }

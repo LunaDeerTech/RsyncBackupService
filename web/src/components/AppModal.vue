@@ -8,11 +8,13 @@ const props = withDefaults(
     title?: string
     width?: string
     closeOnOverlay?: boolean
+    zIndex?: number
   }>(),
   {
     title: '',
     width: '480px',
     closeOnOverlay: true,
+    zIndex: 1000,
   },
 )
 
@@ -46,7 +48,7 @@ watch(
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="visible" class="app-modal-overlay" @click.self="onOverlayClick">
+      <div v-if="visible" class="app-modal-overlay" :style="{ zIndex }" @click.self="onOverlayClick">
         <div class="app-modal" :style="{ maxWidth: width }" role="dialog" aria-modal="true">
           <div class="app-modal__header">
             <h3 class="app-modal__title">{{ title }}</h3>

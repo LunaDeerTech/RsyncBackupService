@@ -11,6 +11,7 @@ const { state, handleConfirm, handleCancel } = useConfirm()
     :visible="!!state"
     :title="state?.title ?? '确认'"
     width="420px"
+    :z-index="1100"
     :close-on-overlay="false"
     @update:visible="(v: boolean) => { if (!v) handleCancel() }"
   >

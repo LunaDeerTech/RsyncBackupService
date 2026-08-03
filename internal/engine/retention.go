@@ -10,6 +10,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -472,19 +473,30 @@ func (rc *RetentionCleaner) deleteSplitColdArtifacts(ctx context.Context, storag
 		if err != nil {
 			return err
 		}
-		for partIndex := 1; ; partIndex++ {
-			partPath := fmt.Sprintf("%s.part%03d", basePath, partIndex)
-			if err := session.RemovePath(ctx, partPath); err != nil {
-				if errors.Is(err, openlist.ErrNotFound) {
-					if partIndex == 1 {
-						break
-					}
-					break
-				}
-				return fmt.Errorf("remove openlist split cold artifact %q: %w", partPath, err)
-			}
+		runDir := pathpkg.Dir(snapshotPath)
+		objects, err := session.List(ctx, runDir)
+		if errors.Is(err, openlist.ErrNotFound) {
+			return nil
 		}
-		_ = session.RemovePath(ctx, snapshotPath)
+		if err != nil {
+			return fmt.Errorf("list openlist split cold artifacts %q: %w", snapshotPath, err)
+		}
+
+		partPrefix := pathpkg.Base(basePath) + ".part"
+		partNames := make([]string, 0, len(objects))
+		for _, object := range objects {
+			if object.IsDir || !strings.HasPrefix(object.Name, partPrefix) || !coldSplitPartPattern.MatchString(object.Name) {
+				continue
+			}
+			partNames = append(partNames, object.Name)
+		}
+		sort.Strings(partNames)
+		if len(partNames) == 0 {
+			return nil
+		}
+		if err := session.Remove(ctx, runDir, partNames); err != nil && !errors.Is(err, openlist.ErrNotFound) {
+			return fmt.Errorf("remove openlist split cold artifact %q: %w", snapshotPath, err)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported target storage type %q", storageType)

@@ -192,7 +192,12 @@ func (h *Handler) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.retentionCleaner.DeleteBackup(r.Context(), backupID); err != nil {
+	// OpenList split cold backups may contain dozens of parts. Keep cleanup
+	// running if the browser or a proxy cancels the request while the remote
+	// storage is processing the deletion.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
+	if err := h.retentionCleaner.DeleteBackup(cleanupCtx, backupID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeBackupError(w, err, "failed to delete backup")
 			return

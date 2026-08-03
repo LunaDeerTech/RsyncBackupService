@@ -137,6 +137,7 @@ func TestRetentionCleanerOpenListSplitCleanupRefreshesExpiredToken(t *testing.T)
 	}
 
 	loginCalls := 0
+	listCalls := 0
 	removeCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -165,33 +166,51 @@ func TestRetentionCleanerOpenListSplitCleanupRefreshesExpiredToken(t *testing.T)
 				if got := r.Header.Get("Authorization"); got != "token-1" {
 					t.Fatalf("first remove Authorization = %q, want token-1", got)
 				}
-				if len(payload.Names) != 1 || payload.Names[0] != "artifact.tar.gz.part001" {
+				if payload.Dir != "/mnt/baidu/RBS/3/20260414-143125" || len(payload.Names) != 2 || payload.Names[0] != "artifact.tar.gz.part001" || payload.Names[1] != "artifact.tar.gz.part002" {
 					t.Fatalf("first remove names = %v", payload.Names)
-				}
-				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusOK, "message": "success", "data": nil})
-			case 2:
-				if got := r.Header.Get("Authorization"); got != "token-1" {
-					t.Fatalf("expired remove Authorization = %q, want token-1", got)
 				}
 				writeRetentionOpenListJSON(t, w, http.StatusUnauthorized, map[string]any{
 					"code":    http.StatusUnauthorized,
 					"message": "token is expired",
 					"data":    nil,
 				})
-			case 3:
+			case 2:
 				if got := r.Header.Get("Authorization"); got != "token-2" {
 					t.Fatalf("retried remove Authorization = %q, want token-2", got)
 				}
-				if len(payload.Names) != 1 || payload.Names[0] != "artifact.tar.gz.part002" {
+				if payload.Dir != "/mnt/baidu/RBS/3/20260414-143125" || len(payload.Names) != 2 || payload.Names[0] != "artifact.tar.gz.part001" || payload.Names[1] != "artifact.tar.gz.part002" {
 					t.Fatalf("retried remove names = %v", payload.Names)
 				}
 				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusOK, "message": "success", "data": nil})
 			default:
-				if got := r.Header.Get("Authorization"); got != "token-2" {
-					t.Fatalf("later remove Authorization = %q, want token-2", got)
-				}
-				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusNotFound, "message": "object not found", "data": nil})
+				t.Fatalf("unexpected OpenList remove call %d", removeCalls)
 			}
+		case "/api/fs/list":
+			listCalls++
+			if got := r.Header.Get("Authorization"); got != "token-1" {
+				t.Fatalf("list Authorization = %q, want token-1", got)
+			}
+			var payload struct {
+				Path string `json:"path"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode list payload error = %v", err)
+			}
+			if payload.Path != "/mnt/baidu/RBS/3/20260414-143125" {
+				t.Fatalf("list path = %q", payload.Path)
+			}
+			writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{
+				"code":    http.StatusOK,
+				"message": "success",
+				"data": map[string]any{
+					"content": []map[string]any{
+						{"name": "artifact.tar.gz.part002", "is_dir": false},
+						{"name": "artifact.tar.gz.part001", "is_dir": false},
+						{"name": "unrelated.txt", "is_dir": false},
+						{"name": "nested", "is_dir": true},
+					},
+				},
+			})
 		default:
 			t.Fatalf("unexpected request path: %s", r.URL.Path)
 		}
@@ -230,8 +249,11 @@ func TestRetentionCleanerOpenListSplitCleanupRefreshesExpiredToken(t *testing.T)
 	if loginCalls != 2 {
 		t.Fatalf("login calls = %d, want 2", loginCalls)
 	}
-	if removeCalls != 5 {
-		t.Fatalf("remove calls = %d, want 5", removeCalls)
+	if listCalls != 1 {
+		t.Fatalf("list calls = %d, want 1", listCalls)
+	}
+	if removeCalls != 2 {
+		t.Fatalf("remove calls = %d, want 2", removeCalls)
 	}
 	assertAuditLogCount(t, db, instance.ID, "backup.cleanup_failed", 0)
 }
