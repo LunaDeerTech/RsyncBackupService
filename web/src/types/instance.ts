@@ -49,6 +49,7 @@ export interface Backup {
   id: number
   instance_id: number
   policy_id: number
+  target_name?: string
   type: 'rolling' | 'cold'
   status: string
   snapshot_path: string

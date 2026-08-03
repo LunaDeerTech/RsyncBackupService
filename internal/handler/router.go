@@ -26,6 +26,7 @@ type Handler struct {
 	systemConfigs     *service.SystemConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	retentionCleaner  *engine.RetentionCleaner
 	disasterRecovery  *service.DisasterRecoveryService
 	downloadTokens    *DownloadTokenManager
 	audit             *audit.Logger
@@ -44,6 +45,7 @@ type routerOptions struct {
 	systemConfigs     *service.SystemConfigService
 	taskQueue         *engine.TaskQueue
 	scheduler         *engine.Scheduler
+	retentionCleaner  *engine.RetentionCleaner
 	disasterRecovery  *service.DisasterRecoveryService
 	downloadTokens    *DownloadTokenManager
 }
@@ -75,6 +77,12 @@ func WithTaskQueue(taskQueue *engine.TaskQueue) RouterOption {
 func WithScheduler(scheduler *engine.Scheduler) RouterOption {
 	return func(options *routerOptions) {
 		options.scheduler = scheduler
+	}
+}
+
+func WithRetentionCleaner(retentionCleaner *engine.RetentionCleaner) RouterOption {
+	return func(options *routerOptions) {
+		options.retentionCleaner = retentionCleaner
 	}
 }
 
@@ -144,6 +152,9 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	if resolved.disasterRecovery == nil {
 		resolved.disasterRecovery = service.NewDisasterRecoveryService(db)
 	}
+	if resolved.retentionCleaner == nil {
+		resolved.retentionCleaner = engine.NewRetentionCleaner(db, resolved.dataDir)
+	}
 	auditLogger := audit.NewLogger(db)
 	resolved.remoteConfigs.SetAuditLogger(auditLogger)
 
@@ -157,6 +168,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 		systemConfigs:     resolved.systemConfigs,
 		taskQueue:         resolved.taskQueue,
 		scheduler:         resolved.scheduler,
+		retentionCleaner:  resolved.retentionCleaner,
 		disasterRecovery:  resolved.disasterRecovery,
 		downloadTokens:    resolved.downloadTokens,
 		audit:             auditLogger,
@@ -206,6 +218,7 @@ func NewRouter(db *store.DB, options ...RouterOption) http.Handler {
 	mux.Handle("DELETE /api/v1/instances/{id}/policies/{pid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeletePolicy))))
 	mux.Handle("POST /api/v1/instances/{id}/policies/{pid}/trigger", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.TriggerPolicy))))
 	mux.Handle("GET /api/v1/instances/{id}/backups", authenticated(middleware.RequireAuth(middleware.RequireInstanceAccess(db)(http.HandlerFunc(handler.ListBackups)))))
+	mux.Handle("DELETE /api/v1/instances/{id}/backups/{bid}", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.DeleteBackup))))
 	mux.Handle("POST /api/v1/instances/{id}/backups/{bid}/restore", authenticated(middleware.RequireAdmin(http.HandlerFunc(handler.RestoreBackup))))
 	mux.Handle("GET /api/v1/instances/{id}/backups/{bid}/download", authenticated(middleware.RequireAuth(middleware.RequireInstanceDownload(db)(http.HandlerFunc(handler.GenerateBackupDownloadURL)))))
 	mux.HandleFunc("GET /api/v1/download/{token}", handler.DownloadBackupByToken)

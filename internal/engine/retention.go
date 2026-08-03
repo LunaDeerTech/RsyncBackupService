@@ -83,6 +83,52 @@ func (rc *RetentionCleaner) CleanByPolicy(ctx context.Context, policy *model.Pol
 	}
 }
 
+// DeleteBackup removes one completed backup and its stored artifacts. It is
+// shared by manual deletion and retention cleanup so all storage backends,
+// split cold backups, latest links, and related task rows follow the same
+// cleanup rules.
+func (rc *RetentionCleaner) DeleteBackup(ctx context.Context, backupID int64) error {
+	if rc == nil {
+		return fmt.Errorf("retention cleaner is nil")
+	}
+	if rc.db == nil {
+		return fmt.Errorf("database unavailable")
+	}
+	if backupID <= 0 {
+		return fmt.Errorf("backup id must be positive")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	backup, err := rc.db.GetBackupByID(backupID)
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(backup.Status)) != "success" {
+		return fmt.Errorf("backup must be in success status before delete")
+	}
+
+	policy, err := rc.db.GetPolicyByID(backup.PolicyID)
+	if err != nil {
+		return err
+	}
+	instance, err := rc.db.GetInstanceByID(backup.InstanceID)
+	if err != nil {
+		return err
+	}
+	target, err := rc.db.GetBackupTargetByID(policy.TargetID)
+	if err != nil {
+		return err
+	}
+	remote, err := rc.loadTargetRemote(target)
+	if err != nil {
+		return err
+	}
+
+	return rc.deleteBackupWithSource(ctx, policy, instance, target, remote, backup, "manual deletion")
+}
+
 func (rc *RetentionCleaner) CleanAll(ctx context.Context) error {
 	if rc == nil || rc.db == nil {
 		return nil
@@ -205,11 +251,16 @@ func (rc *RetentionCleaner) cleanBackups(ctx context.Context, policy *model.Poli
 }
 
 func (rc *RetentionCleaner) deleteBackup(ctx context.Context, policy *model.Policy, instance *model.Instance, target *model.BackupTarget, remote *model.RemoteConfig, backup *model.Backup) error {
+	return rc.deleteBackupWithSource(ctx, policy, instance, target, remote, backup, "retention cleanup")
+}
+
+func (rc *RetentionCleaner) deleteBackupWithSource(ctx context.Context, policy *model.Policy, instance *model.Instance, target *model.BackupTarget, remote *model.RemoteConfig, backup *model.Backup, source string) error {
 	if backup == nil {
 		return nil
 	}
 
-	slog.Info("retention cleanup deleting backup",
+	slog.Info("deleting backup",
+		"source", source,
 		"backup_id", backup.ID,
 		"policy_id", policy.ID,
 		"instance_id", instance.ID,
@@ -218,7 +269,8 @@ func (rc *RetentionCleaner) deleteBackup(ctx context.Context, policy *model.Poli
 	)
 
 	if err := rc.deleteBackupArtifacts(ctx, target, remote, backup); err != nil {
-		slog.Error("retention cleanup delete artifacts failed",
+		slog.Error("delete backup artifacts failed",
+			"source", source,
 			"backup_id", backup.ID,
 			"policy_id", policy.ID,
 			"error", err,

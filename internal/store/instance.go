@@ -12,6 +12,7 @@ import (
 const (
 	instanceColumns      = `id, name, source_type, source_path, exclude_patterns, remote_config_id, status, created_at, updated_at`
 	backupColumns        = `id, instance_id, policy_id, trigger_source, type, status, snapshot_path, backup_size_bytes, actual_size_bytes, started_at, completed_at, duration_seconds, error_message, rsync_stats, created_at, retry_root_backup_id`
+	backupListColumns    = `b.id, b.instance_id, b.policy_id, b.trigger_source, b.type, b.status, b.snapshot_path, b.backup_size_bytes, b.actual_size_bytes, b.started_at, b.completed_at, b.duration_seconds, b.error_message, b.rsync_stats, b.created_at, b.retry_root_backup_id, bt.name`
 	backupCompleteAction = "backup.complete"
 	backupFailAction     = "backup.fail"
 )
@@ -423,10 +424,12 @@ func (db *DB) GetLastBackup(instanceID int64) (*model.Backup, error) {
 
 func (db *DB) ListBackupsByInstance(instanceID int64, limit, offset int) ([]model.Backup, error) {
 	rows, err := db.Query(
-		`SELECT `+backupColumns+`
-		 FROM backups
-		 WHERE instance_id = ? AND status = 'success'
-		 ORDER BY COALESCE(completed_at, started_at, created_at) DESC, id DESC
+		`SELECT `+backupListColumns+`
+		 FROM backups b
+		 LEFT JOIN policies p ON p.id = b.policy_id
+		 LEFT JOIN backup_targets bt ON bt.id = p.target_id
+		 WHERE b.instance_id = ? AND b.status = 'success'
+		 ORDER BY COALESCE(b.completed_at, b.started_at, b.created_at) DESC, b.id DESC
 		 LIMIT ? OFFSET ?`,
 		instanceID, limit, offset,
 	)
@@ -437,7 +440,7 @@ func (db *DB) ListBackupsByInstance(instanceID int64, limit, offset int) ([]mode
 
 	var backups []model.Backup
 	for rows.Next() {
-		b, err := scanBackup(rows)
+		b, err := scanBackupWithTarget(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan backup row: %w", err)
 		}
@@ -519,6 +522,22 @@ func splitExcludePatterns(value string) []string {
 }
 
 func scanBackup(scanner backupScanner) (*model.Backup, error) {
+	return scanBackupRow(scanner, nil)
+}
+
+func scanBackupWithTarget(scanner backupScanner) (*model.Backup, error) {
+	var targetName sql.NullString
+	backup, err := scanBackupRow(scanner, &targetName)
+	if err != nil {
+		return nil, err
+	}
+	if targetName.Valid {
+		backup.TargetName = targetName.String
+	}
+	return backup, nil
+}
+
+func scanBackupRow(scanner backupScanner, targetName *sql.NullString) (*model.Backup, error) {
 	var (
 		backup            model.Backup
 		startedAt         sql.NullString
@@ -527,7 +546,7 @@ func scanBackup(scanner backupScanner) (*model.Backup, error) {
 		retryRootBackupID sql.NullInt64
 	)
 
-	if err := scanner.Scan(
+	values := []any{
 		&backup.ID,
 		&backup.InstanceID,
 		&backup.PolicyID,
@@ -544,7 +563,12 @@ func scanBackup(scanner backupScanner) (*model.Backup, error) {
 		&backup.RsyncStats,
 		&rawCreatedAt,
 		&retryRootBackupID,
-	); err != nil {
+	}
+	if targetName != nil {
+		values = append(values, targetName)
+	}
+
+	if err := scanner.Scan(values...); err != nil {
 		return nil, err
 	}
 

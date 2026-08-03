@@ -12,6 +12,7 @@ export const actionLabels: Record<string, string> = {
   'backup.retry_exhausted': '重试耗尽',
   'backup.move_retry': '备份移动重试',
   'backup.move_retry_exhausted': '备份移动重试耗尽',
+  'backup.delete': '删除备份',
   'backup.download': '下载备份',
   'backup.cleanup_failed': '清理失败',
   'restore.trigger': '触发恢复',

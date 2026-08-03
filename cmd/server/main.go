@@ -96,6 +96,7 @@ func main() {
 	routerOptions = append(routerOptions, handler.WithDataDir(cfg.DataDir))
 	routerOptions = append(routerOptions, handler.WithTaskQueue(taskQueue))
 	routerOptions = append(routerOptions, handler.WithScheduler(scheduler))
+	routerOptions = append(routerOptions, handler.WithRetentionCleaner(retentionCleaner))
 	routerOptions = append(routerOptions, handler.WithDisasterRecoveryService(disasterRecovery))
 	routerOptions = append(routerOptions, handler.WithSystemConfigService(systemConfigs))
 	switch {

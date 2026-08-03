@@ -3,7 +3,9 @@ package handler
 import (
 	"archive/tar"
 	"compress/gzip"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +35,89 @@ func TestRestoreBackupRejectsWrongPassword(t *testing.T) {
 		"password":      "WrongPass123",
 	}, mustAccessTokenForUser(t, admin, "secret"))
 	assertAPIError(t, response, http.StatusBadRequest, authErrorInvalidRequest, "password is incorrect")
+}
+
+func TestListBackupsIncludesBackupTargetName(t *testing.T) {
+	db := newAuthTestDB(t)
+	admin := createHandlerTestUser(t, db, "admin@example.com", "Admin", "admin", "AdminPass123")
+	router := NewRouter(db, WithJWTSecret("secret"))
+
+	instanceID, _ := createColdBackupForHandlerTests(t, db, false)
+	response := performAuthorizedJSONRequest(t, router, http.MethodGet, "/api/v1/instances/"+itoa(instanceID)+"/backups", nil, mustAccessTokenForUser(t, admin, "secret"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET backups status = %d, want %d, body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var envelope apiEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var payload struct {
+		Items []struct {
+			TargetName string `json:"target_name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].TargetName != "cold-target" {
+		t.Fatalf("backup target names = %+v, want cold-target", payload.Items)
+	}
+}
+
+func TestDeleteBackupRemovesArtifactTasksAndAudit(t *testing.T) {
+	db := newAuthTestDB(t)
+	admin := createHandlerTestUser(t, db, "admin@example.com", "Admin", "admin", "AdminPass123")
+	router := NewRouter(db, WithJWTSecret("secret"))
+
+	instanceID, backupID := createColdBackupForHandlerTests(t, db, false)
+	backup, err := db.GetBackupByID(backupID)
+	if err != nil {
+		t.Fatalf("GetBackupByID() error = %v", err)
+	}
+	task := &model.Task{
+		InstanceID:   instanceID,
+		BackupID:     &backupID,
+		Type:         "cold",
+		Status:       "success",
+		Progress:     100,
+		CurrentStep:  "completed",
+		ErrorMessage: "",
+	}
+	if err := db.CreateTask(task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	response := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instanceID)+"/backups/"+itoa(backupID), nil, mustAccessTokenForUser(t, admin, "secret"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("DELETE backup status = %d, want %d, body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if _, err := os.Stat(backup.SnapshotPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(backup artifact) error = %v, want not exist", err)
+	}
+	if _, err := db.GetBackupByID(backupID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetBackupByID() error = %v, want sql.ErrNoRows", err)
+	}
+	assertRowCount(t, db, `SELECT COUNT(*) FROM tasks WHERE backup_id = ?`, backupID, 0)
+	var auditCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE instance_id = ? AND action = ?`, instanceID, "backup.delete").Scan(&auditCount); err != nil {
+		t.Fatalf("count backup.delete audit logs error = %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("backup.delete audit log count = %d, want 1", auditCount)
+	}
+}
+
+func TestDeleteBackupRequiresAdmin(t *testing.T) {
+	db := newAuthTestDB(t)
+	viewer := createHandlerTestUser(t, db, "viewer@example.com", "Viewer", "viewer", "ViewerPass123")
+	router := NewRouter(db, WithJWTSecret("secret"))
+
+	instanceID, backupID := createColdBackupForHandlerTests(t, db, false)
+	response := performAuthorizedJSONRequest(t, router, http.MethodDelete, "/api/v1/instances/"+itoa(instanceID)+"/backups/"+itoa(backupID), nil, mustAccessTokenForUser(t, viewer, "secret"))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("DELETE backup status = %d, want %d", response.Code, http.StatusForbidden)
+	}
 }
 
 func TestRestoreBackupCreatesQueuedRestoreTask(t *testing.T) {

@@ -245,7 +245,7 @@ RemoteConfig ──1:N──> (Instance.source / BackupTarget.storage)
 | detail | TEXT | 操作详情（JSON） |
 | created_at | DATETIME | 创建时间 |
 
-`action` 枚举值：`instance.create`、`instance.update`、`instance.delete`、`policy.create`、`policy.update`、`policy.delete`、`backup.trigger`、`backup.complete`、`backup.fail`、`restore.trigger`、`restore.complete`、`restore.fail`、`user.create`、`user.update`、`user.delete`、`target.create`、`target.update`、`target.delete`、`remote.create`、`remote.update`、`remote.delete`、`system.config.update`。
+`action` 枚举值：`instance.create`、`instance.update`、`instance.delete`、`policy.create`、`policy.update`、`policy.delete`、`backup.trigger`、`backup.complete`、`backup.fail`、`backup.delete`、`restore.trigger`、`restore.complete`、`restore.fail`、`user.create`、`user.update`、`user.delete`、`target.create`、`target.update`、`target.delete`、`remote.create`、`remote.update`、`remote.delete`、`system.config.update`。
 
 #### risk_events
 
@@ -367,6 +367,7 @@ RemoteConfig ──1:N──> (Instance.source / BackupTarget.storage)
 |------|------|------|------|
 | GET | `/api/v1/instances/:id/backups` | 备份列表 | 已认证+实例权限 |
 | GET | `/api/v1/instances/:id/backups/:bid` | 备份详情 | 已认证+实例权限 |
+| DELETE | `/api/v1/instances/:id/backups/:bid` | 删除备份及其存储文件 | admin |
 | POST | `/api/v1/instances/:id/backups/:bid/restore` | 触发恢复 | admin（需密码二次验证） |
 | GET | `/api/v1/instances/:id/backups/:bid/download` | 下载冷备份 | 已认证+下载权限 |
 
@@ -922,4 +923,3 @@ type NotificationChannel interface {
 ```
 
 首版仅实现 SMTP 邮件通道，可扩展 Webhook、Telegram、Slack 等。
-

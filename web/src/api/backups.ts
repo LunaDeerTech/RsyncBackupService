@@ -47,3 +47,7 @@ export function restoreBackup(instanceId: number, backupId: number, data: Restor
 export function downloadBackup(instanceId: number, backupId: number) {
   return apiClient.get<BackupDownloadResponse>(`/instances/${instanceId}/backups/${backupId}/download`)
 }
+
+export function deleteBackup(instanceId: number, backupId: number) {
+  return apiClient.delete<void>(`/instances/${instanceId}/backups/${backupId}`)
+}

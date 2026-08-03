@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
-import { listBackups, restoreBackup, downloadBackup } from '../../../api/backups'
+import { listBackups, restoreBackup, downloadBackup, deleteBackup } from '../../../api/backups'
 import type { RestoreRequest, BackupDownloadPart } from '../../../api/backups'
 import { listPolicies } from '../../../api/policies'
 import { listRemotes } from '../../../api/remotes'
 import { useAuthStore } from '../../../stores/auth'
 import { useToastStore } from '../../../stores/toast'
+import { useConfirm } from '../../../composables/useConfirm'
 import { ApiBusinessError } from '../../../api/client'
 import { formatBytes } from '../../../utils/format'
 import { formatRelativeTime } from '../../../utils/time'
@@ -25,7 +26,7 @@ import AppInput from '../../../components/AppInput.vue'
 import AppSelect from '../../../components/AppSelect.vue'
 import AppButton from '../../../components/AppButton.vue'
 import StatusBadge from '../../../components/StatusBadge.vue'
-import { Download, RotateCcw } from 'lucide-vue-next'
+import { Download, RotateCcw, Trash2 } from 'lucide-vue-next'
 
 const props = defineProps<{
   instanceId: number
@@ -39,6 +40,7 @@ const emit = defineEmits<{
 
 const authStore = useAuthStore()
 const toast = useToastStore()
+const { confirm } = useConfirm()
 
 // ── Backup data ──
 const backups = ref<Backup[]>([])
@@ -85,6 +87,7 @@ const restoreFormErrors = reactive({
 
 // ── Download state ──
 const downloadingBackupId = ref<number | null>(null)
+const deletingBackupId = ref<number | null>(null)
 const splitDownloadModalVisible = ref(false)
 const splitDownloadParts = ref<BackupDownloadPart[]>([])
 const splitDownloadTitle = ref('')
@@ -97,10 +100,11 @@ const backupColumns: TableColumn[] = [
   { key: 'started_at', title: '备份时间' },
   { key: 'completed_at', title: '完成时间' },
   { key: 'type', title: '类型' },
+  { key: 'target_name', title: '备份目标' },
   { key: 'backup_size_bytes', title: '备份大小' },
   { key: 'actual_size_bytes', title: '数据原始大小' },
   { key: 'duration_seconds', title: '持续时间' },
-  { key: 'actions', title: '操作', width: '200px' },
+  { key: 'actions', title: '操作', width: '90px' },
 ]
 
 // ── Helpers ──
@@ -129,8 +133,14 @@ function openBackupDetail(row: Record<string, unknown>) {
   backupDetailVisible.value = true
 }
 
+function openRestoreFromDetail() {
+  if (!backupDetailTarget.value) return
+  openRestoreModal(backupDetailTarget.value as unknown as Record<string, unknown>)
+}
+
 // ── Restore ──
 function openRestoreModal(row: Record<string, unknown>) {
+  backupDetailVisible.value = false
   restoreBackupTarget.value = row
   restoreForm.restore_type = 'source'
   restoreForm.target_path = ''
@@ -213,6 +223,7 @@ async function handleRestoreSubmit() {
 
 // ── Download ──
 async function handleDownload(row: Record<string, unknown>) {
+  backupDetailVisible.value = false
   downloadingBackupId.value = row.id as number
   try {
     const res = await downloadBackup(props.instanceId, row.id as number)
@@ -231,6 +242,41 @@ async function handleDownload(row: Record<string, unknown>) {
     else toast.error('获取下载链接失败')
   } finally {
     downloadingBackupId.value = null
+  }
+}
+
+function handleDownloadFromDetail() {
+  if (!backupDetailTarget.value) return
+  handleDownload(backupDetailTarget.value as unknown as Record<string, unknown>)
+}
+
+async function handleDeleteBackup() {
+  const backup = backupDetailTarget.value
+  if (!backup) return
+
+  const ok = await confirm({
+    title: '删除备份',
+    message: `确定要删除 ${backup.type === 'cold' ? '冷备份' : '滚动备份'} #${backup.id} 吗？实际备份文件和记录都会被删除，此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+
+  deletingBackupId.value = backup.id
+  try {
+    await deleteBackup(props.instanceId, backup.id)
+    toast.success('备份已删除')
+    backupDetailVisible.value = false
+    backupDetailTarget.value = null
+    if (backups.value.length === 1 && backupPage.value > 1) {
+      backupPage.value -= 1
+    }
+    await fetchBackups()
+  } catch (e) {
+    if (e instanceof ApiBusinessError) toast.error(e.message)
+    else toast.error('删除备份失败')
+  } finally {
+    deletingBackupId.value = null
   }
 }
 
@@ -382,6 +428,10 @@ defineExpose({ refresh })
           <StatusBadge :config="getStatusConfig(backupTypeMap, row.type as string)" />
         </template>
 
+        <template #cell-target_name="{ row }">
+          {{ row.target_name || '--' }}
+        </template>
+
         <template #cell-backup_size_bytes="{ row }">
           {{ formatBytes(row.backup_size_bytes as number) }}
         </template>
@@ -398,15 +448,6 @@ defineExpose({ refresh })
           <div class="actions-cell">
             <AppButton variant="ghost" size="sm" @click="openBackupDetail(row)">
               详情
-            </AppButton>
-            <AppButton v-if="authStore.isAdmin" variant="ghost" size="sm" @click="openRestoreModal(row)">
-              <RotateCcw :size="14" style="margin-right: 2px" />
-              恢复
-            </AppButton>
-            <AppButton v-if="row.type === 'cold' && canDownload" variant="ghost" size="sm"
-              :loading="downloadingBackupId === (row.id as number)" @click="handleDownload(row)">
-              <Download :size="14" style="margin-right: 2px" />
-              下载
             </AppButton>
           </div>
         </template>
@@ -443,6 +484,10 @@ defineExpose({ refresh })
           </span>
         </div>
         <div class="backup-detail__item">
+          <span class="backup-detail__label">备份目标</span>
+          <span class="backup-detail__value">{{ backupDetailTarget.target_name || '--' }}</span>
+        </div>
+        <div class="backup-detail__item">
           <span class="backup-detail__label">开始时间</span>
           <span class="backup-detail__value">{{ backupDetailTarget.started_at ?? '--' }}</span>
         </div>
@@ -474,6 +519,38 @@ defineExpose({ refresh })
     </template>
     <template #footer>
       <div class="modal-footer">
+        <AppButton
+          v-if="authStore.isAdmin"
+          variant="danger"
+          size="md"
+          :loading="deletingBackupId === backupDetailTarget?.id"
+          :disabled="deletingBackupId !== null"
+          @click="handleDeleteBackup"
+        >
+          <Trash2 :size="14" style="margin-right: 2px" />
+          删除
+        </AppButton>
+        <AppButton
+          v-if="authStore.isAdmin"
+          variant="outline"
+          size="md"
+          :disabled="deletingBackupId !== null"
+          @click="openRestoreFromDetail"
+        >
+          <RotateCcw :size="14" style="margin-right: 2px" />
+          恢复
+        </AppButton>
+        <AppButton
+          v-if="backupDetailTarget && backupDetailTarget.type === 'cold' && canDownload"
+          variant="outline"
+          size="md"
+          :loading="downloadingBackupId === backupDetailTarget.id"
+          :disabled="deletingBackupId !== null"
+          @click="handleDownloadFromDetail"
+        >
+          <Download :size="14" style="margin-right: 2px" />
+          下载
+        </AppButton>
         <AppButton variant="outline" size="md" @click="backupDetailVisible = false">关闭</AppButton>
       </div>
     </template>
@@ -651,6 +728,7 @@ defineExpose({ refresh })
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .backup-pagination {

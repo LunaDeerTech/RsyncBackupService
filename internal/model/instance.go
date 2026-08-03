@@ -51,6 +51,7 @@ type Backup struct {
 	ID                int64      `json:"id"`
 	InstanceID        int64      `json:"instance_id"`
 	PolicyID          int64      `json:"policy_id"`
+	TargetName        string     `json:"target_name"`
 	TriggerSource     string     `json:"trigger_source"`
 	RetryRootBackupID *int64     `json:"-"`
 	Type              string     `json:"type"`

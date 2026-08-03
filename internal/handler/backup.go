@@ -166,6 +166,51 @@ func (h *Handler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) DeleteBackup(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")
+		return
+	}
+	if h.retentionCleaner == nil {
+		Error(w, http.StatusInternalServerError, authErrorInternal, "backup cleaner unavailable")
+		return
+	}
+
+	instanceID, backupID, err := backupRequestIDs(r)
+	if err != nil {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, err.Error())
+		return
+	}
+
+	instance, backup, policy, err := h.loadBackupContext(instanceID, backupID)
+	if err != nil {
+		writeBackupError(w, err, "failed to query backup")
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(backup.Status)) != "success" {
+		Error(w, http.StatusBadRequest, authErrorInvalidRequest, "backup must be in success status before delete")
+		return
+	}
+
+	if err := h.retentionCleaner.DeleteBackup(r.Context(), backupID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeBackupError(w, err, "failed to delete backup")
+			return
+		}
+		Error(w, http.StatusInternalServerError, authErrorInternal, "failed to delete backup")
+		return
+	}
+
+	h.writeCurrentUserAudit(r, instance.ID, audit.ActionBackupDelete, map[string]any{
+		"backup_id":   backup.ID,
+		"policy_id":   policy.ID,
+		"instance_id": instance.ID,
+		"type":        backup.Type,
+	})
+
+	JSON(w, http.StatusOK, map[string]string{"message": "backup deleted"})
+}
+
 func (h *Handler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		Error(w, http.StatusInternalServerError, authErrorInternal, "database unavailable")

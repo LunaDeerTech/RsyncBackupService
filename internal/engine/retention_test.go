@@ -282,6 +282,55 @@ func TestRetentionCleanerContinuesWhenArtifactDeletionFailsAndWritesAuditLog(t *
 	assertAuditLogCount(t, db, instance.ID, "backup.cleanup_failed", 1)
 }
 
+func TestRetentionCleanerDeleteBackupRemovesLastBackupAndLatestLink(t *testing.T) {
+	db := newRollingTestDB(t)
+	instance, policy, target, _, _ := createRollingFixtures(t, db, t.TempDir(), t.TempDir())
+	storageKey := backupInstanceStorageKey(instance)
+	backupPath := filepath.Join(target.StoragePath, storageKey, "20260407-010000")
+	backup := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", backupPath, time.Date(2026, 4, 7, 1, 0, 0, 0, time.UTC))
+	mustMkdirAll(t, backupPath)
+
+	latestLinkPath := filepath.Join(target.StoragePath, storageKey, "latest")
+	mustMkdirAll(t, filepath.Dir(latestLinkPath))
+	if err := os.Symlink(backupPath, latestLinkPath); err != nil {
+		t.Fatalf("Symlink(latest) error = %v", err)
+	}
+
+	cleaner := NewRetentionCleaner(db, t.TempDir())
+	if err := cleaner.DeleteBackup(context.Background(), backup.ID); err != nil {
+		t.Fatalf("DeleteBackup() error = %v", err)
+	}
+
+	assertBackupRemoved(t, db, backup.ID)
+	assertTaskRowsForBackup(t, db, backup.ID, 0)
+	if _, err := os.Stat(backupPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(backup) error = %v, want not exist", err)
+	}
+	if _, err := os.Lstat(latestLinkPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat(latest) error = %v, want not exist", err)
+	}
+}
+
+func TestRetentionCleanerDeleteBackupKeepsRowsWhenArtifactDeletionFails(t *testing.T) {
+	db := newRollingTestDB(t)
+	instance, policy, target, _, _ := createRollingFixtures(t, db, t.TempDir(), t.TempDir())
+	backupPath := filepath.Join(target.StoragePath, backupInstanceStorageKey(instance), "20260407-010000")
+	backup := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "rolling", backupPath, time.Date(2026, 4, 7, 1, 0, 0, 0, time.UTC))
+	mustMkdirAll(t, backupPath)
+
+	cleaner := NewRetentionCleaner(db, t.TempDir())
+	cleaner.removeAll = func(path string) error {
+		return errors.New("simulated remove failure")
+	}
+	if err := cleaner.DeleteBackup(context.Background(), backup.ID); err == nil {
+		t.Fatal("DeleteBackup() error = nil, want artifact deletion error")
+	}
+
+	assertBackupExists(t, db, backup.ID)
+	assertTaskRowsForBackup(t, db, backup.ID, 1)
+	assertAuditLogCount(t, db, instance.ID, "backup.cleanup_failed", 1)
+}
+
 func TestWorkerPoolProcessTaskTriggersRetentionAfterSuccess(t *testing.T) {
 	db := newRollingTestDB(t)
 	instance, policy, target, _, task := createRollingFixtures(t, db, t.TempDir(), t.TempDir())

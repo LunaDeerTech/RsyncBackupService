@@ -7,7 +7,6 @@ import { useToastStore } from '../../stores/toast'
 import type { Instance } from '../../types/instance'
 import AppTabs from '../../components/AppTabs.vue'
 import AppButton from '../../components/AppButton.vue'
-import AppConfirm from '../../components/AppConfirm.vue'
 import { ArrowLeft } from 'lucide-vue-next'
 import OverviewTab from './components/OverviewTab.vue'
 import PoliciesTab from './components/PoliciesTab.vue'
@@ -152,7 +151,6 @@ function handleInstanceDeleted() {
       </AppTabs>
     </template>
 
-    <AppConfirm />
   </div>
 </template>
 
