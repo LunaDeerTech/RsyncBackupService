@@ -152,6 +152,237 @@ func TestSessionSupportsFileLifecycle(t *testing.T) {
 	}
 }
 
+func TestSessionRefreshesExpiredTokenBeforeRetryingRemove(t *testing.T) {
+	loginCalls := 0
+	removeCalls := 0
+	removedNames := make([]string, 0, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginCalls++
+			token := "token-1"
+			if loginCalls == 2 {
+				token = "token-2"
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data":    map[string]any{"token": token},
+			})
+		case "/api/fs/remove":
+			removeCalls++
+			if removeCalls == 1 {
+				assertAuth(t, r, "token-1")
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"code":    http.StatusInternalServerError,
+					"message": "token is expired",
+					"data":    nil,
+				})
+				return
+			}
+			assertAuth(t, r, "token-2")
+			var payload struct {
+				Dir   string   `json:"dir"`
+				Names []string `json:"names"`
+			}
+			decodeJSONBody(t, r, &payload)
+			removedNames = append(removedNames, payload.Names...)
+			writeJSON(t, w, http.StatusOK, map[string]any{"code": 200, "message": "success", "data": nil})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	session, err := NewClient(server.Client()).Open(context.Background(), Config{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	if err := session.RemovePath(context.Background(), "/backups/artifact.tar"); err != nil {
+		t.Fatalf("RemovePath() error = %v", err)
+	}
+	if loginCalls != 2 {
+		t.Fatalf("login calls = %d, want 2", loginCalls)
+	}
+	if removeCalls != 2 {
+		t.Fatalf("remove calls = %d, want 2", removeCalls)
+	}
+	if len(removedNames) != 1 || removedNames[0] != "artifact.tar" {
+		t.Fatalf("removed names = %v, want [artifact.tar]", removedNames)
+	}
+}
+
+func TestSessionRefreshesExpiredTokenAndReopensUpload(t *testing.T) {
+	loginCalls := 0
+	uploadCalls := 0
+	localFile := filepath.Join(t.TempDir(), "artifact.bin")
+	if err := os.WriteFile(localFile, []byte("upload-payload"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginCalls++
+			token := "token-1"
+			if loginCalls == 2 {
+				token = "token-2"
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data":    map[string]any{"token": token},
+			})
+		case "/api/fs/put":
+			uploadCalls++
+			wantToken := "token-1"
+			if uploadCalls == 2 {
+				wantToken = "token-2"
+			}
+			assertAuth(t, r, wantToken)
+			content, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("ReadAll(upload body) error = %v", err)
+			}
+			if string(content) != "upload-payload" {
+				t.Fatalf("upload body = %q, want %q", string(content), "upload-payload")
+			}
+			if uploadCalls == 1 {
+				writeJSON(t, w, http.StatusUnauthorized, map[string]any{
+					"code":    http.StatusUnauthorized,
+					"message": "token is expired",
+					"data":    nil,
+				})
+				return
+			}
+			writeJSON(t, w, http.StatusOK, map[string]any{"code": 200, "message": "success", "data": nil})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	session, err := NewClient(server.Client()).Open(context.Background(), Config{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	if err := session.UploadFile(context.Background(), localFile, "/backups/artifact.bin"); err != nil {
+		t.Fatalf("UploadFile() error = %v", err)
+	}
+	if loginCalls != 2 || uploadCalls != 2 {
+		t.Fatalf("login calls = %d, upload calls = %d, want 2 and 2", loginCalls, uploadCalls)
+	}
+}
+
+func TestSessionDoesNotRefreshForNonExpiredError(t *testing.T) {
+	loginCalls := 0
+	removeCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginCalls++
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"code":    200,
+				"message": "success",
+				"data":    map[string]any{"token": "token-1"},
+			})
+		case "/api/fs/remove":
+			removeCalls++
+			assertAuth(t, r, "token-1")
+			writeJSON(t, w, http.StatusForbidden, map[string]any{
+				"code":    http.StatusForbidden,
+				"message": "permission denied",
+				"data":    nil,
+			})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	session, err := NewClient(server.Client()).Open(context.Background(), Config{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	err = session.RemovePath(context.Background(), "/backups/artifact.tar")
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("RemovePath() error = %v, want permission denied", err)
+	}
+	if loginCalls != 1 || removeCalls != 1 {
+		t.Fatalf("login calls = %d, remove calls = %d, want 1 and 1", loginCalls, removeCalls)
+	}
+}
+
+func TestSessionReturnsRefreshFailureWithoutLoop(t *testing.T) {
+	loginCalls := 0
+	removeCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginCalls++
+			if loginCalls == 1 {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"code":    200,
+					"message": "success",
+					"data":    map[string]any{"token": "token-1"},
+				})
+				return
+			}
+			writeJSON(t, w, http.StatusUnauthorized, map[string]any{
+				"code":    http.StatusUnauthorized,
+				"message": "invalid credentials",
+				"data":    nil,
+			})
+		case "/api/fs/remove":
+			removeCalls++
+			assertAuth(t, r, "token-1")
+			writeJSON(t, w, http.StatusUnauthorized, map[string]any{
+				"code":    http.StatusUnauthorized,
+				"message": "token is expired",
+				"data":    nil,
+			})
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	session, err := NewClient(server.Client()).Open(context.Background(), Config{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	err = session.RemovePath(context.Background(), "/backups/artifact.tar")
+	if err == nil || !strings.Contains(err.Error(), "token refresh failed") || !strings.Contains(err.Error(), "invalid credentials") {
+		t.Fatalf("RemovePath() error = %v, want token refresh failure", err)
+	}
+	if loginCalls != 2 || removeCalls != 1 {
+		t.Fatalf("login calls = %d, remove calls = %d, want 2 and 1", loginCalls, removeCalls)
+	}
+}
+
 func TestParseConfigSupportsOpenListRemote(t *testing.T) {
 	encoded, err := EncodeStoredConfig("secret", "")
 	if err != nil {

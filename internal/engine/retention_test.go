@@ -3,13 +3,17 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"rsync-backup-service/internal/model"
+	"rsync-backup-service/internal/openlist"
 	"rsync-backup-service/internal/store"
 )
 
@@ -112,6 +116,132 @@ func TestRetentionCleanerCleanByTimeDeletesExpiredColdSplitBackupAndKeepsLastSuc
 	}
 	if _, err := os.Stat(keptFile); err != nil {
 		t.Fatalf("Stat(kept file) error = %v", err)
+	}
+}
+
+func TestRetentionCleanerOpenListSplitCleanupRefreshesExpiredToken(t *testing.T) {
+	db := newRollingTestDB(t)
+	instance, policy, target, _, _ := createColdFixtures(t, db, t.TempDir(), t.TempDir())
+
+	encodedConfig, err := openlist.EncodeStoredConfig("secret", "")
+	if err != nil {
+		t.Fatalf("EncodeStoredConfig() error = %v", err)
+	}
+	provider := "openlist"
+	remote := &model.RemoteConfig{
+		Name:          "openlist-retention",
+		Type:          "openlist",
+		Username:      "admin",
+		CloudProvider: &provider,
+		CloudConfig:   encodedConfig,
+	}
+
+	loginCalls := 0
+	removeCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginCalls++
+			token := "token-1"
+			if loginCalls == 2 {
+				token = "token-2"
+			}
+			writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{
+				"code":    http.StatusOK,
+				"message": "success",
+				"data":    map[string]any{"token": token},
+			})
+		case "/api/fs/remove":
+			removeCalls++
+			var payload struct {
+				Dir   string   `json:"dir"`
+				Names []string `json:"names"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode remove payload error = %v", err)
+			}
+			switch removeCalls {
+			case 1:
+				if got := r.Header.Get("Authorization"); got != "token-1" {
+					t.Fatalf("first remove Authorization = %q, want token-1", got)
+				}
+				if len(payload.Names) != 1 || payload.Names[0] != "artifact.tar.gz.part001" {
+					t.Fatalf("first remove names = %v", payload.Names)
+				}
+				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusOK, "message": "success", "data": nil})
+			case 2:
+				if got := r.Header.Get("Authorization"); got != "token-1" {
+					t.Fatalf("expired remove Authorization = %q, want token-1", got)
+				}
+				writeRetentionOpenListJSON(t, w, http.StatusUnauthorized, map[string]any{
+					"code":    http.StatusUnauthorized,
+					"message": "token is expired",
+					"data":    nil,
+				})
+			case 3:
+				if got := r.Header.Get("Authorization"); got != "token-2" {
+					t.Fatalf("retried remove Authorization = %q, want token-2", got)
+				}
+				if len(payload.Names) != 1 || payload.Names[0] != "artifact.tar.gz.part002" {
+					t.Fatalf("retried remove names = %v", payload.Names)
+				}
+				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusOK, "message": "success", "data": nil})
+			default:
+				if got := r.Header.Get("Authorization"); got != "token-2" {
+					t.Fatalf("later remove Authorization = %q, want token-2", got)
+				}
+				writeRetentionOpenListJSON(t, w, http.StatusOK, map[string]any{"code": http.StatusNotFound, "message": "object not found", "data": nil})
+			}
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	remote.Host = server.URL
+	if err := db.CreateRemoteConfig(remote); err != nil {
+		t.Fatalf("CreateRemoteConfig() error = %v", err)
+	}
+	target.StorageType = "openlist"
+	target.StoragePath = "/mnt/baidu/RBS"
+	target.RemoteConfigID = &remote.ID
+	if err := db.UpdateBackupTarget(target); err != nil {
+		t.Fatalf("UpdateBackupTarget() error = %v", err)
+	}
+	policy.RetentionType = "count"
+	policy.RetentionValue = 1
+	if err := db.UpdatePolicy(policy); err != nil {
+		t.Fatalf("UpdatePolicy() error = %v", err)
+	}
+
+	now := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	oldPart := "/mnt/baidu/RBS/3/20260414-143125/artifact.tar.gz.part001"
+	oldBackup := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "cold", oldPart, now.Add(-48*time.Hour))
+	latest := insertSuccessBackupWithTask(t, db, instance.ID, policy.ID, "cold", "/mnt/baidu/RBS/3/20260729-000000/latest.tar.gz", now.Add(-time.Hour))
+
+	cleaner := NewRetentionCleaner(db, t.TempDir())
+	if err := cleaner.CleanByPolicy(context.Background(), policy); err != nil {
+		t.Fatalf("CleanByPolicy(openlist split) error = %v", err)
+	}
+
+	assertBackupRemoved(t, db, oldBackup.ID)
+	assertTaskRowsForBackup(t, db, oldBackup.ID, 0)
+	assertBackupExists(t, db, latest.ID)
+	if loginCalls != 2 {
+		t.Fatalf("login calls = %d, want 2", loginCalls)
+	}
+	if removeCalls != 5 {
+		t.Fatalf("remove calls = %d, want 5", removeCalls)
+	}
+	assertAuditLogCount(t, db, instance.ID, "backup.cleanup_failed", 0)
+}
+
+func writeRetentionOpenListJSON(t *testing.T, w http.ResponseWriter, status int, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Fatalf("encode OpenList response error = %v", err)
 	}
 }
 

@@ -12,12 +12,16 @@ import (
 	"os"
 	pathpkg "path"
 	"strings"
+	"sync"
 	"time"
 
 	"rsync-backup-service/internal/model"
 )
 
-var ErrNotFound = errors.New("openlist object not found")
+var (
+	ErrNotFound     = errors.New("openlist object not found")
+	errTokenExpired = errors.New("openlist token expired")
+)
 
 type Config struct {
 	BaseURL  string
@@ -56,9 +60,15 @@ type Client struct {
 }
 
 type Session struct {
+	client     *Client
 	httpClient *http.Client
 	baseURL    string
-	token      string
+	username   string
+	password   string
+
+	tokenMu   sync.RWMutex
+	refreshMu sync.Mutex
+	token     string
 }
 
 func NewClient(httpClient *http.Client) *Client {
@@ -160,53 +170,119 @@ func (c *Client) Open(ctx context.Context, config Config) (*Session, error) {
 	if c == nil {
 		c = NewClient(nil)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if config.BaseURL == "" || strings.TrimSpace(config.Username) == "" || strings.TrimSpace(config.Password) == "" {
+	config.Username = strings.TrimSpace(config.Username)
+	config.Password = strings.TrimSpace(config.Password)
+	if config.BaseURL == "" || config.Username == "" || config.Password == "" {
 		return nil, fmt.Errorf("openlist credentials are incomplete")
 	}
+
+	token, err := c.login(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Session{
+		client:     c,
+		httpClient: c.httpClient,
+		baseURL:    config.BaseURL,
+		username:   config.Username,
+		password:   config.Password,
+		token:      token,
+	}, nil
+}
+
+func (c *Client) login(ctx context.Context, config Config) (string, error) {
+	if c == nil || c.httpClient == nil {
+		c = NewClient(nil)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	requestBody, err := json.Marshal(map[string]string{
-		"username": strings.TrimSpace(config.Username),
-		"password": strings.TrimSpace(config.Password),
+		"username": config.Username,
+		"password": config.Password,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal openlist login request: %w", err)
+		return "", fmt.Errorf("marshal openlist login request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.BaseURL+"/api/auth/login", bytes.NewReader(requestBody))
 	if err != nil {
-		return nil, fmt.Errorf("build openlist login request: %w", err)
+		return "", fmt.Errorf("build openlist login request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openlist login request failed: %w", err)
+		return "", fmt.Errorf("openlist login request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var envelope apiEnvelope
 	if err := decodeEnvelope(resp, &envelope); err != nil {
-		return nil, fmt.Errorf("openlist login failed: %w", err)
+		return "", fmt.Errorf("openlist login failed: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices || envelope.Code != http.StatusOK {
-		return nil, fmt.Errorf("openlist login failed: %s", responseMessage(resp.Status, envelope.Message))
+		return "", fmt.Errorf("openlist login failed: %s", responseMessage(resp.Status, envelope.Message))
 	}
 
 	var payload struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
-		return nil, fmt.Errorf("decode openlist login response: %w", err)
+		return "", fmt.Errorf("decode openlist login response: %w", err)
 	}
 	if strings.TrimSpace(payload.Token) == "" {
-		return nil, fmt.Errorf("openlist login failed: token is missing")
+		return "", fmt.Errorf("openlist login failed: token is missing")
 	}
 
-	return &Session{
-		httpClient: c.httpClient,
-		baseURL:    config.BaseURL,
-		token:      strings.TrimSpace(payload.Token),
-	}, nil
+	return strings.TrimSpace(payload.Token), nil
+}
+
+func (s *Session) currentToken() string {
+	if s == nil {
+		return ""
+	}
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	return s.token
+}
+
+func (s *Session) refreshToken(ctx context.Context, staleToken string) error {
+	if s == nil {
+		return fmt.Errorf("openlist session is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	if s.currentToken() != staleToken {
+		return nil
+	}
+	if s.client == nil {
+		return fmt.Errorf("openlist token refresh failed: client is unavailable")
+	}
+
+	token, err := s.client.login(ctx, Config{
+		BaseURL:  s.baseURL,
+		Username: s.username,
+		Password: s.password,
+	})
+	if err != nil {
+		return fmt.Errorf("openlist token refresh failed: %w", err)
+	}
+
+	s.tokenMu.Lock()
+	s.token = token
+	s.tokenMu.Unlock()
+	return nil
 }
 
 func (s *Session) Get(ctx context.Context, remotePath string) (*FsObject, error) {
@@ -264,29 +340,48 @@ func (s *Session) RemovePath(ctx context.Context, remotePath string) error {
 }
 
 func (s *Session) UploadFile(ctx context.Context, localPath, remotePath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		token := s.currentToken()
+		err := s.uploadFileWithToken(ctx, localPath, remotePath, token)
+		if !errors.Is(err, errTokenExpired) || attempt == 1 {
+			return err
+		}
+		if err := s.refreshToken(ctx, token); err != nil {
+			return err
+		}
+	}
+	return errTokenExpired
+}
+
+func (s *Session) uploadFileWithToken(ctx context.Context, localPath, remotePath, token string) error {
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("open openlist upload source %q: %w", localPath, err)
 	}
-	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
+		file.Close()
 		return fmt.Errorf("stat openlist upload source %q: %w", localPath, err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.baseURL+"/api/fs/put", file)
 	if err != nil {
+		file.Close()
 		return fmt.Errorf("build openlist upload request: %w", err)
 	}
 	req.ContentLength = info.Size()
-	req.Header.Set("Authorization", s.token)
+	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("File-Path", NormalizePath(remotePath))
 	req.Header.Set("Overwrite", "true")
 	req.Header.Set("Last-Modified", fmt.Sprintf("%d", info.ModTime().UnixMilli()))
 
 	resp, err := s.httpClient.Do(req)
+	_ = file.Close()
 	if err != nil {
 		return fmt.Errorf("openlist upload request failed: %w", err)
 	}
@@ -314,11 +409,28 @@ func (s *Session) ResolveDownloadURL(ctx context.Context, remotePath string) (st
 }
 
 func (s *Session) OpenDownload(ctx context.Context, remotePath, rangeHeader string) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	downloadURL, err := s.ResolveDownloadURL(ctx, remotePath)
 	if err != nil {
 		return nil, err
 	}
 
+	for attempt := 0; attempt < 2; attempt++ {
+		token := s.currentToken()
+		resp, err := s.openDownloadWithToken(ctx, downloadURL, rangeHeader, token)
+		if !errors.Is(err, errTokenExpired) || attempt == 1 {
+			return resp, err
+		}
+		if err := s.refreshToken(ctx, token); err != nil {
+			return nil, err
+		}
+	}
+	return nil, errTokenExpired
+}
+
+func (s *Session) openDownloadWithToken(ctx context.Context, downloadURL, rangeHeader, token string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build openlist download request: %w", err)
@@ -327,12 +439,16 @@ func (s *Session) OpenDownload(ctx context.Context, remotePath, rangeHeader stri
 		req.Header.Set("Range", strings.TrimSpace(rangeHeader))
 	}
 	if sameOrigin(s.baseURL, downloadURL) {
-		req.Header.Set("Authorization", s.token)
+		req.Header.Set("Authorization", token)
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openlist download request failed: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized && sameOrigin(s.baseURL, downloadURL) {
+		resp.Body.Close()
+		return nil, errTokenExpired
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		resp.Body.Close()
@@ -347,15 +463,32 @@ func (s *Session) OpenDownload(ctx context.Context, remotePath, rangeHeader stri
 }
 
 func (s *Session) postJSON(ctx context.Context, endpoint string, payload any, out any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal openlist request %s: %w", endpoint, err)
 	}
+	for attempt := 0; attempt < 2; attempt++ {
+		token := s.currentToken()
+		err := s.postJSONWithToken(ctx, endpoint, body, out, token)
+		if !errors.Is(err, errTokenExpired) || attempt == 1 {
+			return err
+		}
+		if err := s.refreshToken(ctx, token); err != nil {
+			return err
+		}
+	}
+	return errTokenExpired
+}
+
+func (s *Session) postJSONWithToken(ctx context.Context, endpoint string, body []byte, out any, token string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build openlist request %s: %w", endpoint, err)
 	}
-	req.Header.Set("Authorization", s.token)
+	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
@@ -378,12 +511,29 @@ func (s *Session) postJSON(ctx context.Context, endpoint string, payload any, ou
 }
 
 func (s *Session) resolveLinkAction(ctx context.Context, remotePath string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		token := s.currentToken()
+		linkURL, err := s.resolveLinkActionWithToken(ctx, remotePath, token)
+		if !errors.Is(err, errTokenExpired) || attempt == 1 {
+			return linkURL, err
+		}
+		if err := s.refreshToken(ctx, token); err != nil {
+			return "", err
+		}
+	}
+	return "", errTokenExpired
+}
+
+func (s *Session) resolveLinkActionWithToken(ctx context.Context, remotePath, token string) (string, error) {
 	linkURL := s.baseURL + "/@file/link/path/" + strings.TrimPrefix(EncodePathForRoute(remotePath), "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, linkURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("build openlist link request: %w", err)
 	}
-	req.Header.Set("Authorization", s.token)
+	req.Header.Set("Authorization", token)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -398,6 +548,9 @@ func (s *Session) resolveLinkAction(ctx context.Context, remotePath string) (str
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if err != nil {
 		return "", fmt.Errorf("read openlist link response: %w", err)
+	}
+	if isTokenExpiredBody(resp.StatusCode, body) {
+		return "", errTokenExpired
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return "", ErrNotFound
@@ -427,10 +580,16 @@ func (s *Session) directDownloadURL(remotePath, sign string) string {
 func readAndValidateResponse(resp *http.Response, out any) (json.RawMessage, error) {
 	var envelope apiEnvelope
 	if err := decodeEnvelope(resp, &envelope); err != nil {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, errTokenExpired
+		}
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, ErrNotFound
 		}
 		return nil, err
+	}
+	if isTokenExpiredResponse(resp.StatusCode, envelope.Code, envelope.Message) {
+		return nil, errTokenExpired
 	}
 	if resp.StatusCode == http.StatusNotFound || envelope.Code == http.StatusNotFound || isNotFoundMessage(envelope.Message) {
 		return nil, ErrNotFound
@@ -544,6 +703,31 @@ func isAlreadyExistsError(err error) bool {
 func isNotFoundMessage(message string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(message))
 	return strings.Contains(normalized, "not found") || strings.Contains(normalized, "object not found")
+}
+
+func isTokenExpiredResponse(status, code int, message string) bool {
+	if status == http.StatusUnauthorized || code == http.StatusUnauthorized {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(normalized, "token") && strings.Contains(normalized, "expir")
+}
+
+func isTokenExpiredBody(status int, body []byte) bool {
+	if status == http.StatusUnauthorized {
+		return true
+	}
+
+	var envelope apiEnvelope
+	if err := json.Unmarshal(body, &envelope); err == nil && isTokenExpiredResponse(status, envelope.Code, envelope.Message) {
+		return true
+	}
+
+	trimmed := strings.TrimSpace(string(body))
+	if looksLikeURL(trimmed) {
+		return false
+	}
+	return isTokenExpiredResponse(status, 0, trimmed)
 }
 
 func resolveRelativeURL(baseURL, raw string) string {
